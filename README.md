@@ -27,11 +27,11 @@ Umeko C++ brings the Python edition's chat, tools, provider plugins and playful 
 
 | Platform | Release | Requirements |
 | --- | --- | --- |
-| Windows | x64 ZIP | Windows 10/11, Node.js 22.19+ |
+| Windows | x64 ZIP | Windows 10 (1809+) / 11, Node.js 22.19+ |
 | macOS | Apple Silicon / Intel ZIP | macOS 13+, Node.js 22.19+ |
 | Linux | x64 tar.gz | Ubuntu 24.04+ or compatible glibc 2.39 system, desktop session, Node.js 22.19+ |
 
-The builds are unsigned. macOS may require **System Settings → Privacy & Security → Open Anyway** after your first launch attempt. Linux stores credentials in the desktop Secret Service keyring; unlock it before saving account credentials. Under fcitx5, enable its IBus frontend when the release's bundled Qt lacks a matching fcitx plugin; see the [Linux input method guide](docs/BUILDING.md#linux-input-methods).
+These minimum OS versions follow the [Qt 6.10 platform requirements](https://doc.qt.io/qt-6.10/supported-platforms.html); release CI uses Windows 2022, macOS 15 and Ubuntu 24.04. The builds are unsigned. macOS may require **System Settings → Privacy & Security → Open Anyway** after your first launch attempt. Linux stores credentials in the desktop Secret Service keyring; unlock it before saving account credentials. Under fcitx5, enable its IBus frontend when the release's bundled Qt lacks a matching fcitx plugin; see the [Linux input method guide](docs/BUILDING.md#linux-input-methods).
 
 ## Features
 

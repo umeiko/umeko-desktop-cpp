@@ -1,6 +1,6 @@
 """Build a native portable distribution; no Python interpreter is shipped."""
 from __future__ import annotations
-import argparse, hashlib, json, os, platform, shutil, subprocess, sys, tarfile, zipfile
+import argparse, hashlib, json, os, platform, shutil, subprocess, sys, tarfile, tempfile, zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,9 +20,9 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--cmake',default='cmake');p.add_argument('--build',default='build');p.add_argument('--platform',default='');args=p.parse_args()
     arch={'AMD64':'x64','x86_64':'x64','arm64':'arm64','aarch64':'arm64'}[platform.machine()]
     target=args.platform or {'win32':'windows','darwin':'macos','linux':'linux'}[sys.platform]+'-'+arch
-    prefix=ROOT/'dist'/target
-    prefix.mkdir(parents=True,exist_ok=True)
-    run(args.cmake,'--install',args.build,'--config','Release','--prefix',prefix)
+    # A fresh staging folder prevents stale DLLs or previous versions entering a release.
+    prefix=Path(tempfile.mkdtemp(prefix='package-'+target+'-',dir=ROOT/'build'))
+    run(args.cmake,'--install',args.build,'--config','Release','--component','Runtime','--prefix',prefix)
     resources=prefix/'UmekoCpp.app/Contents/Resources' if sys.platform=='darwin' else prefix
     resources.mkdir(parents=True,exist_ok=True)
     for relative in ['runtime/gateway.mjs','runtime/bridge.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime']:
@@ -50,7 +50,7 @@ def main():
     log=ROOT/'build/packaged-smoke.log';log.unlink(missing_ok=True)
     result=subprocess.run([str(executable),'--data-dir',str(ROOT/'build/packaged-profile'),'--smoke','--demo','--snapshot',str(ROOT/'build/packaged-chat.png')],env=env,timeout=45,capture_output=True)
     if result.returncode or not log.exists() or 'QML_READY' not in log.read_text(encoding='utf-8') or 'EXIT:0' not in log.read_text(encoding='utf-8'):
-        raise RuntimeError('Packaged application failed: '+result.stderr.decode('utf-8','replace')+'\n'+(log.read_text(encoding='utf-8') if log.exists() else 'no diagnostics'))
+        raise RuntimeError('Packaged application failed ('+str(result.returncode)+'): '+result.stderr.decode('utf-8','replace')+'\n'+(log.read_text(encoding='utf-8') if log.exists() else 'no diagnostics'))
     diagnostics=log.read_text(encoding='utf-8')
     if any(text in diagnostics for text in ['qrc:/','SNAPSHOT_FAILED','QML_FAILED']):
         raise RuntimeError('Packaged QML warnings: '+diagnostics)

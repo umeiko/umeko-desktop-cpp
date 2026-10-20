@@ -32,7 +32,7 @@ Use an isolated profile for tests. Tests use synthetic local HTTP fixtures, an i
 
 For fcitx5, install the distribution's `fcitx5-frontend-qt6` plugin only when compatible with the bundled Qt ABI. Otherwise enable fcitx5's IBus frontend and run `fcitx5 --enable ibus`. The app automatically selects the bundled IBus input context when an fcitx context is unavailable. To explicitly select an installed context, use `UMEKO_QT_IM_MODULE=ibus ./UmekoCpp` (or `fcitx` for a compatible plugin). Restart the app after changing input method settings.
 
-Native IME composition, desktop credential prompts, file dialogs and interactive terminal appearance require manual checks on an actual desktop; headless CI does not prove these OS interactions.
+Native IME composition, desktop credential prompts, file dialogs and interactive terminal appearance require manual checks on an actual desktop. CI checks the real UI and credentials with isolated test data (offscreen on Windows/Linux, Cocoa on macOS); it does not prove every user's desktop configuration.
 
 ## Release contents and size
 
