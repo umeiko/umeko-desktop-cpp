@@ -262,14 +262,14 @@ private slots:
       QTRY_VERIFY_WITH_TIMEOUT(mascot->property("loaded").toBool(), 2000);
     }
     mascot->setProperty("portraitIndex", 2);
-    QDir().mkpath(root + "/docs/screenshots");
+    QDir().mkpath(root + "/build/screenshots");
     QTest::qWait(300);
-    QVERIFY(window->grabWindow().save(root + "/docs/screenshots/welcome.png"));
+    QVERIFY(window->grabWindow().save(root + "/build/screenshots/welcome.png"));
     click("settingsButton");
     window->setProperty("settingsTab", 0);
     QTest::qWait(400);
     QVERIFY(
-        window->grabWindow().save(root + "/docs/screenshots/providers.png"));
+        window->grabWindow().save(root + "/build/screenshots/providers.png"));
     window->setProperty("page", "chat");
   }
   void historyFoldsAndSelection() {
