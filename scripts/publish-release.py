@@ -48,7 +48,7 @@ for name in ['umeko-provider-sdk-0.1.0.zip','develop-umeko-provider.zip']:
     shutil.copy2(matches[0],publish/name)
 files=sorted(publish.iterdir(),key=lambda p:p.name.casefold())
 assert len(files)==14
-(publish/'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in files),encoding='ascii')
+(publish/'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in files),encoding='ascii',newline='\n')
 files=sorted(publish.iterdir(),key=lambda p:p.stat().st_size)
 releases=api('releases')
 release=next((r for r in releases if r['tag_name']==TAG),None)
@@ -64,6 +64,13 @@ for file in files:
     for attempt in range(3):
         actual=api('releases/'+str(rid))
         row=next((r for r in actual['assets'] if r['name']==file.name),None)
+        if row and file.name=='SHA256SUMS.txt' and row['digest']!=digest:
+            assert actual['draft']
+            previous=gh('release','download',TAG,'--repo',REPO,'--pattern',file.name,'--output','-')
+            assert previous.splitlines()==file.read_text(encoding='ascii').splitlines(),'Checksum entries changed'
+            gh('api','--method','DELETE','repos/'+REPO+'/releases/assets/'+str(row['id']))
+            row=None
+            print('Normalized draft checksum line endings to LF',flush=True)
         if row and row['state']=='uploaded':
             assert row['digest']==digest and row['size']==file.stat().st_size,file.name
             print('Verified:',file.name,flush=True);break
