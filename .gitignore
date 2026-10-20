@@ -1,0 +1,14 @@
+.tools/
+.deps/
+build*/
+dist/
+artifacts/
+release-assets/
+runtime/node_modules/
+runtime/releases/
+runtime/downloads/
+__pycache__/
+*.pyc
+.private/
+CMakeUserPresets.json
+aqtinstall.log

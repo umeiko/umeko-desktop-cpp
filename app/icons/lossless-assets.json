@@ -1,0 +1,122 @@
+[
+  {
+    "source": "app/icons/app.png",
+    "target": "app/icons/app.webp",
+    "sourceSha256": "020926bcb62f9ac79275d121e5e399b53b04263f5e567405c009cdef951e6479",
+    "decodedSha256": "4b7dd7d6e1a19acce3c52d8424f9ddfa0a0f25531bfc0976538db36f909275e7",
+    "originalBytes": 62127,
+    "packedBytes": 41182
+  },
+  {
+    "source": "app/icons/mascot.png",
+    "target": "app/icons/mascot.webp",
+    "sourceSha256": "e7eacfc3cd5302075d65375566583b4efd8d3ecc65b571c939c46ec409c23be5",
+    "decodedSha256": "47dea5d4deab265a0b66d2f03e5473c1fb37e656b88a330c7ba9e6e28143ee3a",
+    "originalBytes": 1476409,
+    "packedBytes": 885224
+  },
+  {
+    "source": "app/icons/portraits/01.png",
+    "target": "app/icons/portraits/01.webp",
+    "sourceSha256": "eb60cd19154e0e319b4a4726808a5a35a31dc279b6f46dd8f2e5fbc9bc6623f4",
+    "decodedSha256": "92906ec15f2b231bad1815ac3f7c57ccbf97c74eab61fc6fcaa47f933b41783f",
+    "originalBytes": 1357364,
+    "packedBytes": 848962
+  },
+  {
+    "source": "app/icons/portraits/02.png",
+    "target": "app/icons/portraits/02.webp",
+    "sourceSha256": "5b65cc677d4850cca49696106289b5d25f45133670f5e36d8018a1daf1756256",
+    "decodedSha256": "b70f4f85a50c62d5edd214c49b8dc991ce57a0389a9e3298a2ffcbc56993a8f8",
+    "originalBytes": 1836279,
+    "packedBytes": 1189194
+  },
+  {
+    "source": "app/icons/portraits/03.png",
+    "target": "app/icons/portraits/03.webp",
+    "sourceSha256": "f430a0ba7ba43b7cbed673db1b431bc68a38e9fffe97508fb337edfc968a27dd",
+    "decodedSha256": "356311e34ef0cff1b8746d54141d7bbe001bd7ca8b4c4b1edc4a938ef609cee1",
+    "originalBytes": 1350500,
+    "packedBytes": 844178
+  },
+  {
+    "source": "app/icons/portraits/04.png",
+    "target": "app/icons/portraits/04.webp",
+    "sourceSha256": "afd3483a183e436bdab82842e212f1a12b8f8f2b3e8ab78ca9fc281fd511d875",
+    "decodedSha256": "fb74f1b81d682162107ef32adc982c7aadc2cd56e3e40c2c98be1fff7482a15a",
+    "originalBytes": 1368798,
+    "packedBytes": 849314
+  },
+  {
+    "source": "app/icons/portraits/05.png",
+    "target": "app/icons/portraits/05.webp",
+    "sourceSha256": "110528e40af5b3833003aa9daf1da47a4b6415be78981a719dcd91da98f5ec94",
+    "decodedSha256": "34ceb7afad4df65acab9e59aec0a48994cca0f182b959c4dd80b529e1162d029",
+    "originalBytes": 1347651,
+    "packedBytes": 845876
+  },
+  {
+    "source": "app/icons/portraits/06.png",
+    "target": "app/icons/portraits/06.webp",
+    "sourceSha256": "6680e1aee40dc9ddf04b7090fcbbc3d7f1758c51f4569e53528045c17dc773b1",
+    "decodedSha256": "194022a35c5b2409862bbde516894758c7c958667995420c9266305cf7e06779",
+    "originalBytes": 1331073,
+    "packedBytes": 827226
+  },
+  {
+    "source": "app/icons/portraits/07.png",
+    "target": "app/icons/portraits/07.webp",
+    "sourceSha256": "efcdb9cf292dbb4ad19235dc095aa39c35bc2c66cdeca70bbc455012f7b1a96e",
+    "decodedSha256": "f3053cbfa9a51e16a18878fc064fe4bbd55d65b02bb5acb0b96c906b50f3ac51",
+    "originalBytes": 1319340,
+    "packedBytes": 815504
+  },
+  {
+    "source": "app/icons/portraits/08.png",
+    "target": "app/icons/portraits/08.webp",
+    "sourceSha256": "c58527067be10fb37fd20d1917fc3b5c7738ecd46ad94096cf841bd274952cf3",
+    "decodedSha256": "ad3f4432fc920576532cb2bae32977cdfa77d620b3e2602aa4834a193ea406ad",
+    "originalBytes": 1303831,
+    "packedBytes": 813216
+  },
+  {
+    "source": "app/icons/portraits/09.png",
+    "target": "app/icons/portraits/09.webp",
+    "sourceSha256": "3309bbdc70af8d9aa743e5d0ca70d830ae72ba77b34cc17be16e3be3a8b1fdd9",
+    "decodedSha256": "fd3df31fdf0bd101c80e69215035af00fc6de2ffcaf98d9f863a272a4a862b4f",
+    "originalBytes": 1366446,
+    "packedBytes": 846546
+  },
+  {
+    "source": "app/icons/portraits/10.png",
+    "target": "app/icons/portraits/10.webp",
+    "sourceSha256": "4e9e2d3bd3a281e4b0f113e36cb470323ed9791658bce2677acca55535294929",
+    "decodedSha256": "c00332e14b4961154fd341d23ffd30193ab98d905fe839a38c932a95ad7939e0",
+    "originalBytes": 1270881,
+    "packedBytes": 787670
+  },
+  {
+    "source": "app/icons/portraits/11.png",
+    "target": "app/icons/portraits/11.webp",
+    "sourceSha256": "c3d448bbbc4e96df87ecb450093538facb6eeafb8776da12d72a82fa621356ca",
+    "decodedSha256": "5a2733765c662a59add10fa430be4be8afc6f192e7549ede3474231b58501dfb",
+    "originalBytes": 1643709,
+    "packedBytes": 1074136
+  },
+  {
+    "source": "app/icons/portraits/12.png",
+    "target": "app/icons/portraits/12.webp",
+    "sourceSha256": "f733e681f3e56a98a66beb25923f4f59350287fa2fec6785c879b487603e8ca8",
+    "decodedSha256": "f0d8bbf7b085b1a09a0e9f669957d30b68a29c382dca04ed619989b190d9d9dc",
+    "originalBytes": 1320410,
+    "packedBytes": 824362
+  },
+  {
+    "source": "app/icons/yanami-pixel.png",
+    "target": "app/icons/yanami-pixel.webp",
+    "sourceSha256": "79a8bed664025a108f7ac3be61fd28fd6a7ce294f5542d59a547292437f8cc68",
+    "decodedSha256": "81f1f7ade01e308179ff8021e1e9ecf3acd85f54eadf27e105db11af7ee8d0fb",
+    "originalBytes": 1180934,
+    "packedBytes": 781460
+  }
+]

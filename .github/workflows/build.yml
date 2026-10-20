@@ -1,0 +1,85 @@
+name: Native desktop release builds
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: windows-x64, os: windows-2025, host: windows, arch: win64_msvc2022_64, qt_dir: msvc2022_64}
+          - {name: linux-x64, os: ubuntu-24.04, host: linux, arch: linux_gcc_64, qt_dir: gcc_64}
+          - {name: macos-arm64, os: macos-15, host: mac, arch: clang_64, qt_dir: macos}
+          - {name: macos-x64, os: macos-15-intel, host: mac, arch: clang_64, qt_dir: macos}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_QUICK_BACKEND: software
+      QT_QUICK_CONTROLS_STYLE: Basic
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22'
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libegl1 libsecret-1-dev gnome-keyring dbus-x11 fonts-noto-cjk patchelf
+      - name: Install build tools and Qt SDK
+        shell: bash
+        run: |
+          python -m pip install aqtinstall==3.3.0 cmake==3.31.6
+          python -m aqt install-qt ${{ matrix.host }} desktop 6.10.2 ${{ matrix.arch }} --outputdir "$RUNNER_TEMP/Qt" --archives qtbase qtdeclarative qtsvg qttools --modules qtimageformats
+          echo "QT_ROOT=$RUNNER_TEMP/Qt/6.10.2/${{ matrix.qt_dir }}" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/Qt/6.10.2/${{ matrix.qt_dir }}/bin" >> "$GITHUB_PATH"
+          echo "UMEKO_TEST_PYTHON=$(python -c 'import sys;print(sys.executable)')" >> "$GITHUB_ENV"
+      - name: Prepare full Pi and provider resources
+        shell: bash
+        run: |
+          npm ci --prefix runtime --ignore-scripts --no-audit --no-fund
+          node scripts/prepare-runtime.mjs
+          python scripts/fetch-search-tools.py
+          python scripts/build-provider-resources.py
+          node --test tests/gateway.test.mjs
+      - name: Configure and compile C++
+        shell: bash
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT"
+          cmake --build build --config Release --parallel 3
+      - name: Native tests (Windows and macOS)
+        if: runner.os != 'Linux'
+        shell: bash
+        run: ctest --test-dir build -C Release --output-on-failure --timeout 180
+      - name: Native tests (Linux protected keyring)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          dbus-run-session -- sh -c 'printf "ci-ephemeral-password" | gnome-keyring-daemon --unlock --components=secrets; ctest --test-dir build -C Release --output-on-failure --timeout 180'
+      - name: Package and verify installed application
+        shell: bash
+        run: python scripts/package.py --platform ${{ matrix.name }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: UmekoCpp-${{ matrix.name }}
+          path: release-assets/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: diagnostics-${{ matrix.name }}
+          path: |
+            build/Testing/Temporary/LastTest.log
+            build/packaged-smoke.log
+            build/packaged-chat.png
