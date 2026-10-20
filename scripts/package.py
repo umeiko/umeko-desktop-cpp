@@ -25,7 +25,7 @@ def main():
     run(args.cmake,'--install',args.build,'--config','Release','--prefix',prefix)
     resources=prefix/'UmekoCpp.app/Contents/Resources' if sys.platform=='darwin' else prefix
     resources.mkdir(parents=True,exist_ok=True)
-    for relative in ['runtime/gateway.mjs','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime']:
+    for relative in ['runtime/gateway.mjs','runtime/bridge.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime']:
         copy(ROOT/relative,resources/relative)
     copy(ROOT/'build/provider-resources',resources/'provider-resources')
     for name in ['THIRD_PARTY_NOTICES.md','README.md','licenses']:
@@ -42,6 +42,11 @@ def main():
     (resources/'build-info.json').write_text(json.dumps(info,indent=2)+'\n',encoding='utf-8')
     executable=prefix/'UmekoCpp.app/Contents/MacOS/UmekoCpp' if sys.platform=='darwin' else prefix/('UmekoCpp.exe' if os.name=='nt' else 'UmekoCpp')
     env=dict(os.environ,QT_QPA_PLATFORM='offscreen',QT_QUICK_BACKEND='software',UMEKO_DIAGNOSTICS=str(ROOT/'build/packaged-smoke.log'))
+    for key in ['QT_PLUGIN_PATH','QML_IMPORT_PATH','QML2_IMPORT_PATH','LD_LIBRARY_PATH','DYLD_LIBRARY_PATH','DYLD_FRAMEWORK_PATH']:
+        env.pop(key,None)
+    if qt_root:
+        sdk=str(Path(qt_root).resolve()).replace('\\','/').lower()
+        env['PATH']=os.pathsep.join(x for x in env['PATH'].split(os.pathsep) if not x.replace('\\','/').lower().startswith(sdk))
     log=ROOT/'build/packaged-smoke.log';log.unlink(missing_ok=True)
     result=subprocess.run([str(executable),'--data-dir',str(ROOT/'build/packaged-profile'),'--smoke','--demo','--snapshot',str(ROOT/'build/packaged-chat.png')],env=env,timeout=45,capture_output=True)
     if result.returncode or not log.exists() or 'QML_READY' not in log.read_text(encoding='utf-8') or 'EXIT:0' not in log.read_text(encoding='utf-8'):

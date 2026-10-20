@@ -67,7 +67,15 @@ jobs:
       - name: Native tests (Windows and macOS)
         if: runner.os != 'Linux'
         shell: bash
-        run: ctest --test-dir build -C Release --output-on-failure --timeout 180
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            security create-keychain -p ci-ephemeral-password "$RUNNER_TEMP/umeko-tests.keychain-db"
+            security default-keychain -s "$RUNNER_TEMP/umeko-tests.keychain-db"
+            security list-keychains -d user -s "$RUNNER_TEMP/umeko-tests.keychain-db"
+            security set-keychain-settings -lut 21600 "$RUNNER_TEMP/umeko-tests.keychain-db"
+            security unlock-keychain -p ci-ephemeral-password "$RUNNER_TEMP/umeko-tests.keychain-db"
+          fi
+          ctest --test-dir build -C Release --output-on-failure --timeout 180
       - name: Native tests (Linux protected keyring)
         if: runner.os == 'Linux'
         shell: bash

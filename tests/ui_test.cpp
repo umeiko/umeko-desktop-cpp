@@ -440,6 +440,58 @@ private slots:
     QVERIFY2(lastText().contains("Echo: provider compatibility fixture"),
              qPrintable(lastText()));
   }
+  void extensionAndMcpManagement() {
+    auto manager = qobject_cast<PiManagement *>(backend->piManagement());
+    QVERIFY(manager);
+    manager->setRecoveryMode(false);
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(), 15000);
+    QString mcpId;
+    for (auto v : manager->extensions())
+      if (v.toMap()["path"] == "builtin:mcp")
+        mcpId = v.toMap()["id"].toString();
+    QVERIFY2(!mcpId.isEmpty(), qPrintable(manager->status()));
+    manager->setExtensionEnabled(mcpId, false);
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(), 15000);
+    bool disabled = false;
+    for (auto v : manager->extensions())
+      if (v.toMap()["id"] == mcpId)
+        disabled = !v.toMap()["enabled"].toBool();
+    QVERIFY(disabled);
+    manager->setExtensionEnabled(mcpId, true);
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(), 15000);
+    backend->saveMcp("global", "{\"mcpServers\":{}}");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+    QCOMPARE(QJsonDocument::fromJson(backend->readMcp("global").toUtf8())
+                 .object()["mcpServers"]
+                 .toObject()
+                 .size(),
+             0);
+    auto before = backend->readMcp("global");
+    backend->saveMcp("global", "{\"mcpServers\":[]}");
+    QCOMPARE(backend->readMcp("global"), before);
+  }
+  void proxyLifecycleAndRollback() {
+    QTcpServer freePort, blocked;
+    QVERIFY(freePort.listen(QHostAddress::LocalHost, 0));
+    auto port = freePort.serverPort();
+    freePort.close();
+    QVERIFY(backend->saveProxyKey("", "native-key-fixture", ""));
+    auto issued = backend->takeCreatedProxyKey();
+    QVERIFY(issued["key"].toString().size() >= 16);
+    QVERIFY(backend->takeCreatedProxyKey().isEmpty());
+    QVERIFY(backend->saveServer(port, true, true, false));
+    backend->toggleServer();
+    QTRY_VERIFY_WITH_TIMEOUT(backend->serverRunning(), 10000);
+    QVERIFY(blocked.listen(QHostAddress::LocalHost, 0));
+    QVERIFY(backend->saveServer(blocked.serverPort(), true, false, false));
+    QTRY_COMPARE_WITH_TIMEOUT(
+        backend->config()["server"].toMap()["port"].toInt(), int(port), 10000);
+    QVERIFY(backend->serverRunning());
+    backend->toggleServer();
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->serverRunning(), 10000);
+    backend->revokeProxyKey(issued["id"].toString());
+    QCOMPARE(backend->proxyKeys().size(), 0);
+  }
   void cleanupTestCase() {
     backend->close();
     engine.reset();
