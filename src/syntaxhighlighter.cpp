@@ -100,7 +100,6 @@ void SyntaxHighlighter::apply() {
     return;
   auto h = static_cast<RuleHighlighter *>(m_highlighter);
   auto doc = m_document->textDocument();
-  auto text = doc->toPlainText();
   auto language = m_language.toLower();
   static const QHash<QString, QString> aliases = {
       {"py", "python"},      {"python3", "python"}, {"js", "javascript"},
@@ -114,15 +113,17 @@ void SyntaxHighlighter::apply() {
       "powershell", "c",          "cpp",        "csharp", "java", "go",
       "rust",       "sql",        "html",       "xml",    "css",  "diff"};
   bool eligible = m_enabled && supported.contains(language) &&
-                  text.size() <= 48000 && doc->blockCount() <= 1000;
+                  doc->characterCount() <= 48001 && doc->blockCount() <= 1000;
   for (auto block = doc->begin(); eligible && block.isValid();
        block = block.next())
     if (block.length() > 2001)
       eligible = false;
+  const bool previouslyColored = h->valid;
   h->valid = eligible;
   h->language = language;
   h->dark = m_dark;
-  h->rehighlight();
+  if (eligible || previouslyColored)
+    h->rehighlight();
   if (m_colored != eligible) {
     m_colored = eligible;
     emit changed();
