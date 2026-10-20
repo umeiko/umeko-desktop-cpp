@@ -62,7 +62,7 @@ def main():
         sys.modules[namespace] = module
         vendor = folder / "vendor"
         if vendor.is_dir():
-            sys.path.append(str(vendor))
+            sys.path.insert(1, str(vendor))
         entry, factory = manifest["entrypoint"].split(":")
         # Plugin debug output is not part of the wire protocol and is never shown in UI.
         with contextlib.redirect_stdout(sys.stderr):

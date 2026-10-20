@@ -55,6 +55,7 @@ jobs:
           python scripts/fetch-search-tools.py
           python scripts/build-provider-resources.py
           node --test tests/gateway.test.mjs
+          python tests/worker_test.py
       - name: Configure and compile C++
         shell: bash
         run: |
