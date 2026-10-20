@@ -1,0 +1,87 @@
+"""Publish only complete, successful main-branch build artifacts, without rebuilding."""
+from pathlib import Path
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import time
+
+REPO=os.environ['GITHUB_REPOSITORY']
+RUN=os.environ['RELEASE_BUILD_RUN']
+TAG=os.environ['RELEASE_TAG']
+assert re.fullmatch(r'\d+',RUN) and re.fullmatch(r'v\d+\.\d+\.\d+',TAG)
+assert REPO=='umeiko/umeko-desktop-cpp'
+
+def gh(*args):
+    return subprocess.check_output(['gh',*map(str,args)],text=True)
+
+def api(path):return json.loads(gh('api',f'repos/{REPO}/'+path))
+
+run=api('actions/runs/'+RUN)
+assert run['conclusion']=='success' and run['head_branch']=='main'
+assert run['head_repository']['full_name']==REPO and run['event'] in ('push','workflow_dispatch')
+assert run['path']=='.github/workflows/build.yml'
+commit=run['head_sha']
+base=Path('.release');incoming=base/'input';publish=base/'publish'
+publish.mkdir(parents=True,exist_ok=True)
+gh('run','download',RUN,'--repo',REPO,'--pattern','UmekoCpp-*','--dir',incoming)
+platforms={'windows-x64','macos-arm64','macos-x64','linux-x64'}
+seen=set();sizes=[]
+for metadata in incoming.rglob('UmekoCpp-*.json'):
+    report=json.loads(metadata.read_text(encoding='utf-8'))
+    target=report['platform'];assert target in platforms and target not in seen
+    assert report['commit']==commit and 'v'+report['version']==TAG
+    seen.add(target)
+    suffix='.tar.gz' if target=='linux-x64' else '.zip'
+    archive=metadata.with_name('UmekoCpp-'+TAG+'-'+target+suffix)
+    checksum=archive.with_name(archive.name+'.sha256')
+    assert archive.stat().st_size==report['bytes']
+    digest=hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert digest==report['sha256'] and checksum.read_text().split()[0]==digest
+    for file in [metadata,archive,checksum]:shutil.copy2(file,publish/file.name)
+    sizes.append((target,report['bytes']))
+assert seen==platforms
+for name in ['umeko-provider-sdk-0.1.0.zip','develop-umeko-provider.zip']:
+    matches=list(incoming.rglob(name));assert len(matches)==1
+    shutil.copy2(matches[0],publish/name)
+files=sorted(publish.iterdir(),key=lambda p:p.name.casefold())
+assert len(files)==14
+(publish/'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in files),encoding='ascii')
+files=sorted(publish.iterdir(),key=lambda p:p.stat().st_size)
+releases=api('releases')
+release=next((r for r in releases if r['tag_name']==TAG),None)
+if release is None:
+    notes=base/'notes.md'
+    notes.write_text('Native C++ desktop with the Python edition\'s chat, Pi tools, provider packages, Yanami animations and easter eggs.\n\nRequires Node.js 22.19+. Account plugins reuse SDK v1 ZIPs through a configurable external Python 3.10+ interpreter.\n\nVerified CI: https://github.com/'+REPO+'/actions/runs/'+RUN+'\n\n'+''.join(f'- {p}: {n/1048576:.2f} MiB\n' for p,n in sizes),encoding='utf-8')
+    gh('release','create',TAG,'--repo',REPO,'--target',commit,'--draft','--title',TAG+' — Native C++ desktop','--notes-file',notes)
+    release=next(r for r in api('releases') if r['tag_name']==TAG)
+assert release['target_commitish']==commit
+rid=release['id']
+for file in files:
+    digest='sha256:'+hashlib.sha256(file.read_bytes()).hexdigest()
+    for attempt in range(3):
+        actual=api('releases/'+str(rid))
+        row=next((r for r in actual['assets'] if r['name']==file.name),None)
+        if row and row['state']=='uploaded':
+            assert row['digest']==digest and row['size']==file.stat().st_size,file.name
+            print('Verified:',file.name,flush=True);break
+        assert actual['draft'],'Never modify a published release'
+        if row:
+            assert row['state']=='starter' and row['size']==0
+            gh('api','--method','DELETE','repos/'+REPO+'/releases/assets/'+str(row['id']))
+        result=subprocess.run(['gh','release','upload',TAG,str(file),'--repo',REPO],timeout=300)
+        if result.returncode:time.sleep(3)
+    else:raise RuntimeError('Asset upload failed: '+file.name)
+actual=api('releases/'+str(rid))
+assert {r['name'] for r in actual['assets']}=={f.name for f in files}
+for file in files:
+    row=next(r for r in actual['assets'] if r['name']==file.name)
+    assert row['state']=='uploaded' and row['digest']=='sha256:'+hashlib.sha256(file.read_bytes()).hexdigest()
+if actual['draft']:gh('release','edit',TAG,'--repo',REPO,'--draft=false','--latest')
+latest=api('releases/latest');assert latest['tag_name']==TAG and not latest['prerelease']
+assert api('git/ref/tags/'+TAG)['object']['sha']==commit
+print('Published:',latest['html_url'],flush=True)
+with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as out:
+    out.write('Published ['+TAG+']('+latest['html_url']+') from verified build ['+RUN+'](https://github.com/'+REPO+'/actions/runs/'+RUN+'). All 15 server-side asset digests verified.\n')
