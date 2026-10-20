@@ -337,6 +337,32 @@ private slots:
     QVERIFY(lastText().contains("Native complete"));
     nativeTool = false;
   }
+  void oversizedCodeHighlighting() {
+    QQmlComponent component(engine.get());
+    component.setData(R"(import QtQuick
+import Umeko.Text 1.0
+Item {
+ TextEdit { id: editor; objectName: "boundedEditor"; text: "const answer = 42" }
+ SyntaxHighlighter { objectName: "boundedHighlighter"; document: editor.textDocument; language: "typescript" }
+})",
+                      QUrl());
+    std::unique_ptr<QObject> item(component.create());
+    QVERIFY2(item, qPrintable(component.errorString()));
+    auto editor = item->findChild<QObject *>("boundedEditor");
+    auto highlighter =
+        item->findChild<SyntaxHighlighter *>("boundedHighlighter");
+    QVERIFY(editor && highlighter);
+    QTRY_VERIFY_WITH_TIMEOUT(highlighter->colored(), 2000);
+    const QString oversized(100000, 'x');
+    editor->setProperty("text", oversized);
+    QTRY_VERIFY_WITH_TIMEOUT(!highlighter->colored(), 2000);
+    QCOMPARE(editor->property("text").toString(), oversized);
+    editor->setProperty("text", QString("line\n").repeated(1001));
+    QTest::qWait(160);
+    QVERIFY(!highlighter->colored());
+    editor->setProperty("text", "const restored = 42");
+    QTRY_VERIFY_WITH_TIMEOUT(highlighter->colored(), 2000);
+  }
   void coldHistoryWithRetiredModel() {
     auto profile = directory.filePath("cold-profile");
     Store seed(profile);
