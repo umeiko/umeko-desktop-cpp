@@ -416,6 +416,12 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
     }
   };
   auto env = U::environment();
+  // Provider SDK HttpSession(environment_proxy=True) follows the user's
+  // network environment; Pi's separately guarded process does not inherit it.
+  auto system = QProcessEnvironment::systemEnvironment();
+  for (auto key : system.keys())
+    if (key.toUpper().endsWith("_PROXY"))
+      env.insert(key, system.value(key));
   env.insert("PYTHONUTF8", "1");
   env.insert("PYTHONUNBUFFERED", "1");
   env.insert("PYTHONDONTWRITEBYTECODE", "1");

@@ -96,8 +96,11 @@ QByteArray Store::secret(QString key) {
     result = job->binaryData();
   else if (job->error() != QKeychain::EntryNotFound)
     error = "系统凭据存储不可用，请解锁密钥环";
+  const bool read = job->error() == QKeychain::NoError ||
+                    job->error() == QKeychain::EntryNotFound;
   delete job;
-  cached[key] = result;
+  if (read)
+    cached[key] = result;
   return result;
 }
 bool Store::setSecret(QString key, QByteArray value) {

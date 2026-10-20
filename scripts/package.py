@@ -16,6 +16,28 @@ def copy(source, target):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
 
+def finalize_macos(bundle):
+    """Official Qt frameworks are universal; each release needs only its own CPU."""
+    architecture='arm64' if platform.machine()=='arm64' else 'x86_64'
+    magic={b'\xca\xfe\xba\xbe',b'\xbe\xba\xfe\xca',b'\xca\xfe\xba\xbf',b'\xbf\xba\xfe\xca'}
+    saved=0
+    for file in bundle.rglob('*'):
+        if file.is_symlink() or not file.is_file():continue
+        if file.suffix!='.dylib' and 'Frameworks' not in file.parts:continue
+        with file.open('rb') as stream:header=stream.read(4)
+        if header not in magic:continue
+        architectures=subprocess.check_output(['lipo','-archs',str(file)],text=True).split()
+        if architecture not in architectures:raise RuntimeError('Wrong Qt architecture: '+str(file))
+        if len(architectures)>1:
+            before=file.stat();temporary=file.with_name(file.name+'.native-thin')
+            run('lipo',file,'-thin',architecture,'-output',temporary)
+            temporary.chmod(before.st_mode);os.replace(temporary,file)
+            saved+=before.st_size-file.stat().st_size
+    # Resources are complete before the final ad-hoc seal; no developer identity required.
+    run('codesign','--force','--deep','--sign','-',bundle)
+    run('codesign','--verify','--deep','--strict',bundle)
+    print('Qt architecture thinning saved',saved,'uncompressed bytes')
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('--cmake',default='cmake');p.add_argument('--build',default='build');p.add_argument('--platform',default='');args=p.parse_args()
     arch={'AMD64':'x64','x86_64':'x64','arm64':'arm64','aarch64':'arm64'}[platform.machine()]
@@ -53,6 +75,7 @@ def main():
           'pi':'1.3.0','qt':'6.10.2','providerApi':1,'python':'external, >=3.10',
           'node':'external, >=22.19','parityBaseline':'f648e18b0c8ef86c65363dc78d99223ef0276fcf'}
     (resources/'build-info.json').write_text(json.dumps(info,indent=2)+'\n',encoding='utf-8')
+    if sys.platform=='darwin':finalize_macos(prefix/'UmekoCpp.app')
     executable=prefix/'UmekoCpp.app/Contents/MacOS/UmekoCpp' if sys.platform=='darwin' else prefix/('UmekoCpp.exe' if os.name=='nt' else 'UmekoCpp')
     env=dict(os.environ,QT_QPA_PLATFORM='cocoa' if sys.platform=='darwin' else 'offscreen',QT_QUICK_BACKEND='software',UMEKO_DIAGNOSTICS=str(ROOT/'build/packaged-smoke.log'))
     for key in ['QT_PLUGIN_PATH','QML_IMPORT_PATH','QML2_IMPORT_PATH','LD_LIBRARY_PATH','DYLD_LIBRARY_PATH','DYLD_FRAMEWORK_PATH']:
