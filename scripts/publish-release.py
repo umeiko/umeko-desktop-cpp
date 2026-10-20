@@ -73,6 +73,11 @@ for file in files:
             gh('api','--method','DELETE','repos/'+REPO+'/releases/assets/'+str(row['id']))
         result=subprocess.run(['gh','release','upload',TAG,str(file),'--repo',REPO],timeout=300)
         if result.returncode:time.sleep(3)
+        else:
+            uploaded=next(r for r in api('releases/'+str(rid))['assets'] if r['name']==file.name)
+            assert uploaded['digest']==digest and uploaded['size']==file.stat().st_size
+            print('Uploaded and verified:',file.name,flush=True)
+            break
     else:raise RuntimeError('Asset upload failed: '+file.name)
 actual=api('releases/'+str(rid))
 assert {r['name'] for r in actual['assets']}=={f.name for f in files}
