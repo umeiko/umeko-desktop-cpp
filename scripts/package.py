@@ -1,6 +1,6 @@
 """Build a native portable distribution; no Python interpreter is shipped."""
 from __future__ import annotations
-import argparse, hashlib, json, os, platform, shutil, subprocess, sys, tarfile, tempfile, zipfile
+import argparse, hashlib, json, os, platform, re, shutil, subprocess, sys, tarfile, tempfile, zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,19 +20,32 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--cmake',default='cmake');p.add_argument('--build',default='build');p.add_argument('--platform',default='');args=p.parse_args()
     arch={'AMD64':'x64','x86_64':'x64','arm64':'arm64','aarch64':'arm64'}[platform.machine()]
     target=args.platform or {'win32':'windows','darwin':'macos','linux':'linux'}[sys.platform]+'-'+arch
+    qt_root=os.environ.get('QT_ROOT')
+    if not qt_root:
+        cache=(ROOT/args.build/'CMakeCache.txt').read_text(encoding='utf-8')
+        found=re.search(r'^Qt6_DIR:PATH=(.+)$',cache,re.M)
+        if found:qt_root=str(Path(found.group(1)).parents[2])
     # A fresh staging folder prevents stale DLLs or previous versions entering a release.
     prefix=Path(tempfile.mkdtemp(prefix='package-'+target+'-',dir=ROOT/'build'))
     run(args.cmake,'--install',args.build,'--config','Release','--component','Runtime','--prefix',prefix)
     resources=prefix/'UmekoCpp.app/Contents/Resources' if sys.platform=='darwin' else prefix
     resources.mkdir(parents=True,exist_ok=True)
+    if os.name=='nt':
+        vswhere=Path(os.environ.get('ProgramFiles(x86)','C:/Program Files (x86)'))/'Microsoft Visual Studio/Installer/vswhere.exe'
+        installation=subprocess.check_output([str(vswhere),'-latest','-products','*','-property','installationPath'],text=True).strip()
+        candidates=sorted((Path(installation)/'VC/Redist/MSVC').glob('*/x64/Microsoft.VC143.CRT'))
+        if not candidates: raise RuntimeError('App-local MSVC redistributable was not found')
+        for dll in candidates[-1].glob('*.dll'):copy(dll,prefix/dll.name)
     for relative in ['runtime/gateway.mjs','runtime/bridge.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime']:
         copy(ROOT/relative,resources/relative)
     copy(ROOT/'build/provider-resources',resources/'provider-resources')
     for name in ['THIRD_PARTY_NOTICES.md','README.md','licenses']:
         copy(ROOT/name,resources/name)
-    qt_root = os.environ.get('QT_ROOT')
     if qt_root and (Path(qt_root)/'sbom').is_dir():
         copy(Path(qt_root)/'sbom',resources/'licenses/Qt-SBOM')
+    if sys.platform!='darwin':
+        plugin='qoffscreen.dll' if os.name=='nt' else 'libqoffscreen.so'
+        copy(Path(qt_root)/'plugins/platforms'/plugin,prefix/'plugins/platforms'/plugin)
     # Every bundled module keeps its upstream license. Only source maps are omitted.
     info={'version':'0.2.0','platform':target,'commit':os.environ.get('GITHUB_SHA','local'),
           'system':platform.system(),'architecture':platform.machine(),
@@ -41,7 +54,7 @@ def main():
           'node':'external, >=22.19','parityBaseline':'f648e18b0c8ef86c65363dc78d99223ef0276fcf'}
     (resources/'build-info.json').write_text(json.dumps(info,indent=2)+'\n',encoding='utf-8')
     executable=prefix/'UmekoCpp.app/Contents/MacOS/UmekoCpp' if sys.platform=='darwin' else prefix/('UmekoCpp.exe' if os.name=='nt' else 'UmekoCpp')
-    env=dict(os.environ,QT_QPA_PLATFORM='offscreen',QT_QUICK_BACKEND='software',UMEKO_DIAGNOSTICS=str(ROOT/'build/packaged-smoke.log'))
+    env=dict(os.environ,QT_QPA_PLATFORM='cocoa' if sys.platform=='darwin' else 'offscreen',QT_QUICK_BACKEND='software',UMEKO_DIAGNOSTICS=str(ROOT/'build/packaged-smoke.log'))
     for key in ['QT_PLUGIN_PATH','QML_IMPORT_PATH','QML2_IMPORT_PATH','LD_LIBRARY_PATH','DYLD_LIBRARY_PATH','DYLD_FRAMEWORK_PATH']:
         env.pop(key,None)
     if qt_root:

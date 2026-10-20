@@ -8,6 +8,8 @@ The application dynamically links unmodified Qt libraries, under their upstream 
 
 QtKeychain (https://github.com/frankosterfeld/qtkeychain) uses BSD-3-Clause. miniz (https://github.com/richgel999/miniz) uses the MIT license. Their license texts accompany this application under `licenses/`.
 
+Windows archives include app-local Microsoft Visual C++ 2022 runtime DLLs, distributed with the application under the Visual Studio redistributable terms: https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files .
+
 ## WebP
 
 Lossless WebP assets are decoded by Qt's image format plugin. libwebp (https://github.com/webmproject/libwebp) uses BSD-3-Clause; its license text is included under `licenses/`.
