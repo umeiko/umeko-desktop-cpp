@@ -16,6 +16,7 @@ class NativeUiTests : public QObject {
   QVariantList requests;
   bool nativeTool = false, slow = false;
   int nativeCalls = 0;
+  QString nativeHistory;
   QQuickItem *find(QString name) {
     QList<QQuickItem *> items{window->contentItem()};
     while (!items.isEmpty()) {
@@ -253,6 +254,24 @@ private slots:
     window->setProperty("page", "chat");
     backend->saveSidebarLayout(244, false);
   }
+  void screenshotsAndPortraits() {
+    auto mascot = find("welcomeMascot");
+    QVERIFY(mascot);
+    for (int i = 0; i < 12; ++i) {
+      mascot->setProperty("portraitIndex", i);
+      QTRY_VERIFY_WITH_TIMEOUT(mascot->property("loaded").toBool(), 2000);
+    }
+    mascot->setProperty("portraitIndex", 2);
+    QDir().mkpath(root + "/docs/screenshots");
+    QTest::qWait(300);
+    QVERIFY(window->grabWindow().save(root + "/docs/screenshots/welcome.png"));
+    click("settingsButton");
+    window->setProperty("settingsTab", 0);
+    QTest::qWait(400);
+    QVERIFY(
+        window->grabWindow().save(root + "/docs/screenshots/providers.png"));
+    window->setProperty("page", "chat");
+  }
   void historyFoldsAndSelection() {
     backend->injectDemo();
     QTest::qWait(400);
@@ -280,13 +299,15 @@ private slots:
     QMetaObject::invokeMethod(selection, "clear");
     window->resize(1060, 700);
     QTest::qWait(150);
+    view->setProperty("contentY", view->property("contentHeight").toDouble() -
+                                      view->height());
     auto before = view->property("contentY").toDouble();
     QWheelEvent event(QPointF(point(view)), QPointF(point(view)), QPoint(),
                       QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
                       Qt::NoScrollPhase, false);
     QCoreApplication::sendEvent(window, &event);
     QTest::qWait(100);
-    QVERIFY(view->property("contentY").toDouble() <= before);
+    QVERIFY(view->property("contentY").toDouble() < before - 1);
     window->resize(1320, 860);
     backend->newSession();
   }
@@ -309,11 +330,66 @@ private slots:
                       "grep", "ls", "codemode", "tool_search"})
       QVERIFY2(tools.contains(name), name);
     auto id = backend->activeSession();
+    nativeHistory = id;
     backend->newSession();
     backend->openSession(id);
     QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
     QVERIFY(lastText().contains("Native complete"));
     nativeTool = false;
+  }
+  void coldHistoryWithRetiredModel() {
+    auto profile = directory.filePath("cold-profile");
+    Store seed(profile);
+    seed.data = backend->config();
+    auto providers = seed.data["providers"].toList();
+    QString id;
+    for (auto &v : providers) {
+      auto p = v.toMap();
+      if (p["name"] == "Fixture API") {
+        id = p["id"].toString();
+        auto models = p["models"].toList();
+        auto model = models.first().toMap();
+        model["alias"] = "replacement-model";
+        p["models"] = QVariantList{model};
+        v = p;
+      }
+    }
+    QVERIFY(!id.isEmpty());
+    seed.data["providers"] = providers;
+    seed.data["selectedProvider"] = id;
+    seed.data["selectedModel"] = "replacement-model";
+    QVERIFY(seed.save());
+    Store original(directory.path());
+    QVERIFY(seed.saveSessions(original.sessions()));
+    Backend cold(root, profile);
+    QTRY_VERIFY_WITH_TIMEOUT(!cold.kernelBusy(), 15000);
+    cold.openSession(nativeHistory);
+    QTRY_VERIFY_WITH_TIMEOUT(!cold.busy(), 15000);
+    QVERIFY(!cold.messages().isEmpty());
+    cold.send("continue retired-model history");
+    QTRY_VERIFY_WITH_TIMEOUT(!cold.busy(), 30000);
+    auto text = cold.messages().last().toMap()["text"].toString();
+    QVERIFY2(text.contains("continue retired-model history"), qPrintable(text));
+    cold.close();
+  }
+  void independentBackgroundChats() {
+    backend->newSession();
+    slow = true;
+    auto start = requests.size();
+    backend->send("background-first");
+    QTRY_VERIFY_WITH_TIMEOUT(requests.size() > start, 15000);
+    auto first = backend->activeSession();
+    backend->newSession();
+    backend->send("background-second");
+    QTRY_VERIFY_WITH_TIMEOUT(requests.size() > start + 1, 15000);
+    auto second = backend->activeSession();
+    QVERIFY(first != second);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+    QVERIFY(lastText().contains("background-second"));
+    backend->openSession(first);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+    QVERIFY(lastText().contains("background-first"));
+    slow = false;
   }
   void followUpSteering() {
     backend->newSession();
