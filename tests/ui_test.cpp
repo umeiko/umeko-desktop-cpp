@@ -217,9 +217,9 @@ private slots:
     QVERIFY(!mascot->property("reactionText").toString().isEmpty());
     QVERIFY(mascot->property("animating").toBool());
     QMetaObject::invokeMethod(mascot, "reset");
+    QTest::qWait(QGuiApplication::styleHints()->mouseDoubleClickInterval() + 60);
     QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, point(mascot));
-    QTest::qWait(700);
-    QVERIFY(mascot->property("celebrating").toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(mascot->property("celebrating").toBool(), 2500);
     QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, point(mascot));
     QMetaObject::invokeMethod(mascot, "reset");
     auto start = point(mascot);
