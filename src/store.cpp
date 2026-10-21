@@ -13,7 +13,7 @@ QVariantMap Store::defaults() {
       {"providers", QVariantList{}},
       {"selectedProvider", ""},
       {"selectedModel", ""},
-      {"providerRuntime", QVariantMap{{"python_path", ""}}},
+      {"providerRuntime", QVariantMap{}},
       {"agent", QVariantMap{{"maxTokens", 8192},
                             {"instructions", ""},
                             {"autoCompaction", true},

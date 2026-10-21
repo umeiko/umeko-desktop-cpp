@@ -61,7 +61,7 @@ These minimum OS versions follow the [Qt 6.10 platform requirements](https://doc
 
 Existing `umeko-provider-sdk` **API v1 ZIPs** can be imported unchanged. The core has no built-in enterprise login flow or private endpoints.
 
-Open **Settings → Accounts & Providers → +** to import a ZIP, drag it into the import dialog, or export the SDK and developer Skill. Configure **python_path** globally or on an individual account. An empty path prefers bundled Python, then searches your system; use **Detect** to verify the selected interpreter. An account override takes priority over the global path.
+Open **Settings → Accounts & Providers → +** to import a ZIP, drag it into the import dialog, or export the SDK and developer Skill. Standard builds use the bundled Python automatically; minimal builds find your system Python 3.10+ on their own. There is nothing to configure.
 
 ```text
 Windows: C:\path\to\venv\Scripts\python.exe
@@ -108,7 +108,7 @@ Profiles are separate from the Python edition: `%LOCALAPPDATA%/UmekoCpp`, `~/Lib
 
 这是 [Umeko Desktop](https://github.com/umeiko/umeko-desktop) 的 C++ 姊妹版。保留原版聊天、Pi 扩展、工具记录、API 代理，以及八奈见主题、彩蛋和动画；桌面控制层迁移到 C++。正式版内置 Python 解释器；minimal 版使用用户配置的外部 Python。
 
-两个版本均内置 Node.js 与 npm，无需另外安装。正式版内置 CPython 3.12.15；`-minimal` 精简版使用本机 Python 3.10+。自定义供应商继续使用原来的 SDK v1 ZIP，**python_path** 留空优先使用内置解释器，也可设置全局或单账号路径覆盖为已有 Python / 虚拟环境。插件依赖由用户在所选环境中安装，或者随插件放入 `vendor/`。
+两个版本均内置 Node.js 与 npm，无需另外安装。正式版内置 CPython 3.12.15；`-minimal` 精简版使用本机 Python 3.10+。自定义供应商继续使用原来的 SDK v1 ZIP，正式版自动使用内置解释器，minimal 版自动查找本机 Python 3.10+，无需任何配置。插件依赖随插件放入 `vendor/`，或安装到本机环境。
 
 下载后完整解压运行。Windows、macOS ARM / Intel 和 Linux 均由独立原生 CI 构建。详细构建步骤见 [BUILDING.md](docs/BUILDING.md)。
 

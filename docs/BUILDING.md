@@ -44,7 +44,7 @@ python scripts/package.py
 
 The packaging override `--bundle-python` / `--no-bundle-python` also works without recompiling. The CI manual **Bundle standalone Python** checkbox selects the edition; pushes build standard packages. Publish standard builds with tag `v0.2.5`, minimal builds with `v0.2.5-minimal`. The publisher rejects mismatched manifests. Release titles match their tags; minimal releases do not replace the latest standard release.
 
-The pinned downloads are approximately 21 MiB (Windows), 24 MiB (macOS) and 33 MiB (Linux). Packaging verifies the installed app's runtime selection, imports native Python modules, runs pip and executes Provider SDK process tests with the bundled interpreter. An account `python_path` overrides the global path; an empty path chooses bundled Python before system Python. The app does not install plugin dependencies automatically. Use a custom environment or the package's `vendor/` directory for extra dependencies.
+The pinned downloads are approximately 21 MiB (Windows), 24 MiB (macOS) and 33 MiB (Linux). Packaging verifies the installed app's runtime selection, imports native Python modules, runs pip and executes Provider SDK process tests with the bundled interpreter. Bundled Python is used when present; system Python is the automatic fallback. There are no global or per-account overrides. The app does not install plugin dependencies automatically. Use a custom environment or the package's `vendor/` directory for extra dependencies.
 
 ## Linux input methods
 

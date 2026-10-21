@@ -780,12 +780,7 @@ Item {
     QVERIFY(manager->importZip(QUrl::fromLocalFile(archive).toString()));
     QCOMPARE(manager->rows().size(), before + 1);
     auto id = manager->rows().last().toMap()["id"].toString();
-    auto python = qEnvironmentVariable("UMEKO_TEST_PYTHON", U::python());
-    QVERIFY(!python.isEmpty());
-    QVERIFY(manager->setPythonPath(python));
-    manager->testPython(python);
-    QTRY_VERIFY_WITH_TIMEOUT(manager->pythonStatus().startsWith("Python 3."),
-                             15000);
+    QVERIFY(!manager->pythonExecutable().isEmpty());
     manager->login(id, "{\"username\":\"fixture-user\"}");
     QTRY_VERIFY_WITH_TIMEOUT(!manager->rows().last().toMap()["busy"].toBool(),
                              15000);

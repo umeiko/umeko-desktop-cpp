@@ -67,12 +67,7 @@ QString Providers::packageDir(QVariantMap p) const {
 QVariantMap Providers::manifest(QVariantMap p) const {
   return U::readJson(packageDir(p) + "/manifest.json", QVariantMap{}).toMap();
 }
-QString Providers::pythonPath() const {
-  return b->store.data["providerRuntime"].toMap()["python_path"].toString();
-}
-QString Providers::resolvePython(QString configured) const {
-  if (!configured.trimmed().isEmpty())
-    return U::python(configured);
+QString Providers::resolvePython() const {
 #ifdef Q_OS_WIN
   auto bundled = b->root + "/runtime/python/python.exe";
 #else
@@ -83,75 +78,7 @@ QString Providers::resolvePython(QString configured) const {
   return U::python();
 }
 QString Providers::pythonExecutable() const {
-  return resolvePython(pythonPath());
-}
-bool Providers::setPythonPath(QString path) {
-  if (b->modelsBusy() || !workers.isEmpty()) {
-    emit b->toast("请等待供应商请求结束后修改 Python 路径");
-    return false;
-  }
-  path = U::localPath(path.trimmed());
-  if (!path.isEmpty() && U::python(path).isEmpty()) {
-    emit b->toast("Python 路径不可用，请选择可执行文件");
-    return false;
-  }
-  auto runtime = b->store.data["providerRuntime"].toMap();
-  runtime["python_path"] = path;
-  b->store.data["providerRuntime"] = runtime;
-  b->store.save();
-  emit changed();
-  emit b->changed();
-  return true;
-}
-bool Providers::setAccountPythonPath(QString id, QString path) {
-  if (b->modelsBusy(id) || busy.contains(id) || !workers.isEmpty()) {
-    emit b->toast("请等待供应商请求结束后修改 Python 路径");
-    return false;
-  }
-  path = U::localPath(path.trimmed());
-  if (!path.isEmpty() && U::python(path).isEmpty()) {
-    emit b->toast("Python 路径不可用");
-    return false;
-  }
-  auto rows = b->store.data["providers"].toList();
-  for (auto &v : rows) {
-    auto p = v.toMap();
-    if (p["id"] == id) {
-      p["python_path"] = path;
-      v = p;
-    }
-  }
-  b->store.data["providers"] = rows;
-  b->store.save();
-  emit changed();
-  return true;
-}
-void Providers::testPython(QString path) {
-  auto program = resolvePython(path.isEmpty() ? pythonPath() : path);
-  if (program.isEmpty()) {
-    m_pythonStatus = "未找到 Python，请填写 Python 3.10+ 路径";
-    emit changed();
-    return;
-  }
-  m_pythonStatus = "正在检查 Python…";
-  emit changed();
-  U::run(
-      this, program,
-      {"-I", "-c",
-       "import "
-       "sys,json;print(json.dumps({'ok':sys.version_info>=(3,10),'version':sys."
-       "version.split()[0],'path':sys.executable}))"},
-      {},
-      [this](bool ok, QByteArray raw, QString error) {
-        auto info = QJsonDocument::fromJson(raw).object();
-        m_pythonStatus = ok && info["ok"].toBool()
-                             ? "Python " + info["version"].toString() + " · " +
-                                   info["path"].toString()
-                         : error.isEmpty() ? "需要 Python 3.10 或更新版本"
-                                           : error;
-        emit changed();
-      },
-      10000);
+  return resolvePython();
 }
 QVariantList Providers::rows() const {
   QVariantList out;
@@ -182,7 +109,7 @@ QVariantList Providers::rows() const {
         {"status",
          statuses.value(p["id"].toString(),
                         p.value("accountLabel", "尚未登录").toString())},
-        {"python_path", p.value("python_path", "")}};
+        };
   }
   return out;
 }
@@ -320,7 +247,7 @@ bool Providers::importZip(QString url) {
     QVariantMap record{
         {"id", U::uuid()},    {"api", "plugin"},          {"name", m["name"]},
         {"pluginId", plugin}, {"pluginVersion", version}, {"baseUrl", ""},
-        {"hasKey", false},    {"models", QVariantList{}}, {"python_path", ""}};
+        {"hasKey", false},    {"models", QVariantList{}}};
     auto providers = b->store.data["providers"].toList();
     providers << record;
     b->store.data["providers"] = providers;
@@ -387,12 +314,9 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
                        std::function<void(QVariantMap)> onEvent,
                        QString requestKey) {
   auto p = b->provider(id);
-  auto configured = p.value("python_path", "").toString();
-  if (configured.isEmpty())
-    configured = pythonPath();
-  auto program = resolvePython(configured);
+  auto program = resolvePython();
   if (program.isEmpty()) {
-    done({{"error", "未找到 Python 3.10+，请在供应商设置中填写 python_path"}});
+    done({{"error", "未找到 Python 3.10+，请使用内置 Python 的正式版或安装本机 Python"}});
     return;
   }
   if (p["api"] != "plugin" || packageDir(p).isEmpty()) {
@@ -505,7 +429,7 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
   connect(process, &QProcess::errorOccurred, this,
           [=](QProcess::ProcessError error) {
             if (error == QProcess::FailedToStart)
-              complete({{"error", "无法启动 Python，请检查 python_path"}});
+              complete({{"error", "无法启动 Python，请检查运行环境"}});
           });
   connect(timeout, &QTimer::timeout, this, [=] {
     process->kill();

@@ -7,19 +7,12 @@ class Backend;
 class Providers : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantList rows READ rows NOTIFY changed)
-  Q_PROPERTY(QString pythonPath READ pythonPath NOTIFY changed)
-  Q_PROPERTY(QString pythonStatus READ pythonStatus NOTIFY changed)
   Q_PROPERTY(QString pythonExecutable READ pythonExecutable NOTIFY changed)
 public:
   explicit Providers(Backend *backend);
   QVariantList rows() const;
-  QString pythonPath() const;
   QString pythonExecutable() const;
-  QString resolvePython(QString configured) const;
-  QString pythonStatus() const { return m_pythonStatus; }
-  Q_INVOKABLE bool setPythonPath(QString path);
-  Q_INVOKABLE bool setAccountPythonPath(QString id, QString path);
-  Q_INVOKABLE void testPython(QString path = {});
+  QString resolvePython() const;
   Q_INVOKABLE bool importZip(QString url);
   Q_INVOKABLE void login(QString id, QString raw);
   Q_INVOKABLE void refreshModels(QString id);
@@ -40,7 +33,6 @@ private:
   QSet<QString> busy;
   QHash<QString, QString> statuses;
   QHash<QString, QProcess *> workers;
-  QString m_pythonStatus;
   QVariantMap manifest(QVariantMap provider) const;
   QString packageDir(QVariantMap provider) const;
   void invoke(QString id, QString method, QVariantMap params,

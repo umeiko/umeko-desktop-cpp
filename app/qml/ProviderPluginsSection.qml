@@ -19,26 +19,6 @@ Column {
     SectionCard {
         width: parent.width
         ColumnLayout {
-            width: parent.width; spacing: 12
-            RowLayout {
-                Text { text: "Provider Python 运行时"; color: Theme.ink; font.pixelSize: 14; font.weight: Font.DemiBold }
-                HelpButton { help: "正式版内置 Python，minimal 版使用本机 Python 3.10+。python_path 留空时优先使用内置解释器，否则自动查找本机 Python；填写路径可覆盖默认选择，也可指定已有虚拟环境。账号可单独覆盖。插件依赖需随 vendor 提供，或自行安装到所选环境。" }
-                Item { Layout.fillWidth: true }
-            }
-            RowLayout {
-                Layout.fillWidth: true; spacing: 8
-                InputField { id: runtimePython; objectName: "providerPythonPath"; Layout.fillWidth: true; text: root.manager.pythonPath; placeholderText: "python_path · 留空使用内置 / 本机 Python" }
-                ActionButton { objectName: "testProviderPython"; text: "检测"; onClicked: root.manager.testPython(runtimePython.text) }
-                ActionButton { objectName: "saveProviderPython"; text: "保存"; primary: true; onClicked: root.manager.setPythonPath(runtimePython.text) }
-            }
-            Text { text: root.manager.pythonExecutable ? "当前解释器：" + root.manager.pythonExecutable : "未找到 Python 3.10+，请指定解释器路径"; color: Theme.muted; font.pixelSize: 11; wrapMode: Text.Wrap; Layout.fillWidth: true }
-            Text { visible: text.length > 0; text: root.manager.pythonStatus; color: Theme.muted; font.pixelSize: 11; wrapMode: Text.Wrap; Layout.fillWidth: true }
-        }
-    }
-
-    SectionCard {
-        width: parent.width
-        ColumnLayout {
             width: parent.width; spacing: 10
             RowLayout {
                 Layout.fillWidth: true
@@ -105,11 +85,6 @@ Column {
                     }
                 }
                 Text { text: card.modelData.status; color: Theme.muted; font.pixelSize: 11; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                RowLayout {
-                    Layout.fillWidth: true; spacing: 8
-                    InputField { id: accountPython; objectName: "pluginPython_" + card.modelData.id; Layout.fillWidth: true; text: card.modelData.python_path || ""; placeholderText: "此账号的 python_path · 留空继承全局"; enabled: !card.modelData.busy }
-                    ActionButton { text: "保存路径"; quiet: true; enabled: !card.modelData.busy; onClicked: root.manager.setAccountPythonPath(card.modelData.id, accountPython.text) }
-                }
                 RowLayout {
                     Layout.fillWidth: true; spacing: 8
                     ActionButton { text: "连接配置"; quiet: true; enabled: !card.modelData.busy; onClicked: { root.currentId = card.modelData.id; configEditor.text = root.manager.configJson(root.currentId); configDialog.open() } }
