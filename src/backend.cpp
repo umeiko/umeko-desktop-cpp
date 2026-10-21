@@ -193,10 +193,16 @@ void Backend::setConversationVisible(bool visible) {
   }
 }
 void Backend::setTheme(QString theme) {
-  if (!QStringList{"light", "dark", "yanami"}.contains(theme))
+  QVariantMap custom;
+  for (auto value : customThemes())
+    if (value.toMap()["id"] == theme)
+      custom = value.toMap();
+  if (!QStringList{"light", "dark", "yanami"}.contains(theme) &&
+      custom.isEmpty())
     return;
   store.data["theme"] = theme;
-  store.data["dark"] = theme == "dark";
+  store.data["dark"] =
+      (custom.isEmpty() ? theme : custom["base"].toString()) == "dark";
   store.save();
   emit changed();
 }

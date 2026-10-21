@@ -144,6 +144,8 @@ struct Session {
 class Backend : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantMap config READ config NOTIFY changed)
+  Q_PROPERTY(QVariantList customThemes READ customThemes NOTIFY changed)
+  Q_PROPERTY(QVariantMap themeStyle READ themeStyle NOTIFY changed)
   Q_PROPERTY(QVariantList messages READ messages NOTIFY chatChanged)
   Q_PROPERTY(
       QVariantList displayMessages READ displayMessages NOTIFY chatChanged)
@@ -189,6 +191,11 @@ public:
   Store store;
   QString root;
   QVariantMap config() const;
+  QVariantList customThemes() const;
+  QVariantMap themeStyle() const;
+  Q_INVOKABLE bool importTheme(QString url);
+  Q_INVOKABLE void removeTheme(QString id);
+  Q_INVOKABLE void copyThemePrompt();
   QVariantList messages() const { return view->messages; }
   QVariantList displayMessages() const { return chat.rows; }
   QObject *messageModel() { return &chat; }

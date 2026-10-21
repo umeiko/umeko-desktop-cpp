@@ -671,6 +671,50 @@ Item {
     QTRY_COMPARE_WITH_TIMEOUT(actions->property("opacity").toDouble(), 0.0,
                               1000);
   }
+  void customThemesAndReplyMascot() {
+    const auto original = backend->config()["theme"].toString();
+    const auto file = directory.filePath("moon.umeko-theme.json");
+    QVariantMap theme{
+        {"format", "umeko-theme"},
+        {"version", 1},
+        {"id", "moon"},
+        {"name", "月夜"},
+        {"base", "dark"},
+        {"colors", QVariantMap{{"bg", "#252033"}, {"buttonText", "#FFFFFF"}}}};
+    QVERIFY(U::writeJson(file, theme));
+    QVERIFY(backend->importTheme(QUrl::fromLocalFile(file).toString()));
+    QTest::qWait(200);
+    QCOMPARE(backend->config()["theme"].toString(), QString("custom:moon"));
+    QVERIFY(backend->config()["dark"].toBool());
+    QCOMPARE(window->color(), QColor("#252033"));
+    QCOMPARE(backend->customThemes().size(), 1);
+    QVERIFY(backend->importTheme(file));
+    QCOMPARE(backend->customThemes().size(), 1);
+    Store saved(directory.path());
+    QCOMPARE(saved.data["theme"].toString(), QString("custom:moon"));
+    theme["colors"] = QVariantMap{{"bg", "not a color"}};
+    QVERIFY(U::writeJson(file, theme));
+    QVERIFY(!backend->importTheme(file));
+    QCOMPARE(backend->config()["theme"].toString(), QString("custom:moon"));
+    backend->copyThemePrompt();
+    QVERIFY(QGuiApplication::clipboard()->text().contains("buttonText"));
+    QVERIFY(QGuiApplication::clipboard()->text().contains("umeko-theme"));
+    backend->removeTheme("custom:moon");
+    QVERIFY(backend->customThemes().isEmpty());
+    QCOMPARE(backend->config()["theme"].toString(), QString("dark"));
+    backend->setTheme("yanami");
+    backend->newSession();
+    backend->send("reply mascot fixture");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 30000);
+    QTest::qWait(300);
+    auto mascot = find("replyEndMascot_1");
+    QVERIFY(mascot && mascot->property("loaded").toBool());
+    for (int i = 0; i < 3; ++i)
+      click("replyEndMascot_1");
+    QVERIFY(mascot->property("animating").toBool());
+    QVERIFY(mascot->property("reaction").toString().contains("饼干"));
+    backend->setTheme(original);
+  }
   void providerPackages() {
     auto bad = directory.filePath("bad.zip");
     QVERIFY(package(bad, true));
