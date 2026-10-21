@@ -2,6 +2,7 @@
 #include "miniz.h"
 #include "syntaxhighlighter.hpp"
 #include <QQuickStyle>
+#include <QScopeGuard>
 #include <QtTest>
 
 class NativeUiTests : public QObject {
@@ -15,6 +16,15 @@ class NativeUiTests : public QObject {
   QTcpServer upstream;
   QVariantList requests;
   bool nativeTool = false, slow = false;
+  bool holdReplies = false;
+  QList<std::function<void()>> heldReplies;
+  void releaseReplies() {
+    holdReplies = false;
+    const auto replies = heldReplies;
+    heldReplies.clear();
+    for (const auto &reply : replies)
+      reply();
+  }
   int nativeCalls = 0;
   QString nativeHistory;
   QQuickItem *find(QString name) {
@@ -194,8 +204,8 @@ private slots:
               {"usage",
                QJsonObject{{"prompt_tokens", 100}, {"completion_tokens", 10}}}};
           auto bytes = QJsonDocument(response).toJson(QJsonDocument::Compact);
-          auto send = [socket, bytes] {
-            if (socket->state() != QAbstractSocket::ConnectedState)
+          auto send = [socket = QPointer<QTcpSocket>(socket), bytes] {
+            if (!socket || socket->state() != QAbstractSocket::ConnectedState)
               return;
             socket->write(
                 "HTTP/1.1 200 OK\r\nContent-Type: "
@@ -203,7 +213,10 @@ private slots:
                 QByteArray::number(bytes.size()) + "\r\n\r\n" + bytes);
             socket->disconnectFromHost();
           };
-          QTimer::singleShot(slow ? 1000 : 0, socket, send);
+          if (holdReplies)
+            heldReplies << send;
+          else
+            QTimer::singleShot(slow ? 1000 : 0, socket, send);
         });
       }
     });
@@ -420,7 +433,8 @@ Item {
   }
   void followUpSteering() {
     backend->newSession();
-    slow = true;
+    holdReplies = true;
+    const auto cleanup = qScopeGuard([this] { releaseReplies(); });
     auto start = requests.size();
     backend->send("first queued fixture");
     QTRY_VERIFY_WITH_TIMEOUT(backend->running(), 15000);
@@ -440,6 +454,7 @@ Item {
     QTRY_COMPARE_WITH_TIMEOUT(
         backend->queuedMessages().first().toMap()["mode"].toString(),
         QString("steering"), 5000);
+    releaseReplies();
     QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 30000);
     QVERIFY(backend->queuedMessages().isEmpty());
     QVERIFY2(lastText().contains("second queued fixture"),
