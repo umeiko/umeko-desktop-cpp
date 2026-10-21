@@ -17,8 +17,36 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
           .match(folder)
           .hasMatch() &&
       QFileInfo(store.directory + "/kernels/" + folder + "/bridge.mjs")
-          .isFile())
-    release = store.directory + "/kernels/" + folder;
+          .isFile()) {
+    const auto candidate = store.directory + "/kernels/" + folder;
+    auto manifest =
+        U::readJson(candidate + "/manifest.json", QVariantMap{}).toMap();
+    bool compatible = manifest["projection"].toInt() == 2 &&
+                      manifest["engine"] == "full-coding-agent";
+    // The adapters belong to this desktop build, even when Pi itself was
+    // upgraded separately. Keep web/queue fixes with the application update.
+    for (const auto &name :
+         {"bridge.mjs", "resources.mjs", "provider-policy.mjs"}) {
+      if (!compatible)
+        break;
+      QFile source(root + "/runtime/" + name);
+      if (!source.open(QIODevice::ReadOnly)) {
+        compatible = false;
+        break;
+      }
+      const auto bytes = source.readAll();
+      QFile current(candidate + "/" + name);
+      if (current.open(QIODevice::ReadOnly) && current.readAll() == bytes)
+        continue;
+      current.close();
+      QSaveFile destination(candidate + "/" + name);
+      compatible = destination.open(QIODevice::WriteOnly) &&
+                   destination.write(bytes) == bytes.size() &&
+                   destination.commit();
+    }
+    if (compatible)
+      release = candidate;
+  }
   privateToken = QString::fromLatin1(U::random(40).toBase64(
       QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
   view = fresh(store.data["workspace"].toString());

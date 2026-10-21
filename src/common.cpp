@@ -117,16 +117,65 @@ bool U::copyTree(const QString &source, const QString &dest, QString *error) {
   }
   return true;
 }
-QProcessEnvironment U::environment() {
+QVariantMap U::validateNpmConfig(QVariantMap values, QString *error) {
+  QVariantMap result;
+  for (auto key : {"npmRegistry", "npmUserconfig", "npmCafile"}) {
+    auto value = values[key].toString().trimmed();
+    if (value.contains('\n') || value.contains('\r') ||
+        value.contains(QChar(0))) {
+      *error = "npm 配置不能包含换行或空字符";
+      return {};
+    }
+    if (QString(key) == "npmRegistry" && !value.isEmpty()) {
+      QUrl url(value, QUrl::StrictMode);
+      if (!url.isValid() ||
+          !QStringList{"http", "https"}.contains(url.scheme()) ||
+          url.host().isEmpty() || !url.userInfo().isEmpty() || url.hasQuery() ||
+          url.hasFragment()) {
+        *error = "npm 源须为完整的 HTTP(S) 地址；登录凭据请放在 .npmrc 中";
+        return {};
+      }
+    } else if (QString(key) != "npmRegistry" && !value.isEmpty()) {
+      value = cleanPath(value);
+      if (!QFileInfo(value).isFile() || !QFileInfo(value).isReadable()) {
+        *error = "npm 配置文件或 CA 证书不存在或不可读";
+        return {};
+      }
+    }
+    result[key] = value;
+  }
+  return result;
+}
+QMap<QString, QString> U::npmOverrides(QVariantMap values) {
+  QMap<QString, QString> result;
+  for (auto key : {"npmRegistry", "npmUserconfig", "npmCafile"}) {
+    auto value = values[key].toString();
+    if (!value.isEmpty()) {
+      QString environment =
+          QString(key) == "npmRegistry"     ? "npm_config_registry"
+          : QString(key) == "npmUserconfig" ? "npm_config_userconfig"
+                                            : "npm_config_cafile";
+      result[environment] = value;
+    }
+  }
+  return result;
+}
+QProcessEnvironment U::environment(QVariantMap npm) {
   auto env = QProcessEnvironment::systemEnvironment();
   for (auto key : env.keys()) {
     auto k = key.toUpper();
-    if (k == "NODE_OPTIONS" || k == "NODE_PATH" || k == "HTTP_PROXY" ||
-        k == "HTTPS_PROXY" || k == "ALL_PROXY" || k.endsWith("API_KEY") ||
+    if (k == "NODE_OPTIONS" || k == "NODE_PATH" || k.endsWith("API_KEY") ||
         k.endsWith("ACCESS_TOKEN"))
       env.remove(key);
   }
-  env.insert("PI_OFFLINE", "1");
+  env.remove("PI_OFFLINE");
+  const auto overrides = npmOverrides(npm);
+  for (auto it = overrides.begin(); it != overrides.end(); ++it) {
+    for (auto key : env.keys())
+      if (key.compare(it.key(), Qt::CaseInsensitive) == 0)
+        env.remove(key);
+    env.insert(it.key(), it.value());
+  }
   auto executable = node();
   if (!executable.isEmpty())
     env.insert("PATH", QFileInfo(executable).absolutePath() +
@@ -146,7 +195,7 @@ void U::hideConsole(QProcess *process) {
 void U::run(QObject *owner, const QString &program, const QStringList &args,
             const QByteArray &input,
             std::function<void(bool, QByteArray, QString)> done, int timeout,
-            const QString &cwd) {
+            const QString &cwd, QVariantMap npm) {
   auto process = new QProcess(owner);
   hideConsole(process);
   auto timer = new QTimer(process);
@@ -160,7 +209,7 @@ void U::run(QObject *owner, const QString &program, const QStringList &args,
     done(ok, process->readAllStandardOutput(), error);
     process->deleteLater();
   };
-  process->setProcessEnvironment(environment());
+  process->setProcessEnvironment(environment(npm));
   if (!cwd.isEmpty())
     process->setWorkingDirectory(cwd);
   QObject::connect(process, &QProcess::started, process, [=] {

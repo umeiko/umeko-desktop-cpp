@@ -20,12 +20,14 @@ Umeko-Desktop brings the Python edition's chat, tools, provider plugins and play
 
 ## Get started
 
+Pi web extensions can access the network. Configure company npm mirrors, an optional `.npmrc` and CA file under **Settings → Agent → Pi**; see [npm and extension networking](docs/npm-and-network.md).
+
 1. Download the archive for your operating system from [Releases](https://github.com/umeiko/umeko-desktop-cpp/releases).
 2. Extract the whole archive. Node.js and npm are included; no separate installation is needed.
 3. Open `UmekoCpp.exe` on Windows, `UmekoCpp.app` on macOS, or `./UmekoCpp` on Linux.
 4. Open **Settings → Accounts & Providers**, add an OpenAI-compatible or Anthropic-compatible provider, and choose a model.
 
-Choose `v0.2.1` for bundled Python or `v0.2.1-minimal` for a smaller download. Minimal releases are marked as prereleases so the update checker continues to recommend the standard edition. **Settings → About** shows the actual compiler and version used for your platform.
+Choose `v0.2.2` for bundled Python or `v0.2.2-minimal` for a smaller download. Minimal releases are marked as prereleases so the update checker continues to recommend the standard edition. **Settings → About** shows the actual compiler and version used for your platform.
 
 | Platform | Release | Requirements |
 | --- | --- | --- |

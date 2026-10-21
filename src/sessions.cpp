@@ -292,7 +292,7 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   s->process = p;
   s->buffer.clear();
   s->ready = false;
-  p->setProcessEnvironment(U::environment());
+  p->setProcessEnvironment(U::environment(store.data["agent"].toMap()));
   p->setProgram(U::node());
   p->setArguments({bridge});
   connect(p, &QProcess::started, this, [=, this] {
@@ -342,6 +342,13 @@ void Backend::steer(QString text) {
     return;
   }
   sendText(text, true);
+}
+void Backend::editQueued(QString id) {
+  for (auto row : view->queue)
+    if (row.toMap()["id"] == id) {
+      writePi(view, {{"type", "edit-queue"}, {"id", id}});
+      return;
+    }
 }
 void Backend::sendText(QString text, bool steering) {
   auto s = view;
@@ -407,7 +414,8 @@ void Backend::sendText(QString text, bool steering) {
     emit transcriptChanged();
   }
 }
-void Backend::restoreQueued(std::shared_ptr<Session> s, QStringList raw) {
+void Backend::restoreQueued(std::shared_ptr<Session> s, QStringList raw,
+                            QVariantList images) {
   QStringList texts;
   if (!s->draft.isEmpty())
     texts << s->draft;
@@ -423,8 +431,15 @@ void Backend::restoreQueued(std::shared_ptr<Session> s, QStringList raw) {
           found = true;
       if (!found && s->attachments.size() < 20) {
         a["id"] = U::uuid();
-        if (a["kind"] == "image")
-          a["kind"] = "file";
+        if (a["kind"] == "image") {
+          if (images.isEmpty())
+            a["kind"] = "file";
+          else {
+            auto image = images.takeFirst().toMap();
+            a["data"] = image["data"];
+            a["mime"] = image["mimeType"];
+          }
+        }
         s->attachments << a;
       }
     }
@@ -492,10 +507,16 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     }
   } else if (type == "queue") {
     s->queue.clear();
-    for (auto v : payload["steering"].toList())
-      s->queue << QVariantMap{{"text", v}, {"mode", "steering"}};
-    for (auto v : payload["followUp"].toList())
-      s->queue << QVariantMap{{"text", v}, {"mode", "followUp"}};
+    if (payload.contains("items"))
+      s->queue = payload["items"].toList();
+    else {
+      for (auto v : payload["steering"].toList())
+        s->queue << QVariantMap{{"text", v}, {"mode", "steering"}};
+      for (auto v : payload["followUp"].toList())
+        s->queue << QVariantMap{{"text", v}, {"mode", "followUp"}};
+    }
+  } else if (type == "queue_edited") {
+    restoreQueued(s, {payload["text"].toString()}, payload["images"].toList());
   } else if (type == "queue_rejected") {
     restoreQueued(s, {payload["text"].toString()});
     if (visible)
@@ -631,6 +652,13 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     transcript = true;
   } else if (type == "done" || type == "exit") {
     bool was = s->busy();
+    if (!s->queue.isEmpty()) {
+      QStringList texts;
+      for (auto row : s->queue)
+        texts << row.toMap()["text"].toString();
+      s->queue.clear();
+      restoreQueued(s, texts);
+    }
     s->phase = "idle";
     s->status.clear();
     s->approval.clear();

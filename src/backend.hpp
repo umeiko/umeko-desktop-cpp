@@ -58,6 +58,8 @@ class PiManagement : public QObject {
   Q_PROPERTY(QString backupPath READ backupPath NOTIFY changed)
   Q_PROPERTY(QString installState READ installState NOTIFY changed)
   Q_PROPERTY(QString installMessage READ installMessage NOTIFY changed)
+  Q_PROPERTY(QVariantMap npmConfig READ npmConfig NOTIFY changed)
+  Q_PROPERTY(QString npmStatus READ npmStatus NOTIFY changed)
 public:
   explicit PiManagement(Backend *backend);
   bool busy() const { return m_busy; }
@@ -66,6 +68,10 @@ public:
   QString backupPath() const { return m_backup; }
   QString installState() const { return m_installState; }
   QString installMessage() const { return m_installMessage; }
+  QVariantMap npmConfig() const;
+  QString npmStatus() const { return m_npmStatus; }
+  Q_INVOKABLE bool saveNpmConfig(QString raw);
+  Q_INVOKABLE void testNpmConfig();
   Q_INVOKABLE void scan();
   Q_INVOKABLE void refresh();
   Q_INVOKABLE void setExtensionEnabled(QString id, bool enabled);
@@ -78,6 +84,7 @@ public:
   Q_INVOKABLE void openBackup();
 
 private:
+  QString m_npmStatus;
   Backend *b;
   bool m_busy = false;
   QVariantList m_extensions;
@@ -260,6 +267,7 @@ public:
   Q_INVOKABLE void openSession(QString id);
   Q_INVOKABLE void send(QString text);
   Q_INVOKABLE void steer(QString text);
+  Q_INVOKABLE void editQueued(QString id);
   Q_INVOKABLE void stop();
   Q_INVOKABLE void selectModel(QString provider, QString model);
   Q_INVOKABLE bool saveProvider(QString id, QString name, QString api,
@@ -353,7 +361,8 @@ private:
   void event(std::shared_ptr<Session> session, QVariantMap payload);
   void sendText(QString text, bool steering);
   void sessionInfo(std::shared_ptr<Session> session, QVariantMap info);
-  void restoreQueued(std::shared_ptr<Session> session, QStringList texts);
+  void restoreQueued(std::shared_ptr<Session> session, QStringList texts,
+                     QVariantList images = {});
   void saveSessions();
   QVariantMap metadata(QString id) const;
   void setMetadata(QString id, QVariantMap values);

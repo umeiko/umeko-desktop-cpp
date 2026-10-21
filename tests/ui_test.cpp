@@ -217,7 +217,8 @@ private slots:
     QVERIFY(!mascot->property("reactionText").toString().isEmpty());
     QVERIFY(mascot->property("animating").toBool());
     QMetaObject::invokeMethod(mascot, "reset");
-    QTest::qWait(QGuiApplication::styleHints()->mouseDoubleClickInterval() + 60);
+    QTest::qWait(QGuiApplication::styleHints()->mouseDoubleClickInterval() +
+                 60);
     QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, point(mascot));
     QTRY_VERIFY_WITH_TIMEOUT(mascot->property("celebrating").toBool(), 2500);
     QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, point(mascot));
@@ -426,11 +427,21 @@ Item {
     QTRY_VERIFY_WITH_TIMEOUT(requests.size() > start, 15000);
     backend->send("second queued fixture");
     QTRY_COMPARE_WITH_TIMEOUT(backend->queuedMessages().size(), 1, 5000);
+    click("editQueued_0");
+    QTRY_VERIFY_WITH_TIMEOUT(backend->queuedMessages().isEmpty(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(find("promptInput")
+                                 ->property("text")
+                                 .toString()
+                                 .contains("second queued fixture"),
+                             5000);
+    backend->send("second queued fixture edited");
+    QTRY_COMPARE_WITH_TIMEOUT(backend->queuedMessages().size(), 1, 5000);
     backend->steer("");
     QTRY_COMPARE_WITH_TIMEOUT(
         backend->queuedMessages().first().toMap()["mode"].toString(),
         QString("steering"), 5000);
     QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 30000);
+    QVERIFY(backend->queuedMessages().isEmpty());
     QVERIFY2(lastText().contains("second queued fixture"),
              qPrintable(lastText()));
     slow = false;
@@ -517,6 +528,62 @@ Item {
     QTRY_VERIFY_WITH_TIMEOUT(!backend->serverRunning(), 10000);
     backend->revokeProxyKey(issued["id"].toString());
     QCOMPARE(backend->proxyKeys().size(), 0);
+  }
+  void npmMirrorAndKernelCheck() {
+    QTcpServer registry;
+    QVERIFY(registry.listen(QHostAddress::LocalHost, 0));
+    int pingCalls = 0, metadataCalls = 0;
+    connect(&registry, &QTcpServer::newConnection, this, [&] {
+      while (registry.hasPendingConnections()) {
+        auto socket = registry.nextPendingConnection();
+        auto request = std::make_shared<QByteArray>();
+        connect(socket, &QTcpSocket::readyRead, socket, [&, socket, request] {
+          *request += socket->readAll();
+          if (!request->contains("\r\n\r\n"))
+            return;
+          QByteArray body = "{}";
+          if (request->startsWith("GET /-/ping"))
+            ++pingCalls;
+          else {
+            ++metadataCalls;
+            body =
+                R"({"name":"@earendil-works/pi-coding-agent","dist-tags":{"latest":"1.3.0"},"versions":{"1.3.0":{"name":"@earendil-works/pi-coding-agent","version":"1.3.0"}}})";
+          }
+          socket->write(
+              "HTTP/1.1 200 OK\r\nContent-Type: "
+              "application/json\r\nConnection: close\r\nContent-Length: " +
+              QByteArray::number(body.size()) + "\r\n\r\n" + body);
+          socket->disconnectFromHost();
+        });
+        connect(socket, &QTcpSocket::disconnected, socket,
+                &QObject::deleteLater);
+      }
+    });
+    auto manager = qobject_cast<PiManagement *>(backend->piManagement());
+    QVERIFY(manager);
+    QFile npmrc(directory.filePath("test.npmrc"));
+    QVERIFY(npmrc.open(QIODevice::WriteOnly));
+    npmrc.close();
+    QVariantMap values{
+        {"npmRegistry",
+         QString("http://127.0.0.1:%1/").arg(registry.serverPort())},
+        {"npmUserconfig", npmrc.fileName()}};
+    auto raw = QString::fromUtf8(QJsonDocument::fromVariant(values).toJson());
+    QVERIFY(manager->saveNpmConfig(raw));
+    QCOMPARE(manager->npmConfig()["npmRegistry"], values["npmRegistry"]);
+    manager->testNpmConfig();
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(), 30000);
+    QVERIFY2(manager->npmStatus().contains("连接正常"),
+             qPrintable(manager->npmStatus()));
+    QVERIFY(pingCalls > 0);
+    backend->checkKernel();
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->kernelBusy(), 30000);
+    QVERIFY2(backend->kernelStatus().contains("最新"),
+             qPrintable(backend->kernelStatus()));
+    QVERIFY(metadataCalls > 0);
+    QVERIFY(!manager->saveNpmConfig(
+        "{\"npmRegistry\":\"https://user:secret@example.invalid/\"}"));
+    QVERIFY(manager->saveNpmConfig("{}"));
   }
   void cleanupTestCase() {
     backend->close();

@@ -18,12 +18,14 @@ bool writeJson(const QString &file, const QVariant &data,
                QString *error = nullptr);
 bool copyTree(const QString &source, const QString &destination,
               QString *error = nullptr);
-QProcessEnvironment environment();
+QVariantMap validateNpmConfig(QVariantMap values, QString *error);
+QMap<QString, QString> npmOverrides(QVariantMap values);
+QProcessEnvironment environment(QVariantMap npm = {});
 void hideConsole(QProcess *process);
 void run(QObject *owner, const QString &program, const QStringList &arguments,
          const QByteArray &input,
          std::function<void(bool, QByteArray, QString)> done,
-         int timeout = 45000, const QString &cwd = {});
+         int timeout = 45000, const QString &cwd = {}, QVariantMap npm = {});
 QVariantMap contextSuggestion(QString name);
 QVariantMap visionSuggestion(QString name);
 QVariantMap normalizeModel(QVariantMap model, QVariantMap previous = {});

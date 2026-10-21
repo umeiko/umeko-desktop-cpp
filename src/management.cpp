@@ -183,7 +183,8 @@ void Backend::checkKernel() {
           kernelMessage = "检查失败，请检查 npm 软件源与网络";
         emit changed();
       },
-      45000);
+      45000, view->workspace.isEmpty() ? store.directory : view->workspace,
+      store.data["agent"].toMap());
 }
 void Backend::updateKernel() {
   if (kernelUpdating || modelsBusy()) {
@@ -250,7 +251,94 @@ void Backend::updateKernel() {
             },
             120000);
       },
-      240000);
+      240000, view->workspace.isEmpty() ? store.directory : view->workspace,
+      store.data["agent"].toMap());
+}
+
+QVariantMap PiManagement::npmConfig() const {
+  auto values = b->store.data["agent"].toMap();
+  return {{"npmRegistry", values.value("npmRegistry", "")},
+          {"npmUserconfig", values.value("npmUserconfig", "")},
+          {"npmCafile", values.value("npmCafile", "")}};
+}
+bool PiManagement::saveNpmConfig(QString raw) {
+  if (m_busy || b->kernelBusy())
+    return false;
+  QJsonParseError parse;
+  auto document = QJsonDocument::fromJson(raw.toUtf8(), &parse);
+  if (parse.error != QJsonParseError::NoError || !document.isObject()) {
+    emit b->toast("npm 配置格式无效");
+    return false;
+  }
+  QString error;
+  auto values = U::validateNpmConfig(document.object().toVariantMap(), &error);
+  if (!error.isEmpty()) {
+    emit b->toast(error);
+    return false;
+  }
+  auto agent = b->store.data["agent"].toMap();
+  const auto previous = agent;
+  for (auto it = values.begin(); it != values.end(); ++it)
+    agent[it.key()] = it.value();
+  b->store.data["agent"] = agent;
+  if (!b->store.save()) {
+    b->store.data["agent"] = previous;
+    emit b->toast("无法保存 npm 配置，请检查本机配置目录");
+    return false;
+  }
+  b->invalidate();
+  b->notify();
+  m_npmStatus = "npm 配置已保存；新启动的 Pi、扩展安装和内核更新将使用此配置";
+  emit changed();
+  return true;
+}
+void PiManagement::testNpmConfig() {
+  if (m_busy || b->kernelBusy())
+    return;
+  auto cli = npmCli();
+  if (cli.isEmpty()) {
+    m_npmStatus = "未找到内置 npm，请检查安装包";
+    emit changed();
+    return;
+  }
+  auto config = npmConfig();
+  auto cwd =
+      b->view->workspace.isEmpty() ? b->store.directory : b->view->workspace;
+  m_busy = true;
+  m_npmStatus = "正在检测 npm 源…";
+  emit changed();
+  U::run(
+      this, U::node(), {cli, "config", "get", "registry"}, {},
+      [this, cli, config, cwd](bool ok, QByteArray raw, QString) {
+        if (!ok) {
+          m_busy = false;
+          m_npmStatus = "无法读取 npm 配置，请检查 .npmrc";
+          emit changed();
+          return;
+        }
+        QUrl registry(QString::fromUtf8(raw).trimmed());
+        registry.setUserName({});
+        registry.setPassword({});
+        registry.setQuery(QString());
+        registry.setFragment({});
+        auto label = (config["npmRegistry"].toString().isEmpty()
+                          ? QString("npm 原生配置")
+                          : QString("Umeko 自定义源")) +
+                     " · " + registry.toString();
+        U::run(
+            this, U::node(),
+            {cli, "ping", "--fetch-retries=0", "--fetch-timeout=10000"}, {},
+            [this, label](bool passed, QByteArray, QString) {
+              m_busy = false;
+              m_npmStatus =
+                  label + " · " +
+                  (passed ? "连接正常"
+                          : "连接失败，请检查网络、登录信息和 CA 证书");
+              emit changed();
+            },
+            15000, cwd, config);
+      },
+      15000, cwd, config);
 }
 
 PiManagement::PiManagement(Backend *backend) : QObject(backend), b(backend) {
@@ -349,7 +437,7 @@ void PiManagement::installExtension(QString text, bool local) {
   U::hideConsole(p);
   auto timer = new QTimer(p);
   timer->setSingleShot(true);
-  auto env = U::environment();
+  auto env = U::environment(b->store.data["agent"].toMap());
   env.remove("PI_OFFLINE");
   env.insert("PI_CODING_AGENT_DIR", b->agentDir());
   env.insert("PI_SKIP_VERSION_CHECK", "1");
@@ -529,6 +617,7 @@ void PiManagement::openTerminal() {
     auto cli =
         target + "/node_modules/@earendil-works/pi-coding-agent/dist/cli.js";
     QString script;
+    const auto npm = U::npmOverrides(b->store.data["agent"].toMap());
 #if defined(Q_OS_WIN)
     auto path = console + "/manage-pi.ps1";
     script = "$env:PI_CODING_AGENT_DIR = " + psQuote(b->agentDir()) +
@@ -539,6 +628,12 @@ void PiManagement::openTerminal() {
              " @args }\npi config\nRemove-Item Env:PI_OFFLINE -ErrorAction "
              "SilentlyContinue\nWrite-Host 'Embedded Pi is ready. Use pi "
              "install, pi list, pi remove or pi config.'\n";
+    QString environment =
+        "$env:PATH=" + psQuote(QFileInfo(program).absolutePath() + ";") +
+        "+$env:PATH\n";
+    for (auto it = npm.begin(); it != npm.end(); ++it)
+      environment += "$env:" + it.key() + "=" + psQuote(it.value()) + "\n";
+    script = environment + script;
     QSaveFile file(path);
     if (file.open(QIODevice::WriteOnly)) {
       file.write("\xef\xbb\xbf");
@@ -558,6 +653,9 @@ void PiManagement::openTerminal() {
       m_status = "无法打开本机终端";
 #else
  auto path=console+"/manage-pi.sh";script="#!/bin/sh\nexport PI_CODING_AGENT_DIR="+shQuote(b->agentDir())+"\nexport PI_SKIP_VERSION_CHECK=1\ncd "+shQuote(cwd)+" || exit 1\npi() { "+shQuote(program)+" "+shQuote(cli)+" \"$@\"; }\nexport PI_OFFLINE=1\npi config\nunset PI_OFFLINE\nprintf '\\nEmbedded Pi: pi install, pi list, pi remove, pi config\\n'\nexec \"${SHELL:-/bin/sh}\"\n";
+ QString environment="export PATH="+shQuote(QFileInfo(program).absolutePath())+":\"$PATH\"\n";
+ for(auto it=npm.begin();it!=npm.end();++it) environment+="export "+it.key()+"="+shQuote(it.value())+"\n";
+ script.insert(script.indexOf('\n')+1, environment);
  // Persist the function in a session-only shell RC, so it remains available interactively.
  script=script.left(script.lastIndexOf("exec "))+"ENV="+shQuote(console+"/pi-env.sh")+" exec /bin/sh -i\n";QSaveFile envFile(console+"/pi-env.sh");if(envFile.open(QIODevice::WriteOnly)){envFile.write(("pi() { "+shQuote(program)+" "+shQuote(cli)+" \"$@\"; }\n").toUtf8());envFile.commit();}QSaveFile file(path);if(file.open(QIODevice::WriteOnly)){file.write(script.toUtf8());file.commit();}QFile::setPermissions(path,QFile::ReadOwner|QFile::WriteOwner|QFile::ExeOwner);
 #ifdef Q_OS_MACOS
