@@ -112,3 +112,4 @@ jobs:
             build/Testing/Temporary/LastTest.log
             build/packaged-smoke.log
             build/packaged-chat.png
+            build/screenshots/*.png

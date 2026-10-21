@@ -46,6 +46,10 @@ class NativeUiTests : public QObject {
   void click(QString name) {
     auto item = find(name);
     QVERIFY2(item, qPrintable(name));
+    // Backend notifications can arrive before QML has polished a new delegate
+    // and moved its bottom-anchored composer. Click its settled geometry.
+    QTest::qWait(150);
+    QVERIFY(item->isVisible() && item->width() > 0 && item->height() > 0);
     QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, point(item));
     QTest::qWait(100);
   }
@@ -441,6 +445,9 @@ Item {
     QTRY_VERIFY_WITH_TIMEOUT(requests.size() > start, 15000);
     backend->send("second queued fixture");
     QTRY_COMPARE_WITH_TIMEOUT(backend->queuedMessages().size(), 1, 5000);
+    QTest::qWait(200);
+    window->grabWindow().save(root +
+                              "/build/screenshots/queue-before-edit.png");
     click("editQueued_0");
     QTRY_VERIFY_WITH_TIMEOUT(backend->queuedMessages().isEmpty(), 5000);
     QTRY_VERIFY_WITH_TIMEOUT(find("promptInput")
