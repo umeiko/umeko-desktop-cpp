@@ -141,6 +141,24 @@ struct Session {
   bool busy() const { return phase != "idle" || operation; }
 };
 
+class SessionPreview : public QObject {
+  Q_OBJECT
+public:
+  explicit SessionPreview(Backend *backend);
+  Q_INVOKABLE void prepare(QString id, int token);
+  Q_INVOKABLE bool activate(int token);
+  Q_INVOKABLE void cancel();
+signals:
+  void ready(int token, bool ok);
+
+private:
+  Backend *b;
+  int request = 0;
+  bool reading = false;
+  QVariantMap pending, prepared;
+  void start();
+};
+
 class Backend : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantMap config READ config NOTIFY changed)
@@ -152,6 +170,7 @@ class Backend : public QObject {
   Q_PROPERTY(QObject *messageModel READ messageModel CONSTANT)
   Q_PROPERTY(QObject *providerPlugins READ providerPlugins CONSTANT)
   Q_PROPERTY(QObject *piManagement READ piManagement CONSTANT)
+  Q_PROPERTY(QObject *sessionPreview READ sessionPreview CONSTANT)
   Q_PROPERTY(QObject *appAbout READ appAbout CONSTANT)
   Q_PROPERTY(QVariantList projectRows READ projectRows NOTIFY sidebarChanged)
   Q_PROPERTY(int sidebarWidth READ sidebarWidth NOTIFY layoutChanged)
@@ -201,6 +220,7 @@ public:
   QObject *messageModel() { return &chat; }
   QObject *providerPlugins() { return providers; }
   QObject *piManagement() { return management; }
+  QObject *sessionPreview() { return previewLoader; }
   QObject *appAbout() { return about; }
   QVariantList projectRows() const;
   int sidebarWidth() const {
@@ -339,10 +359,12 @@ private:
   friend class Providers;
   friend class PiManagement;
   friend class AppAbout;
+  friend class SessionPreview;
   ChatModel chat;
   Providers *providers;
   PiManagement *management;
   AppAbout *about;
+  SessionPreview *previewLoader;
   std::shared_ptr<Session> view;
   QHash<QString, std::shared_ptr<Session>> records, drafts;
   QList<QString> lru;

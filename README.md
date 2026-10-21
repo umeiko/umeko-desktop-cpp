@@ -20,7 +20,7 @@ Umeko-Desktop brings the Python edition's chat, tools, provider plugins and play
 
 Pi can deliver images and compact file cards directly with [`submit_to_chatbox`](docs/chatbox-media.md). Click a file to open it; use its corner arrow or right-click menu to reveal or copy it. Queued messages sit above the composer with editing and deletion; steering interrupts the active run and submits a normal message immediately. Hover a message for its timestamp and copy action. Double-click selects a word; triple-click selects a paragraph. Pi settings have searchable, nested sections and click-activated inline scrolling. Model selection, sidebar highlights and compact context menus use continuous PID motion.
 
-Sidebar motion runs before history loading; rapid switching loads only your final choice. File cards have themed hover details and clear menu states, and selected chat text offers a Copy / Select all context menu.
+Selecting a chat immediately shows an animated Yanami loading cover while cold history loads in the background. Rapid switching keeps only your latest choice; the conversation fades in after its layout is ready. File cards have themed hover details and clear menu states, and selected chat text offers a Copy / Select all context menu.
 
 ## Get started
 
@@ -31,7 +31,7 @@ Pi web extensions can access the network. Configure company npm mirrors, an opti
 3. Open `UmekoCpp.exe` on Windows, `UmekoCpp.app` on macOS, or `./UmekoCpp` on Linux.
 4. Open **Settings → Accounts & Providers**, add an OpenAI-compatible or Anthropic-compatible provider, and choose a model.
 
-Choose `v0.2.4` for bundled Python or `v0.2.4-minimal` for a smaller download. Minimal releases are marked as prereleases so the update checker continues to recommend the standard edition. **Settings → About** shows the actual compiler and version used for your platform.
+Choose `v0.2.5` for bundled Python or `v0.2.5-minimal` for a smaller download. Minimal releases are marked as prereleases so the update checker continues to recommend the standard edition. **Settings → About** shows the actual compiler and version used for your platform.
 
 | Platform | Release | Requirements |
 | --- | --- | --- |
@@ -106,7 +106,7 @@ Profiles are separate from the Python edition: `%LOCALAPPDATA%/UmekoCpp`, `~/Lib
 
 ## 中文说明
 
-这是 [Umeko Desktop](https://github.com/umeiko/umeko-desktop) 的 C++ 姊妹版。保留原版聊天、Pi 扩展、工具记录、API 代理，以及八奈见主题、彩蛋和动画；桌面控制层迁移到 C++，安装包不包含 Python 解释器。
+这是 [Umeko Desktop](https://github.com/umeiko/umeko-desktop) 的 C++ 姊妹版。保留原版聊天、Pi 扩展、工具记录、API 代理，以及八奈见主题、彩蛋和动画；桌面控制层迁移到 C++。正式版内置 Python 解释器；minimal 版使用用户配置的外部 Python。
 
 两个版本均内置 Node.js 与 npm，无需另外安装。正式版内置 CPython 3.12.15；`-minimal` 精简版使用本机 Python 3.10+。自定义供应商继续使用原来的 SDK v1 ZIP，**python_path** 留空优先使用内置解释器，也可设置全局或单账号路径覆盖为已有 Python / 虚拟环境。插件依赖由用户在所选环境中安装，或者随插件放入 `vendor/`。
 

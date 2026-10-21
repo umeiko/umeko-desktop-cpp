@@ -60,6 +60,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
   providers = new Providers(this);
   management = new PiManagement(this);
   about = new AppAbout(this);
+  previewLoader = new SessionPreview(this);
   connect(this, &Backend::chatChanged, this, [this] {
     chat.update(view->messages);
     emit sidebarChanged();
@@ -995,6 +996,7 @@ void Backend::close() {
   if (closing)
     return;
   closing = true;
+  previewLoader->cancel();
   streaming.stop();
   providers->close();
   for (auto record : records)

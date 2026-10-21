@@ -433,7 +433,17 @@ Item {
     QVERIFY(seed.saveSessions(original.sessions()));
     Backend cold(root, profile);
     QTRY_VERIFY_WITH_TIMEOUT(!cold.kernelBusy(), 15000);
-    cold.openSession(nativeHistory);
+    auto loader = qobject_cast<SessionPreview *>(cold.sessionPreview());
+    QVERIFY(loader);
+    QSignalSpy ready(loader, &SessionPreview::ready);
+    loader->prepare(nativeHistory, 10);
+    loader->cancel();
+    loader->prepare(nativeHistory, 11);
+    QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 1, 10000);
+    QCOMPARE(ready.first().first().toInt(), 11);
+    QVERIFY(ready.first().last().toBool());
+    QVERIFY(!loader->activate(10));
+    QVERIFY(loader->activate(11));
     QTRY_VERIFY_WITH_TIMEOUT(!cold.busy(), 15000);
     QVERIFY(!cold.messages().isEmpty());
     cold.send("continue retired-model history");
@@ -441,6 +451,36 @@ Item {
     auto text = cold.messages().last().toMap()["text"].toString();
     QVERIFY2(text.contains("continue retired-model history"), qPrintable(text));
     cold.close();
+  }
+  void chatLoadingCover() {
+    backend->newSession();
+    auto cover = find("chatLoadingOverlay");
+    QVERIFY(cover);
+    auto select = [this](QString id) {
+      const QVariant row = QVariantMap{{"id", id},
+                                       {"title", "Loading fixture"},
+                                       {"kind", "session"},
+                                       {"selected", false}};
+      return QMetaObject::invokeMethod(window, "selectSidebar",
+                                       Q_ARG(QVariant, row));
+    };
+    QVERIFY(select(nativeHistory));
+    QVERIFY(cover->isVisible());
+    QCOMPARE(cover->opacity(), 1.0);
+    QVERIFY(backend->activeSession().isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(cover->property("artworkLoaded").toBool(), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(backend->activeSession(), nativeHistory, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!cover->isVisible(), 5000);
+    QVERIFY(!backend->messages().isEmpty());
+    // A subsequent settings navigation cancels the cover and its request.
+    backend->newSession();
+    QVERIFY(select(nativeHistory));
+    QVERIFY(cover->isVisible());
+    window->setProperty("page", "settings");
+    QVERIFY(!cover->property("loading").toBool());
+    QTest::qWait(200);
+    QVERIFY(backend->activeSession().isEmpty());
+    window->setProperty("page", "chat");
   }
   void independentBackgroundChats() {
     backend->newSession();
