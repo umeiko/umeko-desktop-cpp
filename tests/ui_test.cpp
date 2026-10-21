@@ -655,14 +655,26 @@ Item {
     QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, pos);
     QCOMPARE(copy(), unicode);
     QMetaObject::invokeMethod(selection, "clear");
+    // Font metrics differ across runners. The earlier selection starts at the
+    // top; explicitly expose the reply and its footer before testing hover.
+    QMetaObject::invokeMethod(view, "positionViewAtEnd");
+    QTest::qWait(200);
     auto actions = find("messageActions_1");
     QVERIFY(actions);
     QTest::mouseMove(window, QPoint(40, 40));
     QTest::qWait(80);
     QCOMPARE(actions->property("opacity").toDouble(), 0.0);
-    QTest::mouseMove(window, point(find("messageBubble_1")));
-    QTRY_COMPARE_WITH_TIMEOUT(actions->property("opacity").toDouble(), 1.0,
-                              1000);
+    auto hoverReply = [this, view] {
+      auto bubble = find("messageBubble_1");
+      const auto visible =
+          bubble->mapRectToScene(bubble->boundingRect())
+              .intersected(view->mapRectToScene(view->boundingRect()));
+      if (visible.isEmpty())
+        return false;
+      QTest::mouseMove(window, visible.center().toPoint());
+      return find("messageActions_1")->property("opacity").toDouble() == 1.0;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(hoverReply(), 3000);
     QVERIFY(find("messageTime_1")->property("text").toString().contains(':'));
     click("copyMessage_1");
     QCOMPARE(QGuiApplication::clipboard()->text(),
