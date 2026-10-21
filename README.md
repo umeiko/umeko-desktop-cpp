@@ -1,6 +1,6 @@
 <div align="center">
   <img src="app/icons/yanami-pixel.webp" width="140" alt="Pixel Yanami" />
-  <h1>Umeko C++</h1>
+  <h1>Umeko-Desktop</h1>
   <p>A lighter native desktop home for Pi Coding Agent.</p>
   <p>
     <a href="https://github.com/umeiko/umeko-desktop-cpp/releases/latest">Download</a> ·
@@ -12,9 +12,9 @@
   <a href="https://github.com/umeiko/umeko-desktop-cpp/actions/workflows/build.yml"><img src="https://github.com/umeiko/umeko-desktop-cpp/actions/workflows/build.yml/badge.svg" alt="Native builds" /></a>
 </div>
 
-Umeko C++ brings the Python edition's chat, tools, provider plugins and playful Yanami interface to a C++20 / Qt Quick desktop application. The interface and Pi bridge are shared with [Umeko Desktop v0.2.0](https://github.com/umeiko/umeko-desktop/releases/tag/v0.2.0); the desktop controller is native C++.
+Umeko-Desktop brings the Python edition's chat, tools, provider plugins and playful Yanami interface to a C++20 / Qt Quick desktop application. The interface and Pi bridge are shared with [Umeko Desktop v0.2.0](https://github.com/umeiko/umeko-desktop/releases/tag/v0.2.0); the desktop controller is native C++.
 
-**No embedded Python or PySide runtime.** Normal API chat needs Node.js 22.19+ for Pi. Account provider plugins optionally use your own Python 3.10+ interpreter. Pi remains the real upstream coding engine, with its tools, extensions, Skills, MCP and native sessions.
+**Standard releases include CPython 3.12.15 for Provider plugins.** The `-minimal` releases omit Python and use your own Python 3.10+ interpreter. Neither edition includes PySide. Both need Node.js 22.19+ for Pi, the real upstream coding engine with its tools, extensions, Skills, MCP and native sessions.
 
 <img src="docs/screenshots/chat.png" width="100%" alt="Actual native application: chat, reasoning, grouped tool history and highlighted code" />
 
@@ -24,6 +24,8 @@ Umeko C++ brings the Python edition's chat, tools, provider plugins and playful 
 2. Extract the whole archive. Install [Node.js 22.19 or newer](https://nodejs.org/en/download) if it is not already available.
 3. Open `UmekoCpp.exe` on Windows, `UmekoCpp.app` on macOS, or `./UmekoCpp` on Linux.
 4. Open **Settings → Accounts & Providers**, add an OpenAI-compatible or Anthropic-compatible provider, and choose a model.
+
+Choose `v0.2.1` for bundled Python or `v0.2.1-minimal` for a smaller download. Minimal releases are marked as prereleases so the update checker continues to recommend the standard edition. **Settings → About** shows the actual compiler and version used for your platform.
 
 | Platform | Release | Requirements |
 | --- | --- | --- |
@@ -47,13 +49,13 @@ These minimum OS versions follow the [Qt 6.10 platform requirements](https://doc
 | Desktop | Resizable window and sidebar, persisted themes, provider ZIP drag-and-drop, project folder reveal, About and release checks |
 | Personality | All twelve portraits, full chat watermark, pixel reply marker, springy welcome mascot, drag/hold/tap surprises and continuous PID tab animation |
 
-<img src="docs/screenshots/providers.png" width="100%" alt="Provider settings and external Python runtime" />
+<img src="docs/screenshots/providers.png" width="100%" alt="Provider settings and Python runtime selection" />
 
 ## Provider packages
 
 Existing `umeko-provider-sdk` **API v1 ZIPs** can be imported unchanged. The core has no built-in enterprise login flow or private endpoints.
 
-Open **Settings → Accounts & Providers → +** to import a ZIP, drag it into the import dialog, or export the SDK and developer Skill. Configure **python_path** globally or on an individual account. An empty path auto-detects Python; use **Detect** to verify the selected interpreter.
+Open **Settings → Accounts & Providers → +** to import a ZIP, drag it into the import dialog, or export the SDK and developer Skill. Configure **python_path** globally or on an individual account. An empty path prefers bundled Python, then searches your system; use **Detect** to verify the selected interpreter. An account override takes priority over the global path.
 
 ```text
 Windows: C:\path\to\venv\Scripts\python.exe
@@ -90,7 +92,7 @@ Qt Quick interface → C++ controller → native Pi session (Node.js)
                          API provider / Python plugin worker
 ```
 
-C++ owns state, sessions, credential access, package import and highlighting. Pi's upstream Node.js implementation owns the coding loop and tools. A small Node transport handles HTTP/SSE and the optional API proxy. The external Python worker exists only for account plugins. This is a native desktop port, not a rewrite of Pi in C++.
+C++ owns state, sessions, credential access, package import and highlighting. Pi's upstream Node.js implementation owns the coding loop and tools. A small Node transport handles HTTP/SSE and the optional API proxy. A separate Python worker exists only for account plugins. This is a native desktop port, not a rewrite of Pi in C++.
 
 Build and test instructions: [BUILDING.md](docs/BUILDING.md). Porting baseline and verification boundaries: [PORTING.md](docs/PORTING.md). Release archives include provenance and SHA-256 files; Qt and npm dependency licenses remain alongside the application.
 
@@ -100,7 +102,7 @@ Profiles are separate from the Python edition: `%LOCALAPPDATA%/UmekoCpp`, `~/Lib
 
 这是 [Umeko Desktop](https://github.com/umeiko/umeko-desktop) 的 C++ 姊妹版。保留原版聊天、Pi 扩展、工具记录、API 代理，以及八奈见主题、彩蛋和动画；桌面控制层迁移到 C++，安装包不包含 Python 解释器。
 
-普通 API 聊天只需要 Node.js 22.19+。自定义供应商继续使用原来的 SDK v1 ZIP，在供应商设置中填写全局或单账号的 **python_path**，选择本机 Python 3.10+ 或虚拟环境即可。插件依赖由用户在该环境中安装，或者随插件放入 `vendor/`。
+两个版本均需要 Node.js 22.19+。正式版内置 CPython 3.12.15；`-minimal` 精简版使用本机 Python 3.10+。自定义供应商继续使用原来的 SDK v1 ZIP，**python_path** 留空优先使用内置解释器，也可设置全局或单账号路径覆盖为已有 Python / 虚拟环境。插件依赖由用户在所选环境中安装，或者随插件放入 `vendor/`。
 
 下载后完整解压运行。Windows、macOS ARM / Intel 和 Linux 均由独立原生 CI 构建。详细构建步骤见 [BUILDING.md](docs/BUILDING.md)。
 

@@ -1,4 +1,4 @@
-"""Private, one-request Provider API v1 worker. Requires external Python 3.10+."""
+"""Private, one-request Provider API v1 worker. Requires Python 3.10+."""
 from __future__ import annotations
 
 import contextlib

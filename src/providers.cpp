@@ -70,6 +70,21 @@ QVariantMap Providers::manifest(QVariantMap p) const {
 QString Providers::pythonPath() const {
   return b->store.data["providerRuntime"].toMap()["python_path"].toString();
 }
+QString Providers::resolvePython(QString configured) const {
+  if (!configured.trimmed().isEmpty())
+    return U::python(configured);
+#ifdef Q_OS_WIN
+  auto bundled = b->root + "/runtime/python/python.exe";
+#else
+  auto bundled = b->root + "/runtime/python/bin/python3";
+#endif
+  if (QFileInfo(bundled).isFile() && QFileInfo(bundled).isExecutable())
+    return U::cleanPath(bundled);
+  return U::python();
+}
+QString Providers::pythonExecutable() const {
+  return resolvePython(pythonPath());
+}
 bool Providers::setPythonPath(QString path) {
   if (b->modelsBusy() || !workers.isEmpty()) {
     emit b->toast("请等待供应商请求结束后修改 Python 路径");
@@ -112,9 +127,9 @@ bool Providers::setAccountPythonPath(QString id, QString path) {
   return true;
 }
 void Providers::testPython(QString path) {
-  auto program = U::python(path.isEmpty() ? pythonPath() : path);
+  auto program = resolvePython(path.isEmpty() ? pythonPath() : path);
   if (program.isEmpty()) {
-    m_pythonStatus = "未找到外部 Python，请填写 Python 3.10+ 路径";
+    m_pythonStatus = "未找到 Python，请填写 Python 3.10+ 路径";
     emit changed();
     return;
   }
@@ -375,7 +390,7 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
   auto configured = p.value("python_path", "").toString();
   if (configured.isEmpty())
     configured = pythonPath();
-  auto program = U::python(configured);
+  auto program = resolvePython(configured);
   if (program.isEmpty()) {
     done({{"error", "未找到 Python 3.10+，请在供应商设置中填写 python_path"}});
     return;
@@ -490,7 +505,7 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
   connect(process, &QProcess::errorOccurred, this,
           [=](QProcess::ProcessError error) {
             if (error == QProcess::FailedToStart)
-              complete({{"error", "无法启动外部 Python，请检查 python_path"}});
+              complete({{"error", "无法启动 Python，请检查 python_path"}});
           });
   connect(timeout, &QTimer::timeout, this, [=] {
     process->kill();

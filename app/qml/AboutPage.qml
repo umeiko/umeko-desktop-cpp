@@ -32,8 +32,8 @@ Column {
                 TextEdit { objectName: "aboutRepository"; Layout.fillWidth: true; text: root.about.info.projectUrl; color: Theme.ink; font.pixelSize: 12; readOnly: true; selectByMouse: true; textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap }
                 Text { text: "构建平台"; color: Theme.muted; font.pixelSize: 12 }
                 Text { objectName: "aboutPlatform"; text: root.about.info.buildPlatform; color: Theme.ink; font.pixelSize: 12 }
-                Text { text: "构建类型"; color: Theme.muted; font.pixelSize: 12 }
-                Text { text: root.about.info.buildType; color: Theme.ink; font.pixelSize: 12 }
+                Text { text: "编译器"; color: Theme.muted; font.pixelSize: 12 }
+                TextEdit { objectName: "aboutCompiler"; Layout.fillWidth: true; text: root.about.info.compiler; color: Theme.ink; font.pixelSize: 12; readOnly: true; selectByMouse: true; textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap }
                 Text { text: "构建时间"; color: Theme.muted; font.pixelSize: 12 }
                 Text { text: root.about.info.builtAt; color: Theme.ink; font.pixelSize: 12 }
                 Text { text: "提交版本"; color: Theme.muted; font.pixelSize: 12 }

@@ -1,0 +1,7 @@
+{
+  "version": "@PROJECT_VERSION@",
+  "compiler": "@UMEKO_COMPILER@",
+  "compilerId": "@CMAKE_CXX_COMPILER_ID@",
+  "compilerVersion": "@CMAKE_CXX_COMPILER_VERSION@",
+  "bundlePython": @UMEKO_BUNDLE_PYTHON_JSON@
+}

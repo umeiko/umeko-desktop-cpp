@@ -7,6 +7,12 @@ on:
       - scripts/publish-release.py
   pull_request:
   workflow_dispatch:
+    inputs:
+      bundle_python:
+        description: Bundle standalone Python (disable for the minimal release)
+        required: true
+        type: boolean
+        default: true
 permissions:
   contents: read
 jobs:
@@ -27,6 +33,7 @@ jobs:
       QT_QUICK_BACKEND: software
       QT_QUICK_CONTROLS_STYLE: Basic
       PYTHONUTF8: '1'
+      UMEKO_BUNDLE_PYTHON: ${{ (github.event_name != 'workflow_dispatch' || inputs.bundle_python) && 'ON' || 'OFF' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -63,9 +70,9 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="$QT_ROOT"
+            cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="$QT_ROOT" -DUMEKO_BUNDLE_PYTHON="$UMEKO_BUNDLE_PYTHON"
           else
-            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT"
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT" -DUMEKO_BUNDLE_PYTHON="$UMEKO_BUNDLE_PYTHON"
           fi
           cmake --build build --config Release --parallel 3
       - name: Native tests (Windows and macOS)

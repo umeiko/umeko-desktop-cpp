@@ -7,6 +7,7 @@ release-assets/
 runtime/node_modules/
 runtime/releases/
 runtime/downloads/
+runtime/python/
 __pycache__/
 *.pyc
 .private/

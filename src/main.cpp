@@ -27,8 +27,8 @@ int main(int argc, char **argv) {
   inputMethod();
   QQuickStyle::setStyle("Basic");
   QGuiApplication app(argc, argv);
-  app.setApplicationName("UmekoCpp");
-  app.setApplicationDisplayName("Umeko C++");
+  app.setApplicationName("Umeko-Desktop");
+  app.setApplicationDisplayName("Umeko-Desktop");
   app.setApplicationVersion(UMEKO_VERSION);
   app.setOrganizationName("Umeko");
 #ifdef Q_OS_WIN
@@ -84,8 +84,15 @@ int main(int argc, char **argv) {
     return 1;
   }
   auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
-  window->setTitle("Umeko C++");
+  window->setTitle(app.applicationDisplayName());
   diagnostic("QML_READY");
+  if (parser.isSet("smoke")) {
+    diagnostic("WINDOW_TITLE:" + window->title());
+    diagnostic("COMPILER:" + QStringLiteral(UMEKO_COMPILER));
+    diagnostic(
+        "PYTHON_EXECUTABLE:" +
+        backend.providerPlugins()->property("pythonExecutable").toString());
+  }
   QObject::connect(&app, &QCoreApplication::aboutToQuit, &backend,
                    &Backend::close);
   QTimer::singleShot(200, &backend, &Backend::loadNativeIndex);

@@ -2,7 +2,11 @@
 
 ## Qt 6.10.2
 
-The application dynamically links unmodified Qt libraries, under their upstream LGPLv3 / GPLv3 / commercial terms. Qt sources: https://code.qt.io/cgit/qt/ . Source archives: https://download.qt.io/archive/qt/6.10/6.10.2/single/ . License texts accompany this application under `licenses/`; the installed Qt SDK's SPDX SBOMs are included there with component copyright and license information. Replaceable Qt libraries are deployed as separate shared libraries. No PySide, PyInstaller or Python interpreter is bundled.
+The application dynamically links unmodified Qt libraries, under their upstream LGPLv3 / GPLv3 / commercial terms. Qt sources: https://code.qt.io/cgit/qt/ . Source archives: https://download.qt.io/archive/qt/6.10/6.10.2/single/ . License texts accompany this application under `licenses/`; the installed Qt SDK's SPDX SBOMs are included there with component copyright and license information. Replaceable Qt libraries are deployed as separate shared libraries. No PySide or PyInstaller is bundled.
+
+## Optional standalone CPython
+
+Standard releases include CPython 3.12.15 from https://github.com/astral-sh/python-build-standalone/releases/tag/20261020 using the `install_only_stripped` archives. CPython uses the Python Software Foundation license; its bundled native libraries retain their own licenses. The entire upstream installation, including license files, is retained under `runtime/python/`. Minimal releases omit this distribution. Download origins, exact archive hashes and platform variants are pinned in `scripts/python-distributions.json` and recorded in each standard package's `build-info.json`.
 
 ## QtKeychain 0.15.0 and miniz 3.0.2
 

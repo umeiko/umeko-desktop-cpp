@@ -1,0 +1,28 @@
+{
+  "project": "https://github.com/astral-sh/python-build-standalone",
+  "release": "20261020",
+  "version": "3.12.15",
+  "format": "install_only_stripped",
+  "platforms": {
+    "windows-x64": {
+      "name": "cpython-3.12.15+20261020-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+      "sha256": "09d9f924296a094c6bd6e7ad22548433b0707064bae56bb43ee591a2d75f4177",
+      "bytes": 21990632
+    },
+    "linux-x64": {
+      "name": "cpython-3.12.15+20261020-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "sha256": "7d6ef1164fb94c4b60d913340610fc7e0ef8e3d1b705aa5628b299b08cbdd4b5",
+      "bytes": 34479233
+    },
+    "macos-arm64": {
+      "name": "cpython-3.12.15+20261020-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "sha256": "e54a19fd9af218ddd4ed66bbec65f4e9062724ea848a0ddbd269e37765d9959e",
+      "bytes": 25016814
+    },
+    "macos-x64": {
+      "name": "cpython-3.12.15+20261020-x86_64-apple-darwin-install_only_stripped.tar.gz",
+      "sha256": "dfe418e59942d3a73789846a161ba973ea4a1b6e2fa8636bc16ad49c398ff6e9",
+      "bytes": 24741487
+    }
+  }
+}

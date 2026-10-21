@@ -10,7 +10,7 @@ ApplicationWindow {
     width: 1320; height: 860
     minimumWidth: 1060; minimumHeight: 700
     visible: true
-    title: "Umeko"
+    title: "Umeko-Desktop"
     color: Theme.bg
     flags: Qt.Window | Qt.FramelessWindowHint
     property string page: "chat"

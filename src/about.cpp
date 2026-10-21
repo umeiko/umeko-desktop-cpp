@@ -5,7 +5,7 @@
 AppAbout::AppAbout(Backend *backend)
     : QObject(backend), b(backend), network(this) {
   auto build = U::readJson(b->root + "/build-info.json", QVariantMap{}).toMap();
-  m_info = {{"name", "Umeko C++"},
+  m_info = {{"name", "Umeko-Desktop"},
             {"version", UMEKO_VERSION},
             {"author", "umeiko"},
             {"projectUrl", "https://github.com/umeiko/umeko-desktop-cpp"},
@@ -13,7 +13,7 @@ AppAbout::AppAbout(Backend *backend)
             {"buildPlatform",
              build.value("system", UMEKO_BUILD_SYSTEM).toString() + " · " +
                  build.value("architecture", UMEKO_BUILD_ARCH).toString()},
-            {"buildType", build.isEmpty() ? "源码运行" : "C++ 原生打包版"},
+            {"compiler", UMEKO_COMPILER},
             {"builtAt", build.value("builtAt", "源码运行")},
             {"commit", build.value("commit", "未记录").toString().left(8)},
             {"dirty", build.value("dirty", false)}};
@@ -32,7 +32,7 @@ void AppAbout::openReleases() {
 void AppAbout::copyInfo() {
   QStringList lines;
   for (auto key : {"name", "version", "author", "projectUrl", "buildPlatform",
-                   "buildType", "builtAt", "commit"})
+                   "compiler", "builtAt", "commit"})
     lines << QString::fromLatin1(key) + ": " + m_info[key].toString();
   QGuiApplication::clipboard()->setText(lines.join('\n'));
   emit b->toast("已复制项目信息");
@@ -46,7 +46,7 @@ void AppAbout::checkUpdates() {
   emit changed();
   QNetworkRequest request(QUrl(
       "https://api.github.com/repos/umeiko/umeko-desktop-cpp/releases/latest"));
-  request.setRawHeader("User-Agent", "UmekoCpp/0.2.0");
+  request.setRawHeader("User-Agent", "Umeko-Desktop/" UMEKO_VERSION);
   request.setTransferTimeout(20000);
   request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                        QNetworkRequest::SameOriginRedirectPolicy);

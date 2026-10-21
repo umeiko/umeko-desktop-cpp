@@ -1,7 +1,8 @@
-"""Build a native portable distribution; no Python interpreter is shipped."""
+"""Build a portable distribution with an optional standalone Python runtime."""
 from __future__ import annotations
 import argparse, hashlib, json, os, platform, re, shutil, subprocess, sys, tarfile, tempfile, zipfile
 from pathlib import Path
+from bundle_python import install_python
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,9 +40,14 @@ def finalize_macos(bundle):
     print('Qt architecture thinning saved',saved,'uncompressed bytes')
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--cmake',default='cmake');p.add_argument('--build',default='build');p.add_argument('--platform',default='');args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--cmake',default='cmake');p.add_argument('--build',default='build');p.add_argument('--platform',default='')
+    p.add_argument('--bundle-python',action=argparse.BooleanOptionalAction,default=None,help='Override UMEKO_BUNDLE_PYTHON from the configured CMake build')
+    args=p.parse_args()
     arch={'AMD64':'x64','x86_64':'x64','arm64':'arm64','aarch64':'arm64'}[platform.machine()]
     target=args.platform or {'win32':'windows','darwin':'macos','linux':'linux'}[sys.platform]+'-'+arch
+    build_config=json.loads((ROOT/args.build/'build-config.json').read_text(encoding='utf-8'))
+    bundle_python=build_config['bundlePython'] if args.bundle_python is None else args.bundle_python
+    build_config['bundlePython']=bundle_python
     qt_root=os.environ.get('QT_ROOT')
     if not qt_root:
         cache=(ROOT/args.build/'CMakeCache.txt').read_text(encoding='utf-8')
@@ -61,6 +67,7 @@ def main():
     for relative in ['runtime/gateway.mjs','runtime/bridge.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime']:
         copy(ROOT/relative,resources/relative)
     copy(ROOT/'build/provider-resources',resources/'provider-resources')
+    python_distribution=install_python(target,resources/'runtime/python') if bundle_python else None
     for name in ['THIRD_PARTY_NOTICES.md','README.md','licenses']:
         copy(ROOT/name,resources/name)
     if qt_root and (Path(qt_root)/'sbom').is_dir():
@@ -69,10 +76,13 @@ def main():
         plugin='qoffscreen.dll' if os.name=='nt' else 'libqoffscreen.so'
         copy(Path(qt_root)/'plugins/platforms'/plugin,prefix/'plugins/platforms'/plugin)
     # Every bundled module keeps its upstream license. Only source maps are omitted.
-    info={'version':'0.2.0','platform':target,'commit':os.environ.get('GITHUB_SHA','local'),
+    info={**build_config,'platform':target,'commit':os.environ.get('GITHUB_SHA','local'),
           'system':platform.system(),'architecture':platform.machine(),
           'builtAt':__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
-          'pi':'1.3.0','qt':'6.10.2','providerApi':1,'python':'external, >=3.10',
+          'pi':'1.3.0','qt':'6.10.2','providerApi':1,
+          'edition':'standard' if bundle_python else 'minimal',
+          'python':'bundled, CPython '+python_distribution['version'] if bundle_python else 'external, >=3.10',
+          'pythonDistribution':python_distribution,
           'node':'external, >=22.19','parityBaseline':'f648e18b0c8ef86c65363dc78d99223ef0276fcf'}
     (resources/'build-info.json').write_text(json.dumps(info,indent=2)+'\n',encoding='utf-8')
     if sys.platform=='darwin':finalize_macos(prefix/'UmekoCpp.app')
@@ -88,14 +98,25 @@ def main():
     if result.returncode or not log.exists() or 'QML_READY' not in log.read_text(encoding='utf-8') or 'EXIT:0' not in log.read_text(encoding='utf-8'):
         raise RuntimeError('Packaged application failed ('+str(result.returncode)+'): '+result.stderr.decode('utf-8','replace')+'\n'+(log.read_text(encoding='utf-8') if log.exists() else 'no diagnostics'))
     diagnostics=log.read_text(encoding='utf-8')
+    if 'WINDOW_TITLE:Umeko-Desktop' not in diagnostics or 'COMPILER:'+build_config['compiler'] not in diagnostics:
+        raise RuntimeError('Installed title or compiler metadata does not match the build')
     if any(text in diagnostics for text in ['qrc:/','SNAPSHOT_FAILED','QML_FAILED']):
         raise RuntimeError('Packaged QML warnings: '+diagnostics)
     # Probe bundled Pi and offline search binaries from their installed paths.
     run('node',resources/'runtime/releases/coding-1.3.0/bridge.mjs','--self-test')
     for binary in ['fd','rg']:
         run(resources/'runtime/releases/coding-1.3.0/bin'/(binary+('.exe' if os.name=='nt' else '')),'--version')
+    if bundle_python:
+        python=resources/'runtime/python'/('python.exe' if os.name=='nt' else 'bin/python3')
+        selected=next((line.removeprefix('PYTHON_EXECUTABLE:') for line in diagnostics.splitlines() if line.startswith('PYTHON_EXECUTABLE:')), '')
+        if not selected or Path(selected).resolve()!=python.resolve():
+            raise RuntimeError('Installed app did not automatically select bundled Python')
+        run(python,'-I','-c','import ssl,sqlite3,ctypes,venv,ensurepip; print(ssl.OPENSSL_VERSION)')
+        run(python,'-I','-m','pip','--version')
+        # Exercise real SDK login, vendor dependencies and inference in fresh processes.
+        run(python,'-I',ROOT/'tests/worker_test.py')
     output=ROOT/'release-assets';output.mkdir(exist_ok=True)
-    stem='UmekoCpp-v0.2.0-'+target
+    stem='UmekoCpp-v'+build_config['version']+('' if bundle_python else '-minimal')+'-'+target
     if sys.platform=='linux':
         archive=output/(stem+'.tar.gz')
         with tarfile.open(archive,'w:gz',compresslevel=9) as stream:stream.add(prefix,arcname='UmekoCpp')

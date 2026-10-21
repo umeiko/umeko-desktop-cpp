@@ -11,7 +11,9 @@ import time
 REPO=os.environ['GITHUB_REPOSITORY']
 RUN=os.environ['RELEASE_BUILD_RUN']
 TAG=os.environ['RELEASE_TAG']
-assert re.fullmatch(r'\d+',RUN) and re.fullmatch(r'v\d+\.\d+\.\d+',TAG)
+assert re.fullmatch(r'\d+',RUN) and re.fullmatch(r'v\d+\.\d+\.\d+(?:-minimal)?',TAG)
+minimal=TAG.endswith('-minimal')
+version=TAG.removeprefix('v').removesuffix('-minimal')
 assert REPO=='umeiko/umeko-desktop-cpp'
 
 def gh(*args):
@@ -32,7 +34,9 @@ seen=set();sizes=[]
 for metadata in incoming.rglob('UmekoCpp-*.json'):
     report=json.loads(metadata.read_text(encoding='utf-8'))
     target=report['platform'];assert target in platforms and target not in seen
-    assert report['commit']==commit and 'v'+report['version']==TAG
+    assert report['commit']==commit and report['version']==version
+    assert report['edition']==('minimal' if minimal else 'standard')
+    assert report['bundlePython']==(not minimal)
     seen.add(target)
     suffix='.tar.gz' if target=='linux-x64' else '.zip'
     archive=metadata.with_name('UmekoCpp-'+TAG+'-'+target+suffix)
@@ -54,8 +58,9 @@ releases=api('releases')
 release=next((r for r in releases if r['tag_name']==TAG),None)
 if release is None:
     notes=base/'notes.md'
-    notes.write_text('Native C++ desktop with the Python edition\'s chat, Pi tools, provider packages, Yanami animations and easter eggs.\n\nRequires Node.js 22.19+. Account plugins reuse SDK v1 ZIPs through a configurable external Python 3.10+ interpreter.\n\nVerified CI: https://github.com/'+REPO+'/actions/runs/'+RUN+'\n\n'+''.join(f'- {p}: {n/1048576:.2f} MiB\n' for p,n in sizes),encoding='utf-8')
-    gh('release','create',TAG,'--repo',REPO,'--target',commit,'--draft','--title',TAG+' — Native C++ desktop','--notes-file',notes)
+    runtime=('Minimal edition: Python is external. Provider plugins require Python 3.10+; configure python_path to select an interpreter.' if minimal else 'Standard edition: includes standalone CPython 3.12.15 for Provider plugins. A custom python_path overrides the bundled interpreter.')
+    notes.write_text('Umeko-Desktop\n\n- The window, About page and OS product metadata use Umeko-Desktop.\n- About reports the actual C++ compiler and version.\n- Provider runtime selection supports bundled Python and per-account overrides.\n\n'+runtime+'\n\nBoth editions require Node.js 22.19+ for Pi. Existing Provider SDK v1 ZIPs remain compatible.\n\nVerified CI: https://github.com/'+REPO+'/actions/runs/'+RUN+'\n\n'+''.join(f'- {p}: {n/1048576:.2f} MiB\n' for p,n in sizes),encoding='utf-8')
+    gh('release','create',TAG,'--repo',REPO,'--target',commit,'--draft','--title',TAG,'--notes-file',notes,*(['--prerelease'] if minimal else []))
     release=next(r for r in api('releases') if r['tag_name']==TAG)
 assert release['target_commitish']==commit
 rid=release['id']
@@ -91,9 +96,11 @@ assert {r['name'] for r in actual['assets']}=={f.name for f in files}
 for file in files:
     row=next(r for r in actual['assets'] if r['name']==file.name)
     assert row['state']=='uploaded' and row['digest']=='sha256:'+hashlib.sha256(file.read_bytes()).hexdigest()
-if actual['draft']:gh('release','edit',TAG,'--repo',REPO,'--draft=false','--latest')
-latest=api('releases/latest');assert latest['tag_name']==TAG and not latest['prerelease']
+if actual['draft']:gh('release','edit',TAG,'--repo',REPO,'--draft=false',*(['--latest=false'] if minimal else ['--latest']))
+published=api('releases/'+str(rid));assert not published['draft'] and published['prerelease']==minimal
+if not minimal:
+    latest=api('releases/latest');assert latest['tag_name']==TAG and not latest['prerelease']
 assert api('git/ref/tags/'+TAG)['object']['sha']==commit
-print('Published:',latest['html_url'],flush=True)
+print('Published:',published['html_url'],flush=True)
 with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as out:
-    out.write('Published ['+TAG+']('+latest['html_url']+') from verified build ['+RUN+'](https://github.com/'+REPO+'/actions/runs/'+RUN+'). All 15 server-side asset digests verified.\n')
+    out.write('Published ['+TAG+']('+published['html_url']+') from verified build ['+RUN+'](https://github.com/'+REPO+'/actions/runs/'+RUN+'). All 15 server-side asset digests verified.\n')
