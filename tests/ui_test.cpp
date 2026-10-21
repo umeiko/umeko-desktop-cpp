@@ -531,6 +531,24 @@ Item {
             find("chatboxImage_media-delivery_0")->property("loaded").toBool(),
         10000);
     QVERIFY(find("chatboxCard_media-delivery_1"));
+    QTest::qWait(350); // Allow the tail-follow viewport to finish positioning.
+    auto fileHeader = find("openChatbox_media-delivery_1");
+    QTest::mouseMove(window, point(fileHeader, 50, 17));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        fileHeader->property("interactionHovered").toBool(), 1000);
+    QCOMPARE(find("chatPointerArea")->property("cursorShape").toInt(),
+             int(Qt::PointingHandCursor));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        find("hoverTipContent_chatboxTip_media-delivery_1") &&
+            find("hoverTipContent_chatboxTip_media-delivery_1")->isVisible(),
+        2000);
+    QVERIFY(find("hoverTipContent_chatboxTip_media-delivery_1")->width() <=
+            336);
+    click("toggleChatbox_media-delivery_1");
+    auto fileMenu = find("revealChatbox_media-delivery_1")->parent();
+    QVERIFY(fileMenu->property("visible").toBool());
+    click("toggleChatbox_media-delivery_1");
+    QVERIFY(!fileMenu->property("visible").toBool());
     QDesktopServices::setUrlHandler("file", this, "recordOpenedUrl");
     click("openChatbox_media-delivery_1");
     QVERIFY(!openedUrls.isEmpty());
@@ -618,6 +636,16 @@ Item {
     QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, pos);
     QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, pos);
     QCOMPARE(copy(), QString("beta"));
+    QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier, pos);
+    QTest::qWait(150);
+    QCOMPARE(copy(), QString("beta"));
+    QVERIFY(find("copySelectedText"));
+    click("copySelectedText");
+    QCOMPARE(QGuiApplication::clipboard()->text(), QString("beta"));
+    QVERIFY(selection->property("hasSelection").toBool());
+    QMetaObject::invokeMethod(selection, "clear");
+    QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, pos);
+    QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, pos);
     QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, pos);
     QCOMPARE(copy(), QString("Got: ") + paragraph);
     QMetaObject::invokeMethod(selection, "clear");
