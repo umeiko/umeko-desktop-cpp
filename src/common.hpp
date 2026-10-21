@@ -32,6 +32,7 @@ QVariantMap normalizeModel(QVariantMap model, QVariantMap previous = {});
 int parseContext(const QVariant &value);
 QVariantMap toolView(QString id, QString name, QVariantMap arguments,
                      QString cwd, QVariantMap result = {});
+QVariantList mediaView(QVariantList items);
 QPair<QVariantList, QVariantList> preview(const QString &file);
 QString attachmentPrompt(QString text, QVariantList attachments);
 QPair<QString, QVariantList> splitAttachments(QString text);

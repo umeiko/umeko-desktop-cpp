@@ -1,4 +1,5 @@
 #include "common.hpp"
+#include <QImageReader>
 #include <stdexcept>
 
 QString U::uuid() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
@@ -321,6 +322,54 @@ QVariantMap U::normalizeModel(QVariantMap m, QVariantMap previous) {
          : vis.value("vision");
   return m;
 }
+QVariantList U::mediaView(QVariantList items) {
+  static QCache<QString, QVariantMap> cache(256);
+  QVariantList out;
+  for (auto value : items.mid(0, 12)) {
+    auto item = value.toMap();
+    const auto path = item["path"].toString();
+    const auto kind = item["kind"].toString();
+    if (!QFileInfo(path).isAbsolute() || path.contains(QChar(0)) ||
+        path.contains('\n') || path.contains('\r') ||
+        !QStringList{"image", "file", "folder"}.contains(kind))
+      continue;
+    QFileInfo file(path);
+    auto title = item.value("title", file.fileName()).toString().left(160);
+    auto caption = item["caption"].toString().left(1000);
+    const auto key = path + QChar(0) + kind + QChar(0) + title + QChar(0) +
+                     caption + QChar(0) + item["modified"].toString();
+    if (auto cached = cache.object(key)) {
+      out << *cached;
+      continue;
+    }
+    QVariantMap row{
+        {"path", path},
+        {"name", file.fileName()},
+        {"kind", kind},
+        {"title", title},
+        {"caption", caption},
+        {"bytes", file.size()},
+        {"url", QUrl::fromLocalFile(path).toString(QUrl::FullyEncoded)},
+        {"preview", false},
+        {"previewNote", ""}};
+    if (kind == "image") {
+      QImageReader reader(path);
+      const auto size = reader.size();
+      const bool preview = file.exists() && file.size() > 0 &&
+                           file.size() <= 20 * 1024 * 1024 &&
+                           size.width() > 0 && size.height() > 0 &&
+                           qint64(size.width()) * size.height() <= 16000000;
+      row["pixelWidth"] = size.width();
+      row["pixelHeight"] = size.height();
+      row["preview"] = preview;
+      row["previewNote"] =
+          preview ? "" : "图片过大或暂不可预览，可打开原文件查看";
+    }
+    cache.insert(key, new QVariantMap(row));
+    out << row;
+  }
+  return out;
+}
 QVariantMap U::toolView(QString id, QString name, QVariantMap args, QString cwd,
                         QVariantMap result) {
   auto path =
@@ -333,14 +382,19 @@ QVariantMap U::toolView(QString id, QString name, QVariantMap args, QString cwd,
       path = QDir(cwd).filePath(path);
     path = cleanPath(path);
   }
-  return {{"id", id},
-          {"name", name},
-          {"arguments", args},
-          {"path", path},
-          {"state", result.isEmpty()                   ? "running"
-                    : result.value("isError").toBool() ? "error"
-                                                       : "done"},
-          {"result", result.value("text").toString().left(8192)}};
+  QVariantMap row{{"id", id},
+                  {"name", name},
+                  {"arguments", args},
+                  {"path", path},
+                  {"state", result.isEmpty()                   ? "running"
+                            : result.value("isError").toBool() ? "error"
+                                                               : "done"},
+                  {"result", result.value("text").toString().left(8192)}};
+  auto payload = result["details"].toMap()["umekoChatbox"].toMap();
+  if (name == "submit_to_chatbox" && !result["isError"].toBool() &&
+      payload["version"].toInt() == 1 && !payload["items"].toList().isEmpty())
+    row["media"] = payload["items"].toList().mid(0, 12);
+  return row;
 }
 static QString textOf(QVariant content, QString type = "text",
                       QString field = "text") {
@@ -379,7 +433,13 @@ QPair<QVariantList, QVariantList> U::preview(const QString &file) {
     last = e["parentId"].toString();
   }
   QMap<QString, QVariantMap> results;
+  QVariantList deliveries;
   for (auto e : branch) {
+    auto data = e["data"].toMap();
+    if (e["type"] == "custom" && e["customType"] == "umeko-chatbox" &&
+        data["version"].toInt() == 1 &&
+        !data["toolCallId"].toString().isEmpty())
+      deliveries << data;
     auto m = e["message"].toMap();
     if (m["role"] == "toolResult") {
       m["text"] = textOf(m["content"]);
@@ -411,6 +471,17 @@ QPair<QVariantList, QVariantList> U::preview(const QString &file) {
       if (!results.contains(id))
         tool["state"] = "interrupted";
       tools << tool;
+      for (auto delivery : deliveries) {
+        auto data = delivery.toMap();
+        if (data["toolCallId"].toString().startsWith(id + "/"))
+          tools << QVariantMap{{"id", data["toolCallId"]},
+                               {"name", "submit_to_chatbox"},
+                               {"arguments", QVariantMap{}},
+                               {"path", ""},
+                               {"state", "done"},
+                               {"result", "已提交到聊天框"},
+                               {"media", data["items"].toList().mid(0, 12)}};
+      }
     }
     if (text.isEmpty() && thinking.isEmpty() && tools.isEmpty())
       continue;

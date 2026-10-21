@@ -350,6 +350,20 @@ void Backend::editQueued(QString id) {
       return;
     }
 }
+void Backend::steerQueued(QString id) {
+  for (auto row : view->queue)
+    if (row.toMap()["id"] == id) {
+      writePi(view, {{"type", "steer-queued"}, {"id", id}});
+      return;
+    }
+}
+void Backend::removeQueued(QString id) {
+  for (auto row : view->queue)
+    if (row.toMap()["id"] == id) {
+      writePi(view, {{"type", "delete-queue"}, {"id", id}});
+      return;
+    }
+}
 void Backend::sendText(QString text, bool steering) {
   auto s = view;
   text = text.trimmed();
@@ -572,6 +586,8 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
                                         payload["args"].toMap(), s->workspace)
                           : tools[index].toMap();
     tool["state"] = payload["state"];
+    if (!payload["media"].toList().isEmpty())
+      tool["media"] = payload["media"];
     if (payload.contains("result"))
       tool["result"] = payload["result"];
     if (index < 0)

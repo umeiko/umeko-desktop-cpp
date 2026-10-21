@@ -245,6 +245,8 @@ public:
   Q_INVOKABLE void copy(QString text);
   Q_INVOKABLE void setWorkspace(QString url);
   Q_INVOKABLE void openChatDirectory();
+  Q_INVOKABLE void openChatboxPath(QString path, bool reveal);
+  Q_INVOKABLE void copyChatboxFile(QString path);
   Q_INVOKABLE void toggleArchived();
   Q_INVOKABLE void togglePinned(QString kind, QString id);
   Q_INVOKABLE void archiveSession(QString id, bool archived);
@@ -268,6 +270,8 @@ public:
   Q_INVOKABLE void send(QString text);
   Q_INVOKABLE void steer(QString text);
   Q_INVOKABLE void editQueued(QString id);
+  Q_INVOKABLE void steerQueued(QString id);
+  Q_INVOKABLE void removeQueued(QString id);
   Q_INVOKABLE void stop();
   Q_INVOKABLE void selectModel(QString provider, QString model);
   Q_INVOKABLE bool saveProvider(QString id, QString name, QString api,

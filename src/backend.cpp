@@ -25,8 +25,8 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
                       manifest["engine"] == "full-coding-agent";
     // The adapters belong to this desktop build, even when Pi itself was
     // upgraded separately. Keep web/queue fixes with the application update.
-    for (const auto &name :
-         {"bridge.mjs", "resources.mjs", "provider-policy.mjs"}) {
+    for (const auto &name : {"bridge.mjs", "resources.mjs",
+                             "provider-policy.mjs", "chatbox.mjs"}) {
       if (!compatible)
         break;
       QFile source(root + "/runtime/" + name);
@@ -345,6 +345,44 @@ void Backend::openChatDirectory() {
     QDesktopServices::openUrl(QUrl::fromLocalFile(path));
   else
     emit toast("当前会话目录不存在");
+}
+void Backend::openChatboxPath(QString path, bool reveal) {
+  QFileInfo file(path);
+  if (!file.isAbsolute() || !file.exists()) {
+    emit toast("文件已移动或不存在");
+    return;
+  }
+  if (reveal && file.isFile()) {
+#if defined(Q_OS_WIN)
+    if (!QProcess::startDetached("explorer.exe",
+                                 {"/select,", QDir::toNativeSeparators(path)}))
+      emit toast("无法打开文件夹");
+    return;
+#elif defined(Q_OS_MACOS)
+    if (!QProcess::startDetached("/usr/bin/open", {"-R", path}))
+      emit toast("无法打开文件夹");
+    return;
+#else
+    path = file.absolutePath();
+#endif
+  }
+  if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path)))
+    emit toast("无法打开，请检查文件关联");
+}
+void Backend::copyChatboxFile(QString path) {
+  if (!QFileInfo(path).isAbsolute() || !QFileInfo(path).exists()) {
+    emit toast("文件已移动或不存在");
+    return;
+  }
+  auto mime = new QMimeData;
+  const auto url = QUrl::fromLocalFile(path);
+  mime->setUrls({url});
+  mime->setData("application/x-qt-windows-mime;value=\"Preferred DropEffect\"",
+                QByteArray::fromHex("01000000"));
+  mime->setData("x-special/gnome-copied-files", "copy\n" + url.toEncoded());
+  mime->setData("application/x-kde-cutselection", "0");
+  QGuiApplication::clipboard()->setMimeData(mime);
+  emit toast("文件已复制");
 }
 void Backend::toggleArchived() {
   archived = !archived;

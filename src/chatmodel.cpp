@@ -19,8 +19,22 @@ QVariantList ChatModel::project(const QVariantList &messages) {
         activity << QVariantMap{{"kind", "text"},
                                 {"text", m["text"]},
                                 {"error", m.value("error", false)}};
-      if (!m["tools"].toList().isEmpty())
-        activity << QVariantMap{{"kind", "tools"}, {"tools", m["tools"]}};
+      QVariantList batch;
+      for (auto value : m["tools"].toList()) {
+        auto tool = value.toMap();
+        batch << tool;
+        if (tool["name"] == "submit_to_chatbox" &&
+            !tool["media"].toList().isEmpty()) {
+          activity << QVariantMap{{"kind", "tools"}, {"tools", batch}};
+          activity << QVariantMap{
+              {"kind", "media"},
+              {"items", U::mediaView(tool["media"].toList())},
+              {"toolId", tool["id"]}};
+          batch.clear();
+        }
+      }
+      if (!batch.isEmpty())
+        activity << QVariantMap{{"kind", "tools"}, {"tools", batch}};
       m["activity"] = activity;
     }
     if (!out.isEmpty() && m["role"] == "assistant" &&

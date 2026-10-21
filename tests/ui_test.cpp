@@ -1,6 +1,7 @@
 #include "backend.hpp"
 #include "miniz.h"
 #include "syntaxhighlighter.hpp"
+#include <QDesktopServices>
 #include <QQuickStyle>
 #include <QScopeGuard>
 #include <QtTest>
@@ -26,6 +27,10 @@ class NativeUiTests : public QObject {
       reply();
   }
   int nativeCalls = 0;
+  bool mediaTool = false;
+  int mediaCalls = 0;
+  QString mediaImage, mediaReport;
+  QList<QUrl> openedUrls;
   QString nativeHistory;
   QQuickItem *find(QString name) {
     QList<QQuickItem *> items{window->contentItem()};
@@ -171,7 +176,26 @@ private slots:
           buffer->clear();
           QVariantMap message;
           QString finish = "stop";
-          if (nativeTool && nativeCalls++ == 0) {
+          if (mediaTool && mediaCalls++ == 0) {
+            QVariantList items{
+                QVariantMap{{"path", mediaImage},
+                            {"title", "Preview image"},
+                            {"caption", "Delivered through Pi"}},
+                QVariantMap{{"path", mediaReport}, {"title", "Report"}}};
+            QVariantMap function{
+                {"name", "submit_to_chatbox"},
+                {"arguments",
+                 QString::fromUtf8(
+                     QJsonDocument::fromVariant(QVariantMap{{"items", items}})
+                         .toJson(QJsonDocument::Compact))}};
+            message = {{"role", "assistant"},
+                       {"content", QVariant()},
+                       {"tool_calls",
+                        QVariantList{QVariantMap{{"id", "media-delivery"},
+                                                 {"type", "function"},
+                                                 {"function", function}}}}};
+            finish = "tool_calls";
+          } else if (nativeTool && nativeCalls++ == 0) {
             QVariantMap function{{"name", "write"},
                                  {"arguments",
                                   "{\"path\":\"native-proof.txt\",\"content\":"
@@ -445,9 +469,17 @@ Item {
     QTRY_VERIFY_WITH_TIMEOUT(requests.size() > start, 15000);
     backend->send("second queued fixture");
     QTRY_COMPARE_WITH_TIMEOUT(backend->queuedMessages().size(), 1, 5000);
+    backend->send("third queued fixture");
+    QTRY_COMPARE_WITH_TIMEOUT(backend->queuedMessages().size(), 2, 5000);
     QTest::qWait(200);
     window->grabWindow().save(root +
                               "/build/screenshots/queue-before-edit.png");
+    click("steerQueued_0");
+    QTRY_COMPARE_WITH_TIMEOUT(
+        backend->queuedMessages().first().toMap()["mode"].toString(),
+        QString("steering"), 5000);
+    click("removeQueued_1");
+    QTRY_COMPARE_WITH_TIMEOUT(backend->queuedMessages().size(), 1, 5000);
     click("editQueued_0");
     QTRY_VERIFY_WITH_TIMEOUT(backend->queuedMessages().isEmpty(), 5000);
     QTRY_VERIFY_WITH_TIMEOUT(find("promptInput")
@@ -467,6 +499,128 @@ Item {
     QVERIFY2(lastText().contains("second queued fixture"),
              qPrintable(lastText()));
     slow = false;
+  }
+  void recordOpenedUrl(QUrl url) { openedUrls << url; }
+  void chatboxDelivery() {
+    backend->newSession();
+    mediaImage = directory.filePath("preview # image.png");
+    mediaReport = directory.filePath("report.txt");
+    QImage image(640, 280, QImage::Format_RGB32);
+    image.fill(QColor("#d8e4ff"));
+    QVERIFY(image.save(mediaImage));
+    QFile report(mediaReport);
+    QVERIFY(report.open(QIODevice::WriteOnly));
+    report.write("synthetic report");
+    report.close();
+    mediaTool = true;
+    mediaCalls = 0;
+    const auto cleanup = qScopeGuard([this] {
+      mediaTool = false;
+      QDesktopServices::unsetUrlHandler("file");
+    });
+    backend->send("Show the image and deliver the report");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 30000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        find("chatboxImage_media-delivery_0") &&
+            find("chatboxImage_media-delivery_0")->property("loaded").toBool(),
+        10000);
+    QVERIFY(find("chatboxCard_media-delivery_1"));
+    QDesktopServices::setUrlHandler("file", this, "recordOpenedUrl");
+    click("openChatbox_media-delivery_1");
+    QVERIFY(!openedUrls.isEmpty());
+    QCOMPARE(U::cleanPath(openedUrls.last().toLocalFile()),
+             U::cleanPath(mediaReport));
+    QCOMPARE(find("chatboxCard_media-delivery_1")->height(), qreal(34));
+    QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier,
+                      point(find("openChatbox_media-delivery_1")));
+    QTest::qWait(150);
+    click("copyChatboxFile_media-delivery_1");
+    QVERIFY(QGuiApplication::clipboard()->mimeData()->hasUrls());
+    QCOMPARE(U::cleanPath(QGuiApplication::clipboard()
+                              ->mimeData()
+                              ->urls()
+                              .first()
+                              .toLocalFile()),
+             U::cleanPath(mediaReport));
+    QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier,
+                      point(find("openChatbox_media-delivery_1")));
+    QTest::qWait(150);
+    click("copyChatbox_media-delivery_1");
+    QCOMPARE(U::cleanPath(QGuiApplication::clipboard()->text()),
+             U::cleanPath(mediaReport));
+    QVERIFY(window->grabWindow().save(root +
+                                      "/build/screenshots/chatbox-media.png"));
+    const auto id = backend->activeSession();
+    backend->newSession();
+    backend->openSession(id);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        find("chatboxImage_media-delivery_0") &&
+            find("chatboxImage_media-delivery_0")->property("loaded").toBool(),
+        10000);
+    int cards = 0;
+    for (auto row : backend->displayMessages())
+      for (auto step : row.toMap()["activity"].toList())
+        if (step.toMap()["kind"] == "media")
+          cards += step.toMap()["items"].toList().size();
+    QCOMPARE(cards, 2);
+  }
+  void wordAndParagraphSelection() {
+    backend->newSession();
+    const QString paragraph = "alpha beta gamma " +
+                              QString("a wrapped sentence ").repeated(14) +
+                              "end";
+    const QString unicode =
+        QString::fromUtf8("第二段包含中文𠮷字符，三击应选中整个段落。");
+    backend->send(paragraph + "\n\n" + unicode);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 30000);
+    auto view = find("conversation");
+    QMetaObject::invokeMethod(view, "beginBrowsing");
+    QMetaObject::invokeMethod(view, "positionViewAtBeginning");
+    QTest::qWait(200);
+    QQuickItem *editor = nullptr;
+    QList<QQuickItem *> items{window->contentItem()};
+    while (!items.isEmpty()) {
+      auto item = items.takeLast();
+      if (item->objectName().startsWith("selectText_") && item->isVisible() &&
+          item->property("text").toString().contains("Got: alpha")) {
+        editor = item;
+        break;
+      }
+      items.append(item->childItems());
+    }
+    QVERIFY(editor);
+    QString plain;
+    QVERIFY(QMetaObject::invokeMethod(
+        editor, "getText", Qt::DirectConnection, Q_RETURN_ARG(QString, plain),
+        Q_ARG(int, 0), Q_ARG(int, editor->property("length").toInt())));
+    auto selection = find("chatSelection");
+    auto copy = [selection] {
+      QMetaObject::invokeMethod(selection, "copy");
+      return QGuiApplication::clipboard()->text();
+    };
+    auto at = [editor](int offset) {
+      QRectF rect;
+      QMetaObject::invokeMethod(editor, "positionToRectangle",
+                                Qt::DirectConnection,
+                                Q_RETURN_ARG(QRectF, rect), Q_ARG(int, offset));
+      return editor
+          ->mapToScene(QPointF(rect.x() + 2, rect.y() + rect.height() / 2))
+          .toPoint();
+    };
+    auto pos = at(plain.indexOf("beta") + 1);
+    QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, pos);
+    QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, pos);
+    QCOMPARE(copy(), QString("beta"));
+    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, pos);
+    QCOMPARE(copy(), QString("Got: ") + paragraph);
+    QMetaObject::invokeMethod(selection, "clear");
+    pos = at(plain.indexOf(unicode) + 8);
+    QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, pos);
+    QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, pos);
+    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, pos);
+    QCOMPARE(copy(), unicode);
+    QMetaObject::invokeMethod(selection, "clear");
   }
   void providerPackages() {
     auto bad = directory.filePath("bad.zip");
