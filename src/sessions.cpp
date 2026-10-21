@@ -509,6 +509,16 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
                          {"role", "assistant"}, {"text", ""}, {"error", false}};
       transcript = true;
     }
+    if (payload.contains("timestamp"))
+      for (int i = s->messages.size() - 1; i >= 0; --i) {
+        auto message = s->messages[i].toMap();
+        if (message["role"] == "user") {
+          message["timestamp"] = payload["timestamp"];
+          s->messages[i] = message;
+          transcript = true;
+          break;
+        }
+      }
   } else if (type == "assistant_start") {
     auto last =
         s->messages.isEmpty() ? QVariantMap{} : s->messages.last().toMap();
@@ -517,6 +527,12 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
         !last["tools"].toList().isEmpty()) {
       s->messages << QVariantMap{
           {"role", "assistant"}, {"text", ""}, {"error", false}};
+      transcript = true;
+    }
+    if (!s->messages.isEmpty() && payload.contains("timestamp")) {
+      auto message = s->messages.last().toMap();
+      message["timestamp"] = payload["timestamp"];
+      s->messages.last() = message;
       transcript = true;
     }
   } else if (type == "queue") {
@@ -552,6 +568,8 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
       if (!text.isEmpty())
         last["text"] = text;
       last["error"] = !payload["error"].toString().isEmpty();
+      if (payload.contains("timestamp"))
+        last["timestamp"] = payload["timestamp"];
       if (payload.contains("thinking"))
         last["thinking"] = payload["thinking"];
       s->messages.last() = last;

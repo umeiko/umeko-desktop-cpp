@@ -453,7 +453,7 @@ QPair<QVariantList, QVariantList> U::preview(const QString &file) {
     auto m = e["message"].toMap();
     auto content = m["content"];
     auto text = textOf(content);
-    if (text.isEmpty())
+    if (text.isEmpty() && m["stopReason"] != "aborted")
       text = m["errorMessage"].toString();
     auto thinking = textOf(content, "thinking", "thinking");
     tree << QVariantMap{
@@ -488,7 +488,9 @@ QPair<QVariantList, QVariantList> U::preview(const QString &file) {
     QVariantMap row{{"role", m["role"]},
                     {"text", text},
                     {"entryId", e["id"]},
-                    {"error", !m["errorMessage"].toString().isEmpty()}};
+                    {"timestamp", m.value("timestamp", e["timestamp"])},
+                    {"error", m["stopReason"] != "aborted" &&
+                                  !m["errorMessage"].toString().isEmpty()}};
     if (!thinking.isEmpty())
       row["thinking"] = thinking;
     if (!tools.isEmpty())

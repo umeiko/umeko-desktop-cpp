@@ -59,6 +59,8 @@ QVariantList ChatModel::project(const QVariantList &messages) {
       tools.append(m["tools"].toList());
       group["tools"] = tools;
       group["text"] = m["text"];
+      if (m.contains("timestamp"))
+        group["timestamp"] = m["timestamp"];
       group["error"] = group["error"].toBool() || m["error"].toBool();
       out.last() = group;
     } else

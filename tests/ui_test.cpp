@@ -260,7 +260,9 @@ private slots:
     QMetaObject::invokeMethod(mascot, "reset");
     QTest::qWait(QGuiApplication::styleHints()->mouseDoubleClickInterval() +
                  60);
-    QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, point(mascot));
+    QTest::mousePress(
+        window, Qt::LeftButton, Qt::NoModifier, point(mascot),
+        QGuiApplication::styleHints()->mouseDoubleClickInterval() + 60);
     QTRY_VERIFY_WITH_TIMEOUT(mascot->property("celebrating").toBool(), 2500);
     QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, point(mascot));
     QMetaObject::invokeMethod(mascot, "reset");
@@ -474,25 +476,29 @@ Item {
     QTest::qWait(200);
     window->grabWindow().save(root +
                               "/build/screenshots/queue-before-edit.png");
-    click("steerQueued_0");
-    QTRY_COMPARE_WITH_TIMEOUT(
-        backend->queuedMessages().first().toMap()["mode"].toString(),
-        QString("steering"), 5000);
-    click("removeQueued_1");
-    QTRY_COMPARE_WITH_TIMEOUT(backend->queuedMessages().size(), 1, 5000);
     click("editQueued_0");
-    QTRY_VERIFY_WITH_TIMEOUT(backend->queuedMessages().isEmpty(), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(backend->queuedMessages().size(), 1, 5000);
     QTRY_VERIFY_WITH_TIMEOUT(find("promptInput")
                                  ->property("text")
                                  .toString()
                                  .contains("second queued fixture"),
                              5000);
+    click("removeQueued_0");
+    QTRY_VERIFY_WITH_TIMEOUT(backend->queuedMessages().isEmpty(), 5000);
     backend->send("second queued fixture edited");
     QTRY_COMPARE_WITH_TIMEOUT(backend->queuedMessages().size(), 1, 5000);
-    backend->steer("");
-    QTRY_COMPARE_WITH_TIMEOUT(
-        backend->queuedMessages().first().toMap()["mode"].toString(),
-        QString("steering"), 5000);
+    click("steerQueued_0");
+    QTRY_VERIFY_WITH_TIMEOUT(backend->queuedMessages().isEmpty(), 5000);
+    auto inserted = [this] {
+      for (auto value : backend->messages()) {
+        auto message = value.toMap();
+        if (message["role"] == "user" &&
+            message["text"] == "second queued fixture edited")
+          return true;
+      }
+      return false;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(inserted(), 5000);
     releaseReplies();
     QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 30000);
     QVERIFY(backend->queuedMessages().isEmpty());
@@ -621,6 +627,21 @@ Item {
     QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, pos);
     QCOMPARE(copy(), unicode);
     QMetaObject::invokeMethod(selection, "clear");
+    auto actions = find("messageActions_1");
+    QVERIFY(actions);
+    QTest::mouseMove(window, QPoint(40, 40));
+    QTest::qWait(80);
+    QCOMPARE(actions->property("opacity").toDouble(), 0.0);
+    QTest::mouseMove(window, point(find("messageBubble_1")));
+    QTRY_COMPARE_WITH_TIMEOUT(actions->property("opacity").toDouble(), 1.0,
+                              1000);
+    QVERIFY(find("messageTime_1")->property("text").toString().contains(':'));
+    click("copyMessage_1");
+    QCOMPARE(QGuiApplication::clipboard()->text(),
+             QString("Got: ") + paragraph + "\n\n" + unicode);
+    QTest::mouseMove(window, QPoint(40, 40));
+    QTRY_COMPARE_WITH_TIMEOUT(actions->property("opacity").toDouble(), 0.0,
+                              1000);
   }
   void providerPackages() {
     auto bad = directory.filePath("bad.zip");
