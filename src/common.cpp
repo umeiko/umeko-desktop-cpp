@@ -27,6 +27,18 @@ QString U::cleanPath(QString path) {
                                     : f.absoluteFilePath());
 }
 QString U::node() {
+#ifdef Q_OS_WIN
+  auto bundled =
+      QCoreApplication::applicationDirPath() + "/runtime/node/node.exe";
+#elif defined(Q_OS_MACOS)
+  auto bundled = QCoreApplication::applicationDirPath() +
+                 "/../Resources/runtime/node/bin/node";
+#else
+  auto bundled =
+      QCoreApplication::applicationDirPath() + "/runtime/node/bin/node";
+#endif
+  if (QFileInfo(bundled).isFile() && QFileInfo(bundled).isExecutable())
+    return cleanPath(bundled);
   auto path = QStandardPaths::findExecutable("node");
   if (path.isEmpty())
     for (auto p : {"/opt/homebrew/bin/node", "/usr/local/bin/node"})

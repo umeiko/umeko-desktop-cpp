@@ -14,14 +14,14 @@
 
 Umeko-Desktop brings the Python edition's chat, tools, provider plugins and playful Yanami interface to a C++20 / Qt Quick desktop application. The interface and Pi bridge are shared with [Umeko Desktop v0.2.0](https://github.com/umeiko/umeko-desktop/releases/tag/v0.2.0); the desktop controller is native C++.
 
-**Standard releases include CPython 3.12.15 for Provider plugins.** The `-minimal` releases omit Python and use your own Python 3.10+ interpreter. Neither edition includes PySide. Both need Node.js 22.19+ for Pi, the real upstream coding engine with its tools, extensions, Skills, MCP and native sessions.
+**Standard releases include CPython 3.12.15 for Provider plugins.** The `-minimal` releases omit Python and use your own Python 3.10+ interpreter. Neither edition includes PySide. Both bundle Node.js 22.23.3 and npm for Pi, the real upstream coding engine with its tools, extensions, Skills, MCP and native sessions.
 
 <img src="docs/screenshots/chat.png" width="100%" alt="Actual native application: chat, reasoning, grouped tool history and highlighted code" />
 
 ## Get started
 
 1. Download the archive for your operating system from [Releases](https://github.com/umeiko/umeko-desktop-cpp/releases).
-2. Extract the whole archive. Install [Node.js 22.19 or newer](https://nodejs.org/en/download) if it is not already available.
+2. Extract the whole archive. Node.js and npm are included; no separate installation is needed.
 3. Open `UmekoCpp.exe` on Windows, `UmekoCpp.app` on macOS, or `./UmekoCpp` on Linux.
 4. Open **Settings → Accounts & Providers**, add an OpenAI-compatible or Anthropic-compatible provider, and choose a model.
 
@@ -29,9 +29,9 @@ Choose `v0.2.1` for bundled Python or `v0.2.1-minimal` for a smaller download. M
 
 | Platform | Release | Requirements |
 | --- | --- | --- |
-| Windows | x64 ZIP | Windows 10 (1809+) / 11, Node.js 22.19+ |
-| macOS | Apple Silicon / Intel ZIP | macOS 13+, Node.js 22.19+ |
-| Linux | x64 tar.gz | Ubuntu 24.04+ or compatible glibc 2.39 system, desktop session, Node.js 22.19+ |
+| Windows | x64 ZIP | Windows 10 (1809+) / 11 |
+| macOS | Apple Silicon / Intel ZIP | macOS 13+ |
+| Linux | x64 tar.gz | Ubuntu 24.04+ or compatible glibc 2.39 system, desktop session |
 
 These minimum OS versions follow the [Qt 6.10 platform requirements](https://doc.qt.io/qt-6.10/supported-platforms.html); release CI uses Windows 2022, macOS 15 and Ubuntu 24.04. The builds are unsigned. macOS may require **System Settings → Privacy & Security → Open Anyway** after your first launch attempt. Linux stores credentials in the desktop Secret Service keyring; unlock it before saving account credentials. Under fcitx5, enable its IBus frontend when the release's bundled Qt lacks a matching fcitx plugin; see the [Linux input method guide](docs/BUILDING.md#linux-input-methods).
 
@@ -102,7 +102,7 @@ Profiles are separate from the Python edition: `%LOCALAPPDATA%/UmekoCpp`, `~/Lib
 
 这是 [Umeko Desktop](https://github.com/umeiko/umeko-desktop) 的 C++ 姊妹版。保留原版聊天、Pi 扩展、工具记录、API 代理，以及八奈见主题、彩蛋和动画；桌面控制层迁移到 C++，安装包不包含 Python 解释器。
 
-两个版本均需要 Node.js 22.19+。正式版内置 CPython 3.12.15；`-minimal` 精简版使用本机 Python 3.10+。自定义供应商继续使用原来的 SDK v1 ZIP，**python_path** 留空优先使用内置解释器，也可设置全局或单账号路径覆盖为已有 Python / 虚拟环境。插件依赖由用户在所选环境中安装，或者随插件放入 `vendor/`。
+两个版本均内置 Node.js 与 npm，无需另外安装。正式版内置 CPython 3.12.15；`-minimal` 精简版使用本机 Python 3.10+。自定义供应商继续使用原来的 SDK v1 ZIP，**python_path** 留空优先使用内置解释器，也可设置全局或单账号路径覆盖为已有 Python / 虚拟环境。插件依赖由用户在所选环境中安装，或者随插件放入 `vendor/`。
 
 下载后完整解压运行。Windows、macOS ARM / Intel 和 Linux 均由独立原生 CI 构建。详细构建步骤见 [BUILDING.md](docs/BUILDING.md)。
 

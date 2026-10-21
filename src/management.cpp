@@ -133,6 +133,11 @@ void Backend::reconnectMcp(QString name) {
     command(view, "mcp-command", {{"text", "/mcp reconnect " + name}});
 }
 static QString npmCli() {
+  auto directory = QFileInfo(U::node()).absolutePath();
+  for (auto candidate : {directory + "/node_modules/npm/bin/npm-cli.js",
+                         directory + "/../lib/node_modules/npm/bin/npm-cli.js"})
+    if (QFileInfo(candidate).isFile())
+      return candidate;
   auto path = QStandardPaths::findExecutable("npm");
   if (path.isEmpty())
     path = QStandardPaths::findExecutable("npm.cmd");

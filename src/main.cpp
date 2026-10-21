@@ -89,6 +89,7 @@ int main(int argc, char **argv) {
   if (parser.isSet("smoke")) {
     diagnostic("WINDOW_TITLE:" + window->title());
     diagnostic("COMPILER:" + QStringLiteral(UMEKO_COMPILER));
+    diagnostic("NODE_EXECUTABLE:" + U::node());
     diagnostic(
         "PYTHON_EXECUTABLE:" +
         backend.providerPlugins()->property("pythonExecutable").toString());

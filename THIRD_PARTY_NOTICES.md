@@ -37,3 +37,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Dependencies retain their upstream license files in the runtime node_modules directory. Locally drawn SVG interface icons belong to this project. The Yanami artwork is reused from the Python edition; see `app/icons/yanami-pixel.provenance.json`. No affiliation with the character rights holders is implied.
+
+## Bundled Node.js and npm
+
+Release packages include the official Node.js 22.23.3 distribution and npm from https://nodejs.org/dist/v22.23.3/ . The full distribution retains its LICENSE files and npm dependency notices under `runtime/node/`. Downloads are pinned by SHA-256 in `scripts/node-distributions.json`; the archive origin and version are recorded in build metadata.

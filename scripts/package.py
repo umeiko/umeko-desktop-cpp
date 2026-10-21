@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse, hashlib, json, os, platform, re, shutil, subprocess, sys, tarfile, tempfile, zipfile
 from pathlib import Path
 from bundle_python import install_python
+from bundle_node import install_node, node_binary
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -68,6 +69,7 @@ def main():
         copy(ROOT/relative,resources/relative)
     copy(ROOT/'build/provider-resources',resources/'provider-resources')
     python_distribution=install_python(target,resources/'runtime/python') if bundle_python else None
+    node_distribution=install_node(target,resources/'runtime/node')
     for name in ['THIRD_PARTY_NOTICES.md','README.md','licenses']:
         copy(ROOT/name,resources/name)
     if qt_root and (Path(qt_root)/'sbom').is_dir():
@@ -83,7 +85,8 @@ def main():
           'edition':'standard' if bundle_python else 'minimal',
           'python':'bundled, CPython '+python_distribution['version'] if bundle_python else 'external, >=3.10',
           'pythonDistribution':python_distribution,
-          'node':'external, >=22.19','parityBaseline':'f648e18b0c8ef86c65363dc78d99223ef0276fcf'}
+          'node':'bundled, '+node_distribution['version'],'nodeDistribution':node_distribution,
+          'parityBaseline':'f648e18b0c8ef86c65363dc78d99223ef0276fcf'}
     (resources/'build-info.json').write_text(json.dumps(info,indent=2)+'\n',encoding='utf-8')
     if sys.platform=='darwin':finalize_macos(prefix/'UmekoCpp.app')
     executable=prefix/'UmekoCpp.app/Contents/MacOS/UmekoCpp' if sys.platform=='darwin' else prefix/('UmekoCpp.exe' if os.name=='nt' else 'UmekoCpp')
@@ -93,6 +96,9 @@ def main():
     if qt_root:
         sdk=str(Path(qt_root).resolve()).replace('\\','/').lower()
         env['PATH']=os.pathsep.join(x for x in env['PATH'].split(os.pathsep) if not x.replace('\\','/').lower().startswith(sdk))
+    # A colleague's clean machine must not need Node/npm installed in PATH.
+    env['PATH']=str(ROOT/'build/no-system-node')
+    env.pop('NODE_OPTIONS',None);env.pop('NODE_PATH',None)
     log=ROOT/'build/packaged-smoke.log';log.unlink(missing_ok=True)
     result=subprocess.run([str(executable),'--data-dir',str(ROOT/'build/packaged-profile'),'--smoke','--demo','--snapshot',str(ROOT/'build/packaged-chat.png')],env=env,timeout=45,capture_output=True)
     if result.returncode or not log.exists() or 'QML_READY' not in log.read_text(encoding='utf-8') or 'EXIT:0' not in log.read_text(encoding='utf-8'):
@@ -100,10 +106,16 @@ def main():
     diagnostics=log.read_text(encoding='utf-8')
     if 'WINDOW_TITLE:Umeko-Desktop' not in diagnostics or 'COMPILER:'+build_config['compiler'] not in diagnostics:
         raise RuntimeError('Installed title or compiler metadata does not match the build')
+    node=node_binary(resources/'runtime/node',target)
+    selected=next((line.removeprefix('NODE_EXECUTABLE:') for line in diagnostics.splitlines() if line.startswith('NODE_EXECUTABLE:')), '')
+    if not selected or Path(selected).resolve()!=node.resolve():
+        raise RuntimeError('Installed app did not select bundled Node without a system PATH')
     if any(text in diagnostics for text in ['qrc:/','SNAPSHOT_FAILED','QML_FAILED']):
         raise RuntimeError('Packaged QML warnings: '+diagnostics)
     # Probe bundled Pi and offline search binaries from their installed paths.
-    run('node',resources/'runtime/releases/coding-1.3.0/bridge.mjs','--self-test')
+    run(node,resources/'runtime/releases/coding-1.3.0/bridge.mjs','--self-test',env=env)
+    npm=resources/'runtime/node'/('node_modules/npm/bin/npm-cli.js' if os.name=='nt' else 'lib/node_modules/npm/bin/npm-cli.js')
+    run(node,npm,'--version',env=env)
     for binary in ['fd','rg']:
         run(resources/'runtime/releases/coding-1.3.0/bin'/(binary+('.exe' if os.name=='nt' else '')),'--version')
     if bundle_python:
