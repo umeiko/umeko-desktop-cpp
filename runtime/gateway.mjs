@@ -4,6 +4,7 @@ import { createHash, timingSafeEqual, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { once } from 'node:events';
+import { upstreamFailure } from './network-retry.mjs';
 import { dispatcher, failureReport, providerFetch } from './transport.mjs';
 
 const MAX_BODY = 32 * 1024 * 1024;
@@ -84,7 +85,7 @@ export function openaiToAnthropic(messages, tools, maxTokens, parameters = {}) {
 export async function* anthropicEvents(events) {
   const indices = new Map(); let next = 0;
   for await (const e of events) {
-    if (e.type === 'error') throw new Error('Upstream stream failed');
+    if (e.type === 'error') throw new Error(JSON.stringify(e.error || e));
     let delta = {}, usage, finish = null;
     if (e.type === 'message_start') { delta.role = 'assistant'; usage = { prompt_tokens: e.message?.usage?.input_tokens || 0 }; }
     else if (e.type === 'content_block_start' && e.content_block.type === 'tool_use') {
@@ -127,7 +128,7 @@ export async function* toAnthropicEvents(events, model, id) {
   yield { type: 'message_start', message: { id, type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } };
   let next = 0, text, thinking, finish = 'end_turn', input = 0, output = 0; const blocks = [], tools = new Map();
   for await (const e of events) {
-    if (e.error) throw new Error('Upstream stream failed');
+    if (e.error) throw new Error(JSON.stringify(e.error || e));
     input = e.usage?.prompt_tokens ?? input; output = e.usage?.completion_tokens ?? output;
     for (const choice of e.choices || []) {
       const d = choice.delta || choice.message || {}; const reasoning = d.reasoning_content || d.reasoning || d.reasoning_text;
@@ -288,8 +289,8 @@ export class Gateway {
       }
       if (!anthropic && !res.destroyed) res.write('data: [DONE]\n\n'); res.end();
     } catch (failure) {
-      if (!res.headersSent) error(502, failure.reportId ? failure.message : 'Provider request failed; check configuration, Python dependencies or network', 'upstream_error');
-      else if (!res.destroyed) { const value = { error: { type: 'upstream_error', message: failure.reportId ? failure.message : 'Provider stream failed; check provider status' } }; res.end(`data: ${JSON.stringify(value)}\n\n`); }
+      if (!res.headersSent) json(failure.retryable ? 503 : 400, {error: upstreamFailure(failure)});
+      else if (!res.destroyed) { const value = { error: upstreamFailure(failure) }; res.end(`data: ${JSON.stringify(value)}\n\n`); }
     } finally { this.controllers.delete(controller); }
   }
   accept(input) { const queue = this.pending.get(input.id); if (!queue) return; if (input.type === 'provider-event') queue.push(input.event); else { const error = input.error ? new Error(input.error) : undefined; if (error) error.diagnostics = input.diagnostics; queue.end(error); } }

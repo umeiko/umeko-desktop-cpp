@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { transientFailure } from './network-retry.mjs';
 import { randomUUID } from 'node:crypto';
 
 const require = createRequire(new URL('./releases/coding-1.3.0/package.json', import.meta.url));
@@ -45,6 +46,6 @@ export function failureReport(directory, provider, request, response, failure, h
       .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs).slice(30)) unlinkSync(file);
   }
   const error = new Error(`Provider request failed; open request details [Umeko:${id}]`);
-  error.reportId = id; error.cause = failure;
+  error.reportId = id; error.cause = failure; error.retryable = transientFailure(describe(failure), http);
   return error;
 }

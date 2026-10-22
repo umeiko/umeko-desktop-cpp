@@ -434,7 +434,10 @@ QPair<QVariantList, QVariantList> U::preview(const QString &file) {
   }
   QMap<QString, QVariantMap> results;
   QVariantList deliveries;
+  QSet<QString> retryOmissions;
   for (auto e : branch) {
+    if (e["type"] == "context_edit" && e["replacement"].isNull())
+      retryOmissions.insert(e["targetId"].toString());
     auto data = e["data"].toMap();
     if (e["type"] == "custom" && e["customType"] == "umeko-chatbox" &&
         data["version"].toInt() == 1 &&
@@ -452,6 +455,9 @@ QPair<QVariantList, QVariantList> U::preview(const QString &file) {
       continue;
     auto m = e["message"].toMap();
     auto content = m["content"];
+    if (retryOmissions.contains(e["id"].toString()) &&
+        m["role"] == "assistant" && m["stopReason"] == "error")
+      continue;
     auto text = textOf(content);
     if (text.isEmpty() && m["stopReason"] != "aborted")
       text = m["errorMessage"].toString();

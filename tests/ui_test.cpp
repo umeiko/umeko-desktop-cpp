@@ -18,6 +18,7 @@ class NativeUiTests : public QObject {
   bool nativeTool = false, slow = false;
   bool holdReplies = false;
   bool upstreamError = false;
+  int transientFailures = 0;
   QList<std::function<void()>> heldReplies;
   void releaseReplies() {
     holdReplies = false;
@@ -191,12 +192,23 @@ private slots:
                           .toVariantMap();
           requests << body;
           buffer->clear();
+          if (transientFailures > 0) {
+            --transientFailures;
+            const QByteArray raw =
+                "{\"error\":{\"message\":\"stream interrupted\"}}";
+            socket->write("HTTP/1.1 503 Service Unavailable\r\nContent-Type: "
+                          "application/json\r\nContent-Length: " +
+                          QByteArray::number(raw.size()) +
+                          "\r\nConnection: close\r\n\r\n" + raw);
+            socket->disconnectFromHost();
+            return;
+          }
           if (upstreamError) {
             const auto raw =
                 QJsonDocument(
                     QJsonObject{{"error", "complete upstream error details"}})
                     .toJson(QJsonDocument::Compact);
-            socket->write("HTTP/1.1 429 Too Many Requests\r\nContent-Type: "
+            socket->write("HTTP/1.1 400 Bad Request\r\nContent-Type: "
                           "application/json\r\nContent-Length: " +
                           QByteArray::number(raw.size()) +
                           "\r\nConnection: close\r\n\r\n" + raw);
@@ -800,6 +812,37 @@ Item {
     QVERIFY(mascot->property("reaction").toString().contains("饼干"));
     backend->setTheme(original);
   }
+  void networkRetryStatus() {
+    if (backend->config()["selectedModel"] != "native-fixture")
+      configureAPI();
+    window->setProperty("page", "chat");
+    backend->newSession();
+    auto before = requests.size();
+    transientFailures = 1;
+    backend->send("retry fixture");
+    QTRY_VERIFY_WITH_TIMEOUT(backend->networkRetry()["waiting"].toBool(),
+                             15000);
+    auto label = find("networkRetryStatus");
+    QVERIFY(label && label->isVisible());
+    QVERIFY(label->property("text").toString().contains("第一次"));
+    QSignalSpy changed(backend.get(), &Backend::chatChanged);
+    QTest::qWait(1400);
+    QCOMPARE(changed.size(), 0);
+    QVERIFY(label->property("text").toString().contains("1s/2s"));
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+    QCOMPARE(requests.size() - before, 2);
+    QVERIFY(backend->networkRetry().isEmpty());
+    backend->newSession();
+    transientFailures = 1;
+    backend->send("cancel retry fixture");
+    QTRY_VERIFY_WITH_TIMEOUT(backend->networkRetry()["waiting"].toBool(),
+                             15000);
+    before = requests.size();
+    backend->stop();
+    QVERIFY(backend->networkRetry().isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 1500);
+    QCOMPARE(requests.size(), before);
+  }
   void reasoningEffortRequests() {
     if (backend->config()["selectedModel"] != "native-fixture")
       configureAPI();
@@ -887,7 +930,7 @@ Item {
         QJsonDocument::fromJson(QGuiApplication::clipboard()->text().toUtf8())
             .object();
     QVERIFY(report["request"].toObject()["messages"].isArray());
-    QCOMPARE(report["response"].toObject()["status"].toInt(), 429);
+    QCOMPARE(report["response"].toObject()["status"].toInt(), 400);
     QVERIFY(report["response"].toObject()["body"].toString().contains(
         "complete upstream error details"));
     QTest::keyClick(window, Qt::Key_Escape);

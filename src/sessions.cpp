@@ -76,6 +76,7 @@ void Backend::activate(std::shared_ptr<Session> s) {
   emit approvalChanged();
   emit contextUsageChanged();
   emit reasoningChanged();
+  emit retryChanged();
   emit editorText(s->draft);
   trimPool();
 }
@@ -534,6 +535,13 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
         }
       }
   } else if (type == "assistant_start") {
+    if (payload["retry"].toBool() && !s->messages.isEmpty() &&
+        s->messages.last().toMap()["role"] == "assistant" &&
+        s->messages.last().toMap()["tools"].toList().isEmpty()) {
+      s->messages.last() =
+          QVariantMap{{"role", "assistant"}, {"text", ""}, {"error", false}};
+      transcript = true;
+    }
     auto last =
         s->messages.isEmpty() ? QVariantMap{} : s->messages.last().toMap();
     if (last["role"] != "assistant" || !last["text"].toString().isEmpty() ||
@@ -646,6 +654,11 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     s->resources = payload["resources"].toMap();
     if (visible)
       emit changed();
+  } else if (type == "network_retry") {
+    s->networkRetry = payload["active"].toBool() ? payload : QVariantMap{};
+    if (visible)
+      emit retryChanged();
+    return;
   } else if (type == "context_usage") {
     s->usage = payload["usage"].toMap();
     if (visible)
@@ -699,6 +712,9 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     }
     transcript = true;
   } else if (type == "done" || type == "exit") {
+    s->networkRetry.clear();
+    if (visible)
+      emit retryChanged();
     bool was = s->busy();
     if (!s->queue.isEmpty()) {
       QStringList texts;
@@ -751,6 +767,8 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
 void Backend::stop() {
   if (view->phase == "running") {
     view->cancelled = true;
+    view->networkRetry.clear();
+    emit retryChanged();
     writePi(view, {{"type", "abort"}});
     view->approval.clear();
     emit approvalChanged();

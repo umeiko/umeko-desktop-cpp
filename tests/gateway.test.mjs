@@ -62,6 +62,7 @@ test('provider proxies are isolated and failed requests retain complete redacted
   await call('system'); assert.equal(tunnels,2);
   process.env.NO_PROXY='*';await call('system');assert.equal(tunnels,2);
   await assert.rejects(async()=>list(gateway.events(provider('custom'),{upstream:'fixture'},body('fail'),new AbortController())),error=>{
+    assert.equal(error.retryable, true);
     assert.ok(error.reportId);const raw=readFileSync(join(directory,error.reportId+'.json'),'utf8'),report=JSON.parse(raw);
     assert.ok(!raw.includes('model-secret'));
     assert.equal(report.response.status,429);

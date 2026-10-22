@@ -64,7 +64,7 @@ jobs:
           node scripts/prepare-runtime.mjs
           python scripts/fetch-search-tools.py
           python scripts/build-provider-resources.py
-          node --test tests/gateway.test.mjs
+          node --test tests/gateway.test.mjs tests/network_retry_test.mjs
           python -m unittest discover -s tests -p test_release_retention.py
           python tests/worker_test.py
       - name: Configure and compile C++
