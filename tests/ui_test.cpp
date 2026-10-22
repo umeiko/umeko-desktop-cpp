@@ -754,7 +754,15 @@ Item {
     QTest::qWait(200);
     auto actions = find("messageActions_1");
     QVERIFY(actions);
-    QTest::mouseMove(window, QPoint(40, 40));
+    auto movePointer = [this](QPoint position) {
+#ifdef Q_OS_MACOS
+      // Cocoa also emits native tracking events from the system cursor. Keep it
+      // in sync with QtTest so a native leave cannot undo the synthetic hover.
+      QCursor::setPos(window->mapToGlobal(position));
+#endif
+      QTest::mouseMove(window, position);
+    };
+    movePointer(QPoint(40, 40));
     QTest::qWait(80);
     QCOMPARE(actions->property("opacity").toDouble(), 0.0);
     auto bubble = find("messageBubble_1");
@@ -762,7 +770,7 @@ Item {
         bubble->mapRectToScene(bubble->boundingRect())
             .intersected(view->mapRectToScene(view->boundingRect()));
     QVERIFY(!visible.isEmpty());
-    QTest::mouseMove(window, visible.center().toPoint());
+    movePointer(visible.center().toPoint());
     // Poll only the result: moving out/in on every retry resets the hover state
     // between QTRY's consecutive evaluations on different event backends.
     QTRY_COMPARE_WITH_TIMEOUT(actions->property("opacity").toDouble(), 1.0,
@@ -771,7 +779,7 @@ Item {
     click("copyMessage_1");
     QCOMPARE(QGuiApplication::clipboard()->text(),
              QString("Got: ") + paragraph + "\n\n" + unicode);
-    QTest::mouseMove(window, QPoint(40, 40));
+    movePointer(QPoint(40, 40));
     QTRY_COMPARE_WITH_TIMEOUT(actions->property("opacity").toDouble(), 0.0,
                               1000);
   }
@@ -1409,6 +1417,14 @@ Item {
   }
   void cleanup() {
     if (QTest::currentTestFailed() && window) {
+      auto selection = find("chatSelection");
+      qInfo() << "Window active:" << window->isActive()
+              << "window geometry:" << window->geometry()
+              << "system cursor:" << QCursor::pos();
+      if (selection)
+        qInfo() << "Chat pointer:" << selection->property("pointer")
+                << "hovering:" << selection->property("hovering")
+                << "dragging:" << selection->property("dragging");
       const auto screenshots = root + "/build/screenshots";
       QDir().mkpath(screenshots);
       window->grabWindow().save(screenshots + "/failed-" +
