@@ -74,6 +74,7 @@ export function openaiToAnthropic(messages, tools, maxTokens, parameters = {}) {
   if (system.length) result.system = system.join('\n\n');
   if (tools.length) result.tools = tools.map(t => ({ name: t.name, description: t.description || '', input_schema: t.parameters || { type: 'object', properties: {} } }));
   for (const key of ['temperature', 'top_p', 'top_k']) if (parameters[key] !== undefined) result[key] = parameters[key];
+  if (parameters.reasoning_effort !== undefined) result.output_config = { effort: parameters.reasoning_effort };
   if (parameters.stop !== undefined) result.stop_sequences = Array.isArray(parameters.stop) ? parameters.stop : [parameters.stop];
   const choice = parameters.tool_choice;
   if (choice) result.tool_choice = typeof choice === 'object' ? { type: 'tool', name: choice.function.name } : { type: choice === 'required' ? 'any' : choice };
@@ -267,7 +268,8 @@ export class Gateway {
     if (hasImages && !model.vision) return error(400, 'Vision is not enabled for this model');
     const tools = (input.tools || []).map(t => anthropic ? { name: t.name, description: t.description || '', parameters: t.input_schema } : t.function);
     if (tools.some(t => !t || typeof t.name !== 'string')) return error(400, 'Invalid tool declaration');
-    const parameters = {}; for (const key of ['temperature', 'top_p', 'top_k', 'stop', 'tool_choice', 'parallel_tool_calls']) if (input[key] !== undefined) parameters[key] = input[key];
+    const parameters = {}; for (const key of ['temperature', 'top_p', 'top_k', 'stop', 'tool_choice', 'parallel_tool_calls', 'reasoning_effort']) if (input[key] !== undefined) parameters[key] = input[key];
+    if (anthropic && input.output_config?.effort !== undefined) parameters.reasoning_effort = input.output_config.effort;
     if (anthropic) { if (input.stop_sequences) parameters.stop = input.stop_sequences; const choice = input.tool_choice; if (choice) { parameters.tool_choice = choice.type === 'tool' ? { type: 'function', function: { name: choice.name } } : choice.type === 'any' ? 'required' : choice.type; if (choice.disable_parallel_tool_use !== undefined) parameters.parallel_tool_calls = !choice.disable_parallel_tool_use; } }
     const body = { messages, tools, max_tokens: Math.max(1, Math.min(32768, Number(input.max_tokens || input.max_completion_tokens || 4096))), parameters };
     if (!Number.isFinite(body.max_tokens)) return error(400, 'Invalid max_tokens');

@@ -839,6 +839,39 @@ Item {
     QVERIFY(mascot->property("reaction").toString().contains("饼干"));
     backend->setTheme(original);
   }
+  void reasoningEffortRequests() {
+    configureAPI();
+    window->setProperty("page", "chat");
+    for (const auto &level : QStringList{"off", "low", "high", "max", "off"}) {
+      QVERIFY(backend->setReasoningEffort(level));
+      backend->newSession();
+      QCOMPARE(backend->reasoningEffort(), level);
+      const auto before = requests.size();
+      backend->send("reasoning fixture " + level);
+      QTRY_VERIFY_WITH_TIMEOUT(requests.size() > before, 15000);
+      QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+      const auto request = requests.last().toMap();
+      if (level == "off")
+        QVERIFY(!request.contains("reasoning_effort"));
+      else
+        QCOMPARE(request["reasoning_effort"].toString(), level);
+    }
+    QVERIFY(!backend->setReasoningEffort("invalid"));
+    QCOMPARE(backend->reasoningEffort(), QString("off"));
+    click("modelSelector");
+    QTest::qWait(800);
+    auto hint = window->findChild<QObject *>("reasoningEffortHint");
+    QVERIFY(hint);
+    QTest::mouseMove(window, point(find("modelSearch")));
+    QTest::qWait(200);
+    QVERIFY(!hint->property("visible").toBool());
+    QTest::mouseMove(window, point(find("reasoningControls")));
+    QTRY_VERIFY_WITH_TIMEOUT(hint->property("visible").toBool(), 2000);
+    QTest::mouseMove(window, point(find("modelSearch")));
+    QTRY_VERIFY_WITH_TIMEOUT(!hint->property("visible").toBool(), 2000);
+    QTest::keyClick(window, Qt::Key_Escape);
+    QTest::qWait(850);
+  }
   void liveGenerationSpeed() {
     streamingReply = true;
     auto reset = qScopeGuard([this] {

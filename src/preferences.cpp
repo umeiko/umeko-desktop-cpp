@@ -1,6 +1,20 @@
 #include "backend.hpp"
 #include <cmath>
 #include <stdexcept>
+bool Backend::setReasoningEffort(QString value) {
+  if (!QStringList{"off", "low", "high", "max"}.contains(value))
+    return false;
+  view->reasoningEffort = value;
+  auto ui = store.data["ui"].toMap();
+  ui["reasoningEffort"] = value;
+  store.data["ui"] = ui;
+  if (!view->id.isEmpty())
+    setMetadata(view->id, {{"reasoningEffort", value}});
+  store.save();
+  writePi(view, {{"type", "reasoning_effort"}, {"value", value}});
+  emit reasoningChanged();
+  return true;
+}
 
 void Backend::setLanguage(QString language) {
   if (!QStringList{"zh", "en"}.contains(language) ||

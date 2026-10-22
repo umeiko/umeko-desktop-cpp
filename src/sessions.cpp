@@ -5,6 +5,11 @@ std::shared_ptr<Session> Backend::fresh(QString workspace) {
   s->workspace = workspace;
   s->model = store.data["selectedModel"].toString();
   s->provider = store.data["selectedProvider"].toString();
+  auto effort =
+      store.data["ui"].toMap().value("reasoningEffort", "off").toString();
+  s->reasoningEffort = QStringList{"off", "low", "high", "max"}.contains(effort)
+                           ? effort
+                           : "off";
   static const QStringList greetings = {
       "来啦？今天想先做点什么？",
       "先把今天的难题解决掉，再去吃点好吃的吧。",
@@ -71,6 +76,7 @@ void Backend::activate(std::shared_ptr<Session> s) {
   emit approvalChanged();
   emit contextUsageChanged();
   emit generationChanged();
+  emit reasoningChanged();
   emit editorText(s->draft);
   trimPool();
 }
@@ -151,6 +157,8 @@ void Backend::sessionInfo(std::shared_ptr<Session> s, QVariantMap info) {
   }
   if (!s->file.isEmpty() || s->action == "prompt")
     indexSession(s);
+  if (!s->id.isEmpty())
+    setMetadata(s->id, {{"reasoningEffort", s->reasoningEffort}});
 }
 void Backend::saveSessions() { store.saveSessions(sessionIndex); }
 void Backend::newSession() {
@@ -169,6 +177,11 @@ void Backend::openSession(QString id) {
       return;
     s = fresh(saved["workspace"].toString());
     s->id = id;
+    auto effort =
+        metadata(id).value("reasoningEffort", s->reasoningEffort).toString();
+    s->reasoningEffort =
+        QStringList{"off", "low", "high", "max"}.contains(effort) ? effort
+                                                                  : "off";
     s->title = saved["title"].toString();
     s->file = saved["file"].toString();
     s->provider = saved["provider"].toString();
@@ -252,6 +265,7 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   s->status = s->phase == "loading" ? "正在加载 Pi" : "正在生成";
   values["type"] = action;
   values["model"] = s->model;
+  values["reasoningEffort"] = s->reasoningEffort;
   if (s->process) {
     writePi(s, values);
     emit chatChanged();

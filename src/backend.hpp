@@ -125,6 +125,7 @@ struct Session {
   QString key = U::uuid(), id, file, workspace, model, provider,
           title = "新会话", draft, phase = "idle", action, status, greeting;
   QVariantList messages, attachments, queue, tree;
+  QString reasoningEffort = "off";
   QVariantMap resources{
       {"tools", QVariantList{}},       {"allTools", QVariantList{}},
       {"skills", QVariantList{}},      {"extensions", QVariantList{}},
@@ -192,6 +193,8 @@ class Backend : public QObject {
   Q_PROPERTY(QString workspaceName READ workspaceName NOTIFY changed)
   Q_PROPERTY(QString toolStatus READ toolStatus NOTIFY chatChanged)
   Q_PROPERTY(QVariantMap generation READ generation NOTIFY generationChanged)
+  Q_PROPERTY(
+      QString reasoningEffort READ reasoningEffort NOTIFY reasoningChanged)
   Q_PROPERTY(
       QVariantList attachments READ attachments NOTIFY attachmentsChanged)
   Q_PROPERTY(QVariantList queuedMessages READ queuedMessages NOTIFY chatChanged)
@@ -262,6 +265,8 @@ public:
   }
   QString toolStatus() const { return view->status; }
   QVariantMap generation() const { return view->generation; }
+  QString reasoningEffort() const { return view->reasoningEffort; }
+  Q_INVOKABLE bool setReasoningEffort(QString value);
   QVariantList attachments() const { return view->attachments; }
   QVariantList queuedMessages() const;
   QVariantMap pendingApproval() const { return view->approval; }
@@ -369,6 +374,7 @@ signals:
   void attachmentsChanged();
   void contextUsageChanged();
   void generationChanged();
+  void reasoningChanged();
   void proxyKeysChanged();
   void editorText(QString text);
 

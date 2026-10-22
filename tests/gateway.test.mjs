@@ -9,6 +9,11 @@ import { createHash } from 'node:crypto';
 import { Gateway, parseSSE, collectOpenAI, anthropicEvents, openaiToAnthropic, anthropicToOpenAI, toAnthropicEvents, validateBase } from '../runtime/gateway.mjs';
 
 const list = async stream => { const result = []; for await (const x of stream) result.push(x); return result; };
+test('Anthropic effort is opt-in and absent by default', () => {
+  const messages = [{role:'user',content:'fixture'}];
+  assert.ok(!('output_config' in openaiToAnthropic(messages, [], 100, {})));
+  assert.deepEqual(openaiToAnthropic(messages, [], 100, {reasoning_effort:'max'}).output_config, {effort:'max'});
+});
 
 test('provider proxies are isolated and failed requests retain complete redacted diagnostics', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'umeko-network-'));
