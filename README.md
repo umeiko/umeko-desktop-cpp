@@ -33,7 +33,7 @@ Pi web extensions can access the network. Configure company npm mirrors, an opti
 3. Open `UmekoCpp.exe` on Windows, `UmekoCpp.app` on macOS, or `./UmekoCpp` on Linux.
 4. Open **Settings → Accounts & Providers**, add an OpenAI-compatible or Anthropic-compatible provider, and choose a model.
 
-Choose `v0.3.4` for bundled Python or `v0.3.4-minimal` for a smaller download. Minimal releases are marked as prereleases so the update checker continues to recommend the standard edition. **Settings → About** shows the actual compiler and version used for your platform.
+Choose `v0.3.5` for bundled Python or `v0.3.5-minimal` for a smaller download. Minimal releases are marked as prereleases so the update checker continues to recommend the standard edition. **Settings → About** shows the actual compiler and version used for your platform.
 
 | Platform | Release | Requirements |
 | --- | --- | --- |
