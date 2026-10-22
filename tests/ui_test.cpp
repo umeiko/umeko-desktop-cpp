@@ -3,7 +3,6 @@
 #include "syntaxhighlighter.hpp"
 #include <QDesktopServices>
 #include <QQuickStyle>
-#include <QScopeGuard>
 #include <QtTest>
 
 class NativeUiTests : public QObject {
@@ -19,7 +18,6 @@ class NativeUiTests : public QObject {
   bool nativeTool = false, slow = false;
   bool holdReplies = false;
   bool upstreamError = false;
-  bool streamingReply = false;
   QList<std::function<void()>> heldReplies;
   void releaseReplies() {
     holdReplies = false;
@@ -206,43 +204,6 @@ private slots:
             return;
           }
           QVariantMap message;
-          if (streamingReply) {
-            socket->write("HTTP/1.1 200 OK\r\nContent-Type: "
-                          "text/event-stream\r\nConnection: close\r\n\r\n");
-            const auto stream = [socket = QPointer<QTcpSocket>(socket)](
-                                    QVariantMap event) {
-              if (socket && socket->state() == QAbstractSocket::ConnectedState)
-                socket->write("data: " +
-                              QJsonDocument::fromVariant(event).toJson(
-                                  QJsonDocument::Compact) +
-                              "\n\n");
-            };
-            stream({{"choices",
-                     QVariantList{QVariantMap{
-                         {"index", 0},
-                         {"delta", QVariantMap{{"role", "assistant"},
-                                               {"content", "Stream "}}}}}}});
-            QTimer::singleShot(350, this, [stream] {
-              stream({{"choices",
-                       QVariantList{QVariantMap{
-                           {"index", 0},
-                           {"delta", QVariantMap{{"content", "fixture"}}}}}}});
-            });
-            heldReplies << [stream, socket = QPointer<QTcpSocket>(socket)] {
-              stream({{"choices",
-                       QVariantList{QVariantMap{{"index", 0},
-                                                {"delta", QVariantMap{}},
-                                                {"finish_reason", "stop"}}}},
-                      {"usage", QVariantMap{{"prompt_tokens", 10},
-                                            {"completion_tokens", 20},
-                                            {"total_tokens", 30}}}});
-              if (socket) {
-                socket->write("data: [DONE]\n\n");
-                socket->disconnectFromHost();
-              }
-            };
-            return;
-          }
           QString finish = "stop";
           if (mediaTool && mediaCalls++ == 0) {
             QVariantList items{
@@ -840,7 +801,8 @@ Item {
     backend->setTheme(original);
   }
   void reasoningEffortRequests() {
-    configureAPI();
+    if (backend->config()["selectedModel"] != "native-fixture")
+      configureAPI();
     window->setProperty("page", "chat");
     for (const auto &level : QStringList{"off", "low", "high", "max", "off"}) {
       QVERIFY(backend->setReasoningEffort(level));
@@ -871,29 +833,6 @@ Item {
     QTRY_VERIFY_WITH_TIMEOUT(!hint->property("visible").toBool(), 2000);
     QTest::keyClick(window, Qt::Key_Escape);
     QTest::qWait(850);
-  }
-  void liveGenerationSpeed() {
-    streamingReply = true;
-    auto reset = qScopeGuard([this] {
-      streamingReply = false;
-      releaseReplies();
-    });
-    window->setProperty("page", "chat");
-    backend->newSession();
-    backend->send("stream speed fixture");
-    QTRY_VERIFY_WITH_TIMEOUT(
-        backend->generation()["tokensPerSecond"].toDouble() > 0, 15000);
-    QVERIFY(backend->generation()["estimated"].toBool());
-    QTRY_VERIFY_WITH_TIMEOUT(find("generationSpeed")->isVisible(), 3000);
-    QVERIFY(
-        find("generationSpeed")->property("text").toString().contains("tok/s"));
-    QTRY_VERIFY_WITH_TIMEOUT(lastText().contains("Stream fixture"), 5000);
-    window->grabWindow().save(root +
-                              "/build/screenshots/generation-speed-v033.png");
-    releaseReplies();
-    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
-    QVERIFY(!find("generationSpeed")->isVisible());
-    QVERIFY(backend->generation().isEmpty());
   }
   void appearanceAndRequestDetails() {
     window->setProperty("page", "settings");

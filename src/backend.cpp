@@ -26,9 +26,8 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
                       manifest["engine"] == "full-coding-agent";
     // The adapters belong to this desktop build, even when Pi itself was
     // upgraded separately. Keep web/queue fixes with the application update.
-    for (const auto &name :
-         {"bridge.mjs", "resources.mjs", "provider-policy.mjs", "chatbox.mjs",
-          "generation-metrics.mjs"}) {
+    for (const auto &name : {"bridge.mjs", "resources.mjs",
+                             "provider-policy.mjs", "chatbox.mjs"}) {
       if (!compatible)
         break;
       QFile source(root + "/runtime/" + name);

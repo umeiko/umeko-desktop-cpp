@@ -131,7 +131,7 @@ struct Session {
       {"skills", QVariantList{}},      {"extensions", QVariantList{}},
       {"diagnostics", QVariantList{}}, {"commands", QVariantList{}},
       {"prompts", QVariantList{}},     {"mcp", QVariantList{}}},
-      usage, approval, generation;
+      usage, approval;
   QPointer<QProcess> process;
   QByteArray buffer;
   bool ready = false, stale = false, optimistic = false, failed = false,
@@ -192,7 +192,6 @@ class Backend : public QObject {
   Q_PROPERTY(QString sessionTitle READ sessionTitle NOTIFY chatChanged)
   Q_PROPERTY(QString workspaceName READ workspaceName NOTIFY changed)
   Q_PROPERTY(QString toolStatus READ toolStatus NOTIFY chatChanged)
-  Q_PROPERTY(QVariantMap generation READ generation NOTIFY generationChanged)
   Q_PROPERTY(
       QString reasoningEffort READ reasoningEffort NOTIFY reasoningChanged)
   Q_PROPERTY(
@@ -264,7 +263,6 @@ public:
     return QFileInfo(store.data["workspace"].toString()).fileName();
   }
   QString toolStatus() const { return view->status; }
-  QVariantMap generation() const { return view->generation; }
   QString reasoningEffort() const { return view->reasoningEffort; }
   Q_INVOKABLE bool setReasoningEffort(QString value);
   QVariantList attachments() const { return view->attachments; }
@@ -373,7 +371,6 @@ signals:
   void approvalChanged();
   void attachmentsChanged();
   void contextUsageChanged();
-  void generationChanged();
   void reasoningChanged();
   void proxyKeysChanged();
   void editorText(QString text);
