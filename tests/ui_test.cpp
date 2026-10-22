@@ -794,6 +794,8 @@ Item {
              QString("Add provider"));
     QCOMPARE(find("promptInput")->property("font").value<QFont>().pixelSize(),
              26);
+    QCOMPARE(find("sendGlyph")->width(), 34.0);
+    QCOMPARE(find("attachFilesButton")->width(), 62.0);
     backend->setFontScale(.5);
     QTest::qWait(200);
     QCOMPARE(find("promptInput")->property("font").value<QFont>().pixelSize(),

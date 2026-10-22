@@ -36,6 +36,8 @@ bool Store::migrateProfile(QString previous, QString target) {
   if (QFileInfo::exists(target) ||
       !QFileInfo::exists(previous + "/settings.json"))
     return false;
+  const auto previousAlias = QDir::fromNativeSeparators(
+      QDir::cleanPath(QFileInfo(previous).absoluteFilePath()));
   previous = U::cleanPath(previous);
   target = U::cleanPath(target);
   const auto staging = target + "-migrate-" + U::uuid();
@@ -59,18 +61,20 @@ bool Store::migrateProfile(QString previous, QString target) {
   if (!ok)
     throw std::runtime_error(
         "Unable to copy user data; the original profile is unchanged");
-  auto remap = [previous, target](QVariant value) -> QVariant {
+  auto remap = [previous, previousAlias, target](QVariant value) -> QVariant {
     auto path = QDir::fromNativeSeparators(value.toString());
 #ifdef Q_OS_WIN
     const auto sensitivity = Qt::CaseInsensitive;
 #else
     const auto sensitivity = Qt::CaseSensitive;
 #endif
-    if (path.compare(previous, sensitivity) == 0)
-      return target;
-    return path.startsWith(previous + "/", sensitivity)
-               ? target + path.mid(previous.size())
-               : value;
+    for (const auto &prefix : {previousAlias, previous}) {
+      if (path.compare(prefix, sensitivity) == 0)
+        return target;
+      if (path.startsWith(prefix + "/", sensitivity))
+        return target + path.mid(prefix.size());
+    }
+    return value;
   };
   QFile settingsFile(staging + "/settings.json");
   QJsonParseError parse;
