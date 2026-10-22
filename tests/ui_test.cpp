@@ -759,6 +759,12 @@ Item {
       // Cocoa also emits native tracking events from the system cursor. Keep it
       // in sync with QtTest so a native leave cannot undo the synthetic hover.
       QCursor::setPos(window->mapToGlobal(position));
+      QTest::qWait(80);
+      // QtTest's QWindow mouseMove bypasses the platform plugin and does not
+      // synthesize a window-enter event. Supply that part of the input sequence
+      // after native tracking has settled on headless Cocoa runners.
+      QEnterEvent enter(position, position, window->mapToGlobal(position));
+      QCoreApplication::sendEvent(window, &enter);
 #endif
       QTest::mouseMove(window, position);
     };
