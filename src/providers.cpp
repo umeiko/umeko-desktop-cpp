@@ -17,6 +17,39 @@ static bool portablePath(QString path) {
       return false;
   return true;
 }
+static bool referencesPackage(QVariantList providers, QString plugin,
+                              QString version) {
+  for (const auto &value : providers) {
+    const auto p = value.toMap();
+    if (p["api"] == "plugin" && p["pluginId"] == plugin &&
+        p["pluginVersion"] == version)
+      return true;
+  }
+  return false;
+}
+static QString retirePackage(QString root, QString path) {
+  if (!QFileInfo::exists(path))
+    return {};
+#ifdef Q_OS_WIN
+  const auto sensitivity = Qt::CaseInsensitive;
+#else
+  const auto sensitivity = Qt::CaseSensitive;
+#endif
+  const auto packages = U::cleanPath(root + "/packages");
+  if (QFileInfo(path).isSymLink() ||
+      !U::cleanPath(path).startsWith(packages + "/", sensitivity))
+    throw std::runtime_error("插件包路径超出安装目录，无法清理");
+  const auto retired = root + "/retired/" + U::uuid();
+  if (!QDir().mkpath(root + "/retired") || !QDir().rename(path, retired))
+    throw std::runtime_error("无法清理旧插件包，请关闭使用它的进程后重试");
+  return retired;
+}
+static void cleanPackageTemporary(QString root, QString path, QString kind) {
+  if (!path.isEmpty() && !QFileInfo(path).isSymLink() &&
+      U::cleanPath(QFileInfo(path).absolutePath()) ==
+          U::cleanPath(root + "/" + kind))
+    QDir(path).removeRecursively();
+}
 static void validateConfig(QVariant value, QVariantMap schema,
                            QString field = "config") {
   auto kind = schema["type"].toString();
@@ -215,8 +248,11 @@ bool Providers::importZip(QString url) {
     validateConfig(config, schema);
     auto destination = b->store.directory + "/provider-plugins/packages/" +
                        plugin + "/" + version;
+    const auto providerRoot = b->store.directory + "/provider-plugins";
+    const auto previous = b->store.data["providers"].toList();
+    const bool referenced = referencesPackage(previous, plugin, version);
     bool exists = QFileInfo(destination).isDir();
-    if (exists) {
+    if (exists && referenced) {
       QHash<QString, QString> existing;
       QDirIterator it(destination, QDir::Files, QDirIterator::Subdirectories);
       while (it.hasNext()) {
@@ -228,13 +264,19 @@ bool Providers::importZip(QString url) {
           existing[name] = U::sha(file.readAll());
       }
       if (existing.size() != entries.size())
-        throw std::runtime_error("同名版本内容不同，请升级插件版本号");
+        throw std::runtime_error("该版本仍被账号使用，包内容不同；请升级插件版本号或移除所有相关账号");
       for (auto it = entries.begin(); it != entries.end(); ++it)
         if (existing[it.key()] != U::sha(it.value()))
-          throw std::runtime_error("同名版本内容不同，请升级插件版本号");
-    } else {
+          throw std::runtime_error("该版本仍被账号使用，包内容不同；请升级插件版本号或移除所有相关账号");
+    }
+    const bool install = !exists || !referenced;
+    QString staging, retired;
+    auto cleanup = qScopeGuard(
+        [&] { cleanPackageTemporary(providerRoot, staging, "staging"); });
+    if (install) {
+      staging = providerRoot + "/staging/" + U::uuid();
       for (auto it = entries.begin(); it != entries.end(); ++it) {
-        auto target = destination + "/" + it.key();
+        auto target = staging + "/" + it.key();
         QDir().mkpath(QFileInfo(target).absolutePath());
         QSaveFile output(target);
         if (!output.open(QIODevice::WriteOnly) ||
@@ -242,13 +284,33 @@ bool Providers::importZip(QString url) {
           throw std::runtime_error("无法写入供应商包");
       }
     }
-    QVariantMap record{{"id", U::uuid()},          {"api", "plugin"},
-                       {"name", m["name"]},        {"pluginId", plugin},
-                       {"pluginVersion", version}, {"baseUrl", ""},
-                       {"hasKey", false},          {"models", QVariantList{}}};
-    auto providers = b->store.data["providers"].toList();
-    providers << record;
-    b->store.data["providers"] = providers;
+    try {
+      if (install) {
+        if (exists)
+          retired = retirePackage(providerRoot, destination);
+        if (!QDir().mkpath(QFileInfo(destination).absolutePath()) ||
+            !QDir().rename(staging, destination))
+          throw std::runtime_error("无法安装供应商包");
+      }
+      QVariantMap record{
+          {"id", U::uuid()},    {"api", "plugin"},          {"name", m["name"]},
+          {"pluginId", plugin}, {"pluginVersion", version}, {"baseUrl", ""},
+          {"hasKey", false},    {"models", QVariantList{}}};
+      auto providers = previous;
+      providers << record;
+      b->store.data["providers"] = providers;
+      if (!b->store.save())
+        throw std::runtime_error("供应商配置保存失败");
+    } catch (...) {
+      b->store.data["providers"] = previous;
+      if (install && QFileInfo::exists(destination) &&
+          !QFileInfo::exists(staging))
+        QDir().rename(destination, staging);
+      if (!retired.isEmpty())
+        QDir().rename(retired, destination);
+      throw;
+    }
+    cleanPackageTemporary(providerRoot, retired, "retired");
     b->notify();
     emit changed();
     emit b->toast("供应商已导入，请在本页登录并刷新模型");
@@ -668,12 +730,35 @@ void Providers::remove(QString id) {
     emit b->toast("请等待供应商请求结束后移除");
     return;
   }
-  auto rows = b->store.data["providers"].toList();
+  const auto provider = b->provider(id);
+  if (provider["api"] != "plugin")
+    return;
+  const auto previous = b->store.data["providers"].toList();
+  auto rows = previous;
   for (int i = rows.size() - 1; i >= 0; --i)
     if (rows[i].toMap()["id"] == id)
       rows.removeAt(i);
   b->store.data["providers"] = rows;
+  if (!b->store.save()) {
+    b->store.data["providers"] = previous;
+    emit b->toast("供应商配置保存失败，未移除");
+    return;
+  }
   b->store.setSecret("account:" + id, {});
+  statuses.remove(id);
+  if (!referencesPackage(rows, provider["pluginId"].toString(),
+                         provider["pluginVersion"].toString())) {
+    try {
+      const auto path = packageDir(provider);
+      if (!path.isEmpty())
+        cleanPackageTemporary(
+            b->store.directory + "/provider-plugins",
+            retirePackage(b->store.directory + "/provider-plugins", path),
+            "retired");
+    } catch (const std::exception &error) {
+      emit b->toast(QString::fromUtf8(error.what()));
+    }
+  }
   b->invalidate();
   b->notify();
   emit changed();

@@ -64,7 +64,8 @@ class NativeUiTests : public QObject {
     return messages.isEmpty() ? QString()
                               : messages.last().toMap()["text"].toString();
   }
-  bool package(QString path, bool malicious = false) {
+  bool package(QString path, bool malicious = false, bool updated = false,
+               QString plugin = "example-echo", QString version = "0.1.0") {
     mz_zip_archive zip{};
     if (!mz_zip_writer_init_file(&zip, path.toUtf8().constData(), 0))
       return false;
@@ -86,6 +87,15 @@ class NativeUiTests : public QObject {
           break;
         }
         auto raw = file.readAll();
+        if (name == "manifest.json") {
+          auto manifest = QJsonDocument::fromJson(raw).object();
+          manifest["id"] = plugin;
+          manifest["version"] = version;
+          raw = QJsonDocument(manifest).toJson();
+        }
+        if (updated && name == "scripts/provider.py")
+          raw.replace("self.context.config[\"prefix\"] + content",
+                      "\"Reinstalled: \" + content");
         ok &= mz_zip_writer_add_mem(&zip, name.constData(), raw.constData(),
                                     raw.size(), MZ_DEFAULT_COMPRESSION);
       }
@@ -851,6 +861,65 @@ Item {
     QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 30000);
     QVERIFY2(lastText().contains("Echo: provider compatibility fixture"),
              qPrintable(lastText()));
+  }
+  void providerPackageReinstallation() {
+    auto manager = qobject_cast<Providers *>(backend->providerPlugins());
+    const auto archive = directory.filePath("reinstall.zip");
+    const auto updated = directory.filePath("reinstall-updated.zip");
+    const auto newer = directory.filePath("reinstall-newer.zip");
+    QVERIFY(package(archive, false, false, "example-reinstall"));
+    QVERIFY(package(updated, false, true, "example-reinstall"));
+    QVERIFY(package(newer, false, false, "example-reinstall", "2.0.0"));
+    auto install = [&](QString file) {
+      if (!manager->importZip(QUrl::fromLocalFile(file).toString()))
+        return QString();
+      return manager->rows().last().toMap()["id"].toString();
+    };
+    const auto first = install(archive), second = install(archive),
+               otherVersion = install(newer);
+    QVERIFY(!first.isEmpty() && !second.isEmpty() && !otherVersion.isEmpty());
+    const auto folder = backend->store.directory +
+                        "/provider-plugins/packages/example-reinstall/";
+    QVERIFY(!manager->importZip(QUrl::fromLocalFile(updated).toString()));
+    manager->remove(first);
+    QVERIFY(QFileInfo::exists(folder + "0.1.0/manifest.json"));
+    QVERIFY(!manager->importZip(QUrl::fromLocalFile(updated).toString()));
+    manager->remove(second);
+    QVERIFY(!QFileInfo::exists(folder + "0.1.0"));
+    QVERIFY(QFileInfo::exists(folder + "2.0.0/manifest.json"));
+    const auto replacement = install(updated);
+    QVERIFY(!replacement.isEmpty());
+    manager->login(replacement, "{\"username\":\"reinstall-fixture\"}");
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->rows().last().toMap()["busy"].toBool(),
+                             15000);
+    const auto models = manager->rows().last().toMap()["models"].toList();
+    QVERIFY(!models.isEmpty());
+    backend->newSession();
+    backend->selectModel(replacement,
+                         models.first().toMap()["alias"].toString());
+    backend->send("reinstall fixture");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 30000);
+    QVERIFY2(lastText().contains("Reinstalled: reinstall fixture"),
+             qPrintable(lastText()));
+
+    // Simulate an old release that removed the account but retained its
+    // package.
+    auto rows = backend->store.data["providers"].toList();
+    for (int i = rows.size() - 1; i >= 0; --i)
+      if (rows[i].toMap()["id"] == replacement)
+        rows.removeAt(i);
+    backend->store.data["providers"] = rows;
+    QVERIFY(backend->store.save());
+    const auto recovered = install(archive);
+    QVERIFY(!recovered.isEmpty());
+    QFile code(folder + "0.1.0/scripts/provider.py");
+    QVERIFY(code.open(QIODevice::ReadOnly));
+    QVERIFY(!code.readAll().contains("Reinstalled:"));
+    code.close();
+    manager->remove(recovered);
+    manager->remove(otherVersion);
+    QVERIFY(!QFileInfo::exists(folder + "0.1.0"));
+    QVERIFY(!QFileInfo::exists(folder + "2.0.0"));
   }
   void extensionAndMcpManagement() {
     auto manager = qobject_cast<PiManagement *>(backend->piManagement());
