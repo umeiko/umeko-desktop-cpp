@@ -7,6 +7,7 @@ import json
 import re
 import signal
 import sys
+import traceback
 import types
 from pathlib import Path
 from threading import Event
@@ -27,6 +28,7 @@ def main():
     sdk = str(Path(__file__).resolve().parent)
     sys.path.insert(0, sdk)
     from umeko_provider_sdk import Provider, ProviderContext, ProviderError
+    from umeko_provider_sdk.network import network_scope, redact as redact_data
     from umeko_provider_sdk.packages import validate_config, validate_folder
 
     secrets = dict(request.get("secrets") or {})
@@ -51,6 +53,7 @@ def main():
             raise SystemExit(0)
         signal.signal(signal.SIGTERM, stop)
     provider = None
+    records = []
     try:
         folder = Path(request["package"]).resolve()
         manifest, defaults, schema = validate_folder(folder)
@@ -65,7 +68,7 @@ def main():
             sys.path.insert(1, str(vendor))
         entry, factory = manifest["entrypoint"].split(":")
         # Plugin debug output is not part of the wire protocol and is never shown in UI.
-        with contextlib.redirect_stdout(sys.stderr):
+        with contextlib.redirect_stdout(sys.stderr), network_scope(request.get("proxy"), records if request.get("method") == "events" else None):
             implementation = importlib.import_module(namespace + "." + entry[:-3].replace("/", "."))
             provider = getattr(implementation, factory)(ProviderContext(config, Path(request["state_dir"]), MemorySecrets(), cancelled))
             if not isinstance(provider, Provider):
@@ -86,6 +89,9 @@ def main():
                         break
                     if not isinstance(event, dict):
                         raise ProviderError("供应商事件必须为 JSON 对象")
+                    if event.get('error'):
+                        records.append({'providerEvent': event})
+                        raise ProviderError('上游返回错误，请查看请求详情')
                     send("event", data=event)
                 result = {}
             else:
@@ -107,7 +113,16 @@ def main():
         for value in sensitive:
             redact(value)
         message = re.sub(r"(https?://)[^\s/@]+:[^\s/@]+@", r"\1***@", message)
-        send("error", message=message)
+        known = []
+        def collect(value):
+            if isinstance(value, dict):
+                for item in value.values(): collect(item)
+            elif isinstance(value, (list, tuple)):
+                for item in value: collect(item)
+            elif isinstance(value, str): known.append(value)
+        for value in sensitive: collect(value)
+        diagnostics = redact_data(records + [{"exception": traceback.format_exc()}], known) if request.get("method") == "events" else []
+        send("error", message=message, diagnostics=diagnostics)
         return 1
     finally:
         if provider is not None:

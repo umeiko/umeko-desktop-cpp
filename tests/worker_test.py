@@ -6,6 +6,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -57,5 +59,27 @@ class WorkerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode,0)
         self.assertIn('Python',events[-1]['message'])
         self.assertNotIn('Traceback',result.stdout)
+
+    def test_inference_http_error_retains_body_and_hides_credentials(self):
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*_):pass
+            def do_POST(self):
+                self.rfile.read(int(self.headers['Content-Length']))
+                body=b'upstream-details synthetic-llm-token'
+                self.send_response(429);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        try:
+            url=f'http://127.0.0.1:{server.server_port}/completion'
+            self.implementation('from umeko_provider_sdk import Provider,HttpSession\nclass Custom(Provider):\n def events(self,model,messages,tools,max_tokens,parameters):\n  http=HttpSession(['+repr(url)+'],environment_proxy=False)\n  with http.request('+repr(url)+',method="POST",headers={"Authorization":"Bearer "+self.context.secrets.get("token")},data={"model":model,"messages":messages}) as response:\n   yield {"text":response.read().decode()}\ndef create_provider(context): return Custom(context)\n')
+            result,events=self.worker('events',{'model':'fixture','messages':[{'role':'user','content':'full prompt'}]}, {'token':'synthetic-llm-token'})
+            self.assertNotEqual(result.returncode,0)
+            report=events[-1]['diagnostics'][0]
+            self.assertEqual(report['response']['status'],429)
+            self.assertEqual(report['response']['body'],'upstream-details [REDACTED]')
+            self.assertNotIn('synthetic-llm-token',result.stdout)
+            self.assertEqual(json.loads(report['request']['body'])['messages'][0]['content'],'full prompt')
+        finally:
+            server.shutdown();server.server_close()
 
 if __name__=='__main__':unittest.main()

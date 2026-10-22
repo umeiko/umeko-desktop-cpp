@@ -164,6 +164,9 @@ class Backend : public QObject {
   Q_PROPERTY(QObject *piManagement READ piManagement CONSTANT)
   Q_PROPERTY(QObject *sessionPreview READ sessionPreview CONSTANT)
   Q_PROPERTY(QObject *appAbout READ appAbout CONSTANT)
+  Q_PROPERTY(QString language READ language NOTIFY appearanceChanged)
+  Q_PROPERTY(double fontScale READ fontScale NOTIFY appearanceChanged)
+  Q_PROPERTY(QString userDataDirectory READ userDataDirectory CONSTANT)
   Q_PROPERTY(QVariantList projectRows READ projectRows NOTIFY sidebarChanged)
   Q_PROPERTY(int sidebarWidth READ sidebarWidth NOTIFY layoutChanged)
   Q_PROPERTY(bool sidebarCollapsed READ sidebarCollapsed NOTIFY layoutChanged)
@@ -214,6 +217,17 @@ public:
   QObject *piManagement() { return management; }
   QObject *sessionPreview() { return previewLoader; }
   QObject *appAbout() { return about; }
+  QString language() const {
+    return store.data["ui"].toMap()["language"].toString();
+  }
+  double fontScale() const {
+    return store.data["ui"].toMap().value("fontScale", 1.0).toDouble();
+  }
+  QString userDataDirectory() const { return store.directory; }
+  Q_INVOKABLE void setLanguage(QString language);
+  Q_INVOKABLE void setFontScale(double scale);
+  Q_INVOKABLE bool setProviderProxy(QString id, QString mode, QString address);
+  Q_INVOKABLE QString requestReport(QString id) const;
   QVariantList projectRows() const;
   int sidebarWidth() const {
     return store.data["ui"].toMap().value("sidebarWidth", 244).toInt();
@@ -334,6 +348,7 @@ public:
   void invalidate();
   void notify();
 signals:
+  void appearanceChanged();
   void changed();
   void chatChanged();
   void transcriptChanged();
@@ -370,6 +385,7 @@ private:
   int gatewayPort = 0;
   QVariantMap createdKey;
   QTimer streaming;
+  QTimer appearanceSave;
   std::shared_ptr<Session> fresh(QString workspace = {});
   std::shared_ptr<Session> findSession(QString id);
   QVariantMap ensureProject(QString path, bool reopen = false);

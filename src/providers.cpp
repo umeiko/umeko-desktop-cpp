@@ -77,9 +77,7 @@ QString Providers::resolvePython() const {
     return U::cleanPath(bundled);
   return U::python();
 }
-QString Providers::pythonExecutable() const {
-  return resolvePython();
-}
+QString Providers::pythonExecutable() const { return resolvePython(); }
 QVariantList Providers::rows() const {
   QVariantList out;
   for (auto v : b->store.data["providers"].toList()) {
@@ -109,7 +107,7 @@ QVariantList Providers::rows() const {
         {"status",
          statuses.value(p["id"].toString(),
                         p.value("accountLabel", "尚未登录").toString())},
-        };
+    };
   }
   return out;
 }
@@ -244,10 +242,10 @@ bool Providers::importZip(QString url) {
           throw std::runtime_error("无法写入供应商包");
       }
     }
-    QVariantMap record{
-        {"id", U::uuid()},    {"api", "plugin"},          {"name", m["name"]},
-        {"pluginId", plugin}, {"pluginVersion", version}, {"baseUrl", ""},
-        {"hasKey", false},    {"models", QVariantList{}}};
+    QVariantMap record{{"id", U::uuid()},          {"api", "plugin"},
+                       {"name", m["name"]},        {"pluginId", plugin},
+                       {"pluginVersion", version}, {"baseUrl", ""},
+                       {"hasKey", false},          {"models", QVariantList{}}};
     auto providers = b->store.data["providers"].toList();
     providers << record;
     b->store.data["providers"] = providers;
@@ -316,7 +314,9 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
   auto p = b->provider(id);
   auto program = resolvePython();
   if (program.isEmpty()) {
-    done({{"error", "未找到 Python 3.10+，请使用内置 Python 的正式版或安装本机 Python"}});
+    done(
+        {{"error",
+          "未找到 Python 3.10+，请使用内置 Python 的正式版或安装本机 Python"}});
     return;
   }
   if (p["api"] != "plugin" || packageDir(p).isEmpty()) {
@@ -361,6 +361,18 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
   for (auto key : system.keys())
     if (key.toUpper().endsWith("_PROXY"))
       env.insert(key, system.value(key));
+  const auto proxy = p["proxy"].toMap();
+  if (proxy["mode"] == "direct" || proxy["mode"] == "custom") {
+    for (const auto &key : env.keys())
+      if (key.toUpper().endsWith("_PROXY"))
+        env.remove(key);
+    if (proxy["mode"] == "direct")
+      env.insert("NO_PROXY", "*");
+    else {
+      env.insert("HTTP_PROXY", proxy["url"].toString());
+      env.insert("HTTPS_PROXY", proxy["url"].toString());
+    }
+  }
   env.insert("PYTHONUTF8", "1");
   env.insert("PYTHONUNBUFFERED", "1");
   env.insert("PYTHONDONTWRITEBYTECODE", "1");
@@ -381,6 +393,7 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
       {"state_dir", state},
       {"config", QJsonDocument::fromJson(configJson(id).toUtf8()).toVariant()},
       {"secrets", secrets},
+      {"proxy", proxy},
       {"method", method},
       {"params", params}};
   connect(process, &QProcess::started, this, [process, input] {
@@ -414,7 +427,8 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
         return;
       } else if (type == "error") {
         complete(
-            {{"error", event.value("message", "供应商运行失败").toString()}});
+            {{"error", event.value("message", "供应商运行失败").toString()},
+             {"diagnostics", event["diagnostics"]}});
         return;
       }
     }
@@ -666,12 +680,12 @@ void Providers::remove(QString id) {
 }
 QString Providers::resourceFile(QString kind) const {
   return QUrl::fromLocalFile(QDir::homePath() + "/" +
-                             (kind == "sdk" ? "umeko-provider-sdk-0.1.0.zip"
+                             (kind == "sdk" ? "umeko-provider-sdk-0.2.0.zip"
                                             : "develop-umeko-provider.zip"))
       .toString();
 }
 bool Providers::exportResource(QString kind, QString url) {
-  auto name = kind == "sdk" ? "umeko-provider-sdk-0.1.0.zip"
+  auto name = kind == "sdk" ? "umeko-provider-sdk-0.2.0.zip"
                             : "develop-umeko-provider.zip";
   QFile source(b->root + "/provider-resources/" + name);
   if (!source.exists())
@@ -702,6 +716,7 @@ void Providers::complete(QString request, QString id, QVariantMap body) {
       [this, request](QVariantMap result) {
         b->gatewayWrite({{"type", "provider-result"},
                          {"id", request},
+                         {"diagnostics", result["diagnostics"]},
                          {"error", result.value("error", "")}});
       },
       [this, request](QVariantMap data) {

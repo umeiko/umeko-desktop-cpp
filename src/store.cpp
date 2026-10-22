@@ -1,5 +1,6 @@
 #include "store.hpp"
 #include "qtkeychain/keychain.h"
+#include <stdexcept>
 
 QVariantMap Store::defaults() {
   return {
@@ -31,12 +32,131 @@ QVariantMap Store::defaults() {
                              {"keys", QVariantList{}}}},
       {"ui", QVariantMap{{"sidebarWidth", 244}, {"sidebarCollapsed", false}}}};
 }
+bool Store::migrateProfile(QString previous, QString target) {
+  if (QFileInfo::exists(target) ||
+      !QFileInfo::exists(previous + "/settings.json"))
+    return false;
+  previous = U::cleanPath(previous);
+  target = U::cleanPath(target);
+  const auto staging = target + "-migrate-" + U::uuid();
+  QDir().mkpath(staging);
+  QDirIterator files(
+      previous, QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden,
+      QDirIterator::Subdirectories);
+  bool ok = true;
+  while (files.hasNext() && ok) {
+    const auto source = files.next();
+    const auto destination =
+        staging + "/" + QDir(previous).relativeFilePath(source);
+    const auto info = files.fileInfo();
+    if (info.isSymLink())
+      ok = QFile::link(info.symLinkTarget(), destination);
+    else if (info.isDir())
+      ok = QDir().mkpath(destination);
+    else
+      ok = QFile::copy(source, destination);
+  }
+  if (!ok)
+    throw std::runtime_error(
+        "Unable to copy user data; the original profile is unchanged");
+  auto remap = [previous, target](QVariant value) -> QVariant {
+    auto path = QDir::fromNativeSeparators(value.toString());
+#ifdef Q_OS_WIN
+    const auto sensitivity = Qt::CaseInsensitive;
+#else
+    const auto sensitivity = Qt::CaseSensitive;
+#endif
+    if (path.compare(previous, sensitivity) == 0)
+      return target;
+    return path.startsWith(previous + "/", sensitivity)
+               ? target + path.mid(previous.size())
+               : value;
+  };
+  QFile settingsFile(staging + "/settings.json");
+  QJsonParseError parse;
+  if (!settingsFile.open(QIODevice::ReadOnly))
+    throw std::runtime_error("Unable to read the original user profile");
+  const auto document = QJsonDocument::fromJson(settingsFile.readAll(), &parse);
+  settingsFile.close();
+  if (parse.error != QJsonParseError::NoError || !document.isObject())
+    throw std::runtime_error("Invalid user profile; the original is unchanged");
+  auto settings = document.object().toVariantMap();
+  if (!settings.contains("credentialNamespace"))
+    settings["credentialNamespace"] = U::sha(previous.toUtf8()).left(24);
+  if (settings.contains("workspace"))
+    settings["workspace"] = remap(settings["workspace"]);
+  auto agent = settings["agent"].toMap();
+  if (agent.contains("agentDir"))
+    agent["agentDir"] = remap(agent["agentDir"]);
+  settings["agent"] = agent;
+  auto projects = settings["projects"].toList();
+  for (auto &value : projects) {
+    auto project = value.toMap();
+    for (const auto &key : {"path", "workspace"})
+      if (project.contains(key))
+        project[key] = remap(project[key]);
+    value = project;
+  }
+  settings["projects"] = projects;
+  ok = U::writeJson(staging + "/settings.json", settings);
+  if (QFileInfo::exists(staging + "/sessions.json")) {
+    auto sessions =
+        U::readJson(staging + "/sessions.json", QVariantList{}).toList();
+    for (auto &value : sessions) {
+      auto session = value.toMap();
+      for (const auto &key : {"file", "workspace"})
+        if (session.contains(key))
+          session[key] = remap(session[key]);
+      value = session;
+    }
+    ok = ok && U::writeJson(staging + "/sessions.json", sessions);
+  }
+  QDirIterator logs(staging + "/pi/sessions", {"*.jsonl"}, QDir::Files,
+                    QDirIterator::Subdirectories);
+  while (ok && logs.hasNext()) {
+    const auto path = logs.next();
+    if (logs.fileInfo().isSymLink())
+      continue;
+    QFile input(path);
+    if (!input.open(QIODevice::ReadOnly)) {
+      ok = false;
+      break;
+    }
+    auto header =
+        QJsonDocument::fromJson(input.readLine()).object().toVariantMap();
+    if (header["type"] != "session")
+      continue;
+    bool changed = false;
+    for (const auto &key : {"cwd", "parentSession"})
+      if (header.contains(key) && remap(header[key]) != header[key]) {
+        header[key] = remap(header[key]);
+        changed = true;
+      }
+    if (!changed)
+      continue;
+    const auto remainder = input.readAll();
+    input.close();
+    QSaveFile output(path);
+    const auto bytes =
+        QJsonDocument::fromVariant(header).toJson(QJsonDocument::Compact) +
+        '\n' + remainder;
+    ok = output.open(QIODevice::WriteOnly) &&
+         output.write(bytes) == bytes.size() && output.commit();
+  }
+  if (!ok || !QDir().rename(staging, target))
+    throw std::runtime_error(
+        "Unable to migrate user data; the original profile is unchanged");
+  return true;
+}
+
 Store::Store(QString path) {
+  QString migratedFrom;
   if (path.isEmpty())
     path = qEnvironmentVariable("UMEKO_CPP_DATA_DIR");
   if (path.isEmpty())
     path = qEnvironmentVariable("UMEKO_DATA_DIR");
   if (path.isEmpty()) {
+    const auto target = QDir::homePath() + "/.umeko/desktop-cpp";
 #if defined(Q_OS_WIN)
     path = QDir(qEnvironmentVariable("LOCALAPPDATA")).filePath("UmekoCpp");
 #elif defined(Q_OS_MACOS)
@@ -46,10 +166,12 @@ Store::Store(QString path) {
                                      QDir::homePath() + "/.local/share"))
                .filePath("umeko-cpp");
 #endif
+    if (migrateProfile(path, target))
+      migratedFrom = path;
+    path = target;
   }
   directory = U::cleanPath(path);
   QDir().mkpath(directory);
-  keyPrefix = U::sha(directory.toUtf8()).left(24) + ":";
   data = defaults();
   QFile settings(directory + "/settings.json");
   if (settings.exists() && settings.open(QIODevice::ReadOnly)) {
@@ -75,8 +197,30 @@ Store::Store(QString path) {
       data[it.key()] = it.value();
   }
   auto ui = data["ui"].toMap();
+  if (!QStringList{"zh", "en"}.contains(ui["language"].toString())) {
+    const auto preferred = QLocale::system().uiLanguages();
+    const auto systemLanguage =
+        preferred.isEmpty() ? QLocale::system().name() : preferred.first();
+    auto language = qEnvironmentVariable(
+        "UMEKO_LANGUAGE",
+        systemLanguage.startsWith("zh", Qt::CaseInsensitive) ? "zh" : "en");
+    ui["language"] = language == "zh" ? "zh" : "en";
+  }
+  bool numeric = false;
+  auto scale = ui.value("fontScale", 1.0).toDouble(&numeric);
+  ui["fontScale"] =
+      numeric && ui.value("fontScale").metaType().id() != QMetaType::Bool &&
+              std::isfinite(scale)
+          ? qBound(0.5, scale, 2.0)
+          : 1.0;
   ui["sidebarWidth"] = qBound(200, ui.value("sidebarWidth", 244).toInt(), 480);
   data["ui"] = ui;
+  // Keychain entries retain their original namespace when the profile moves.
+  if (!data.contains("credentialNamespace"))
+    data["credentialNamespace"] =
+        U::sha((migratedFrom.isEmpty() ? directory : migratedFrom).toUtf8())
+            .left(24);
+  keyPrefix = data["credentialNamespace"].toString() + ":";
 }
 bool Store::save() {
   if (!writable)

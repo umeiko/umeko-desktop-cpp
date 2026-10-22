@@ -12,6 +12,12 @@ QVariantList ChatModel::project(const QVariantList &messages) {
         m["attachments"] = parsed.second;
     }
     if (m["role"] == "assistant") {
+      const QRegularExpression marker("\\s*\\[Umeko:([a-f0-9-]{36})\\]");
+      const auto match = marker.match(m["text"].toString());
+      if (match.hasMatch()) {
+        m["diagnosticId"] = match.captured(1);
+        m["text"] = "供应商请求失败，请查看请求详情";
+      }
       QVariantList activity;
       if (!m["thinking"].toString().isEmpty())
         activity << QVariantMap{{"kind", "thinking"}, {"text", m["thinking"]}};
@@ -42,6 +48,8 @@ QVariantList ChatModel::project(const QVariantList &messages) {
         (!out.last().toMap()["tools"].toList().isEmpty() ||
          !m["tools"].toList().isEmpty())) {
       auto group = out.last().toMap();
+      if (m.contains("diagnosticId"))
+        group["diagnosticId"] = m["diagnosticId"];
       auto activity = group["activity"].toList();
       auto steps = m["activity"].toList();
       if (!activity.isEmpty() && !steps.isEmpty() &&

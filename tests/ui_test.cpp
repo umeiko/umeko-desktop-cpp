@@ -18,6 +18,7 @@ class NativeUiTests : public QObject {
   QVariantList requests;
   bool nativeTool = false, slow = false;
   bool holdReplies = false;
+  bool upstreamError = false;
   QList<std::function<void()>> heldReplies;
   void releaseReplies() {
     holdReplies = false;
@@ -174,6 +175,18 @@ private slots:
                           .toVariantMap();
           requests << body;
           buffer->clear();
+          if (upstreamError) {
+            const auto raw =
+                QJsonDocument(
+                    QJsonObject{{"error", "complete upstream error details"}})
+                    .toJson(QJsonDocument::Compact);
+            socket->write("HTTP/1.1 429 Too Many Requests\r\nContent-Type: "
+                          "application/json\r\nContent-Length: " +
+                          QByteArray::number(raw.size()) +
+                          "\r\nConnection: close\r\n\r\n" + raw);
+            socket->disconnectFromHost();
+            return;
+          }
           QVariantMap message;
           QString finish = "stop";
           if (mediaTool && mediaCalls++ == 0) {
@@ -704,14 +717,18 @@ Item {
     QTest::mouseMove(window, QPoint(40, 40));
     QTest::qWait(80);
     QCOMPARE(actions->property("opacity").toDouble(), 0.0);
-    auto hoverReply = [this, view] {
+    int hoverAttempts = 0;
+    auto hoverReply = [this, view, &hoverAttempts] {
       auto bubble = find("messageBubble_1");
       const auto visible =
           bubble->mapRectToScene(bubble->boundingRect())
               .intersected(view->mapRectToScene(view->boundingRect()));
       if (visible.isEmpty())
         return false;
-      QTest::mouseMove(window, visible.center().toPoint());
+      // Cocoa can suppress repeated synthetic moves at identical coordinates.
+      // Move one pixel between retries so geometry changes get a fresh event.
+      QTest::mouseMove(window, visible.center().toPoint() +
+                                   QPoint(++hoverAttempts % 2, 0));
       return find("messageActions_1")->property("opacity").toDouble() == 1.0;
     };
     QTRY_VERIFY_WITH_TIMEOUT(hoverReply(), 3000);
@@ -766,6 +783,46 @@ Item {
     QVERIFY(mascot->property("animating").toBool());
     QVERIFY(mascot->property("reaction").toString().contains("饼干"));
     backend->setTheme(original);
+  }
+  void appearanceAndRequestDetails() {
+    window->setProperty("page", "settings");
+    window->setProperty("settingsTab", 5);
+    backend->setLanguage("en");
+    backend->setFontScale(2.0);
+    QTest::qWait(250);
+    QCOMPARE(find("addProviderButton")->property("text").toString(),
+             QString("Add provider"));
+    QCOMPARE(find("promptInput")->property("font").value<QFont>().pixelSize(),
+             26);
+    backend->setFontScale(.5);
+    QTest::qWait(200);
+    QCOMPARE(find("promptInput")->property("font").value<QFont>().pixelSize(),
+             7);
+    backend->setFontScale(1);
+    backend->setLanguage("zh");
+    window->setProperty("page", "chat");
+    const auto provider = backend->config()["selectedProvider"].toString();
+    QVERIFY(
+        backend->setProviderProxy(provider, "custom", "http://127.0.0.1:7890"));
+    QVERIFY(backend->setProviderProxy(provider, "direct", ""));
+    upstreamError = true;
+    backend->newSession();
+    backend->send("request failure fixture");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 30000);
+    upstreamError = false;
+    QVERIFY(find("requestDetails_1"));
+    click("requestDetails_1");
+    QVERIFY(find("requestDetailsText")->isVisible());
+    click("copyRequestDetails");
+    auto report =
+        QJsonDocument::fromJson(QGuiApplication::clipboard()->text().toUtf8())
+            .object();
+    QVERIFY(report["request"].toObject()["messages"].isArray());
+    QCOMPARE(report["response"].toObject()["status"].toInt(), 429);
+    QVERIFY(report["response"].toObject()["body"].toString().contains(
+        "complete upstream error details"));
+    QTest::keyClick(window, Qt::Key_Escape);
+    QVERIFY(backend->setProviderProxy(provider, "system", ""));
   }
   void providerPackages() {
     auto bad = directory.filePath("bad.zip");

@@ -3,6 +3,7 @@
 #include <QDesktopServices>
 #include <QImageReader>
 #include <QMimeData>
+#include <QNetworkProxyFactory>
 #include <stdexcept>
 
 Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
@@ -61,6 +62,9 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
   management = new PiManagement(this);
   about = new AppAbout(this);
   previewLoader = new SessionPreview(this);
+  appearanceSave.setSingleShot(true);
+  appearanceSave.setInterval(250);
+  connect(&appearanceSave, &QTimer::timeout, this, [this] { store.save(); });
   connect(this, &Backend::chatChanged, this, [this] {
     chat.update(view->messages);
     emit sidebarChanged();
@@ -648,6 +652,7 @@ bool Backend::saveProvider(QString id, QString name, QString api, QString url,
         {"api", api},
         {"baseUrl", base.toString().remove(QRegularExpression("/+$"))},
         {"hasKey", hasKey},
+        {"proxy", old.value("proxy", QVariantMap{})},
         {"models", models}};
     auto rows = store.data["providers"].toList();
     bool replaced = false;
@@ -903,6 +908,12 @@ void Backend::gatewayStart() {
   gateway = new QProcess(this);
   U::hideConsole(gateway);
   gateway->setProcessEnvironment(U::environment());
+  auto networkEnv = U::environment();
+  const auto systemEnv = QProcessEnvironment::systemEnvironment();
+  for (const auto &key : systemEnv.keys())
+    if (key.toUpper().endsWith("_PROXY"))
+      networkEnv.insert(key, systemEnv.value(key));
+  gateway->setProcessEnvironment(networkEnv);
   gateway->setProgram(program);
   gateway->setArguments({root + "/runtime/gateway.mjs"});
   connect(gateway, &QProcess::started, this, [this] { configureGateway(); });
@@ -944,10 +955,25 @@ void Backend::configureGateway() {
     if (p["hasKey"].toBool())
       p["key"] =
           QString::fromUtf8(store.secret("provider:" + p["id"].toString()));
+    if (p["proxy"].toMap().value("mode", "system") == "system") {
+      const auto choices = QNetworkProxyFactory::systemProxyForQuery(
+          QNetworkProxyQuery(QUrl(p["baseUrl"].toString())));
+      for (const auto &proxy : choices)
+        if (proxy.type() == QNetworkProxy::HttpProxy &&
+            !proxy.hostName().isEmpty()) {
+          QUrl address;
+          address.setScheme("http");
+          address.setHost(proxy.hostName());
+          address.setPort(proxy.port());
+          p["systemProxy"] = address.toString();
+          break;
+        }
+    }
     rows << p;
   }
   gatewayWrite({{"type", "configure"},
                 {"token", privateToken},
+                {"diagnosticsDir", store.directory + "/request-errors"},
                 {"providers", rows},
                 {"models", modelCatalog()},
                 {"settings", store.data["server"]}});

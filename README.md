@@ -22,6 +22,8 @@ Pi can deliver images and compact file cards directly with [`submit_to_chatbox`]
 
 Selecting a chat immediately shows an animated Yanami loading cover while cold history loads in the background. Rapid switching keeps only your latest choice; the conversation fades in after its layout is ready. File cards have themed hover details and clear menu states, and selected chat text offers a Copy / Select all context menu.
 
+Providers and imported plugins stay in your home directory across upgrades. Configure a per-provider proxy from its gear, open complete redacted request diagnostics after failures, and adjust language and text size (50%–200%) in Appearance. See [preferences and upgrades](docs/preferences-and-upgrades.md).
+
 ## Get started
 
 Pi web extensions can access the network. Configure company npm mirrors, an optional `.npmrc` and CA file under **Settings → Agent → Pi**; see [npm and extension networking](docs/npm-and-network.md).
@@ -31,7 +33,7 @@ Pi web extensions can access the network. Configure company npm mirrors, an opti
 3. Open `UmekoCpp.exe` on Windows, `UmekoCpp.app` on macOS, or `./UmekoCpp` on Linux.
 4. Open **Settings → Accounts & Providers**, add an OpenAI-compatible or Anthropic-compatible provider, and choose a model.
 
-Choose `v0.2.5` for bundled Python or `v0.2.5-minimal` for a smaller download. Minimal releases are marked as prereleases so the update checker continues to recommend the standard edition. **Settings → About** shows the actual compiler and version used for your platform.
+Choose `v0.3.0` for bundled Python or `v0.3.0-minimal` for a smaller download. Minimal releases are marked as prereleases so the update checker continues to recommend the standard edition. **Settings → About** shows the actual compiler and version used for your platform.
 
 | Platform | Release | Requirements |
 | --- | --- | --- |
@@ -102,7 +104,7 @@ C++ owns state, sessions, credential access, package import and highlighting. Pi
 
 Build and test instructions: [BUILDING.md](docs/BUILDING.md). Porting baseline and verification boundaries: [PORTING.md](docs/PORTING.md). Release archives include provenance and SHA-256 files; Qt and npm dependency licenses remain alongside the application.
 
-Profiles are separate from the Python edition: `%LOCALAPPDATA%/UmekoCpp`, `~/Library/Application Support/UmekoCpp`, or `$XDG_DATA_HOME/umeko-cpp`. You can run both editions side by side. Do not point both live apps at the same profile.
+Profiles live in `~/.umeko/desktop-cpp`, separate from the Python edition at `~/.umeko/desktop`. Existing platform-specific profiles are copied on first launch; originals are preserved. You can run both editions side by side. Do not point both live apps at the same profile.
 
 ## 中文说明
 

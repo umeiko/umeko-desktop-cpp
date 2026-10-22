@@ -1,10 +1,70 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import net from 'node:net';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { Gateway, parseSSE, collectOpenAI, anthropicEvents, openaiToAnthropic, anthropicToOpenAI, toAnthropicEvents, validateBase } from '../runtime/gateway.mjs';
 
 const list = async stream => { const result = []; for await (const x of stream) result.push(x); return result; };
+
+test('provider proxies are isolated and failed requests retain complete redacted diagnostics', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'umeko-network-'));
+  const upstream = http.createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    const body = JSON.parse(raw), failed = body.messages[0].content === 'fail';
+    const content = failed ? 'detail-'.repeat(12000) + 'model-secret' : JSON.stringify({choices:[{message:{role:'assistant',content:'ok'},finish_reason:'stop'}]});
+    res.writeHead(failed ? 429 : 200, {'Content-Type':'application/json'});res.end(content);
+  });
+  await new Promise(resolve => upstream.listen(0,'127.0.0.1',resolve));
+  const sockets = new Set(); let tunnels = 0;
+  const proxy = http.createServer((req, res) => {
+    tunnels++;
+    const request = http.request({hostname:'127.0.0.1',port:upstream.address().port,
+      method:req.method,path:new URL(req.url).pathname,headers:req.headers},reply=>{
+      res.writeHead(reply.statusCode,reply.headers);reply.pipe(res);
+    });
+    request.on('error',()=>res.destroy());req.pipe(request);
+  });
+  proxy.on('connect', (req, socket, head) => {
+    tunnels++; sockets.add(socket);
+    const target = net.connect(upstream.address().port, '127.0.0.1', () => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      if (head.length) target.write(head);
+      socket.pipe(target).pipe(socket);
+    });
+    socket.on('close',()=>{sockets.delete(socket);target.destroy();});
+    target.on('error',()=>socket.destroy());socket.on('error',()=>target.destroy());
+  });
+  await new Promise(resolve => proxy.listen(0,'127.0.0.1',resolve));
+  const saved = Object.fromEntries(['HTTP_PROXY','HTTPS_PROXY','NO_PROXY','http_proxy','https_proxy','no_proxy'].map(k=>[k,process.env[k]]));
+  const url = `http://127.0.0.1:${proxy.address().port}`;
+  for (const key of Object.keys(saved)) delete process.env[key];
+  Object.assign(process.env,{HTTP_PROXY:url,HTTPS_PROXY:url,NO_PROXY:''});
+  const gateway = new Gateway(); gateway.configure({diagnosticsDir:directory});
+  t.after(async () => {
+    for (const [key,value] of Object.entries(saved)) if(value===undefined) delete process.env[key];else process.env[key]=value;
+    await gateway.close();for(const socket of sockets) socket.destroy();upstream.closeAllConnections();proxy.closeAllConnections();
+    await Promise.all([new Promise(resolve=>proxy.close(resolve)),new Promise(resolve=>upstream.close(resolve))]);
+    rmSync(directory,{recursive:true,force:true});
+  });
+  const provider = mode=>({id:mode,name:mode,api:'openai',baseUrl:`http://127.0.0.1:${upstream.address().port}/v1`,key:'model-secret',proxy:{mode,url}});
+  const body = text=>({messages:[{role:'user',content:text}],tools:[],max_tokens:10,parameters:{}});
+  const call = mode=>list(gateway.events(provider(mode),{upstream:'fixture'},body('hello'),new AbortController()));
+  await Promise.all([call('custom'),call('direct')]); assert.equal(tunnels,1);
+  await call('system'); assert.equal(tunnels,2);
+  process.env.NO_PROXY='*';await call('system');assert.equal(tunnels,2);
+  await assert.rejects(async()=>list(gateway.events(provider('custom'),{upstream:'fixture'},body('fail'),new AbortController())),error=>{
+    assert.ok(error.reportId);const raw=readFileSync(join(directory,error.reportId+'.json'),'utf8'),report=JSON.parse(raw);
+    assert.ok(!raw.includes('model-secret'));
+    assert.equal(report.response.status,429);
+    assert.equal(report.response.body,'detail-'.repeat(12000)+'[REDACTED]');
+    assert.equal(report.http[0].request.body.messages[0].content,'fail');
+    assert.equal(report.http[0].request.headers.Authorization,'[REDACTED]');return true;
+  });
+});
 test('SSE preserves fragmented Chinese, multiline data and final line', async () => {
   const raw = Buffer.from('data: {"text":"你好"}\r\n\r\ndata: {"done":true}\n\ndata: [DONE]\n\n');
   const chunks = [...raw].map(n => Buffer.from([n]));

@@ -13,6 +13,7 @@ public:
   QVariantList sessions() const;
   bool saveSessions(QVariantList rows);
   static QVariantMap defaults();
+  static bool migrateProfile(QString previous, QString target);
 
 private:
   QHash<QString, QByteArray> cached;

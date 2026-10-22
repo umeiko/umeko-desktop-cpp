@@ -6,6 +6,46 @@
 class CoreTests : public QObject {
   Q_OBJECT
 private slots:
+  void profileMigration() {
+    QTemporaryDir temp;
+    const auto old = temp.path() + "/old",
+               target = temp.path() + "/home/.umeko/desktop-cpp";
+    QDir().mkpath(old + "/provider-plugins/packages/example/1.0.0");
+    QDir().mkpath(old + "/pi/sessions");
+    QVERIFY(U::writeJson(old + "/settings.json",
+                         QVariantMap{{"workspace", old + "/workspace"}}));
+    QVERIFY(U::writeJson(
+        old + "/sessions.json",
+        QVariantList{QVariantMap{{"file", old + "/pi/sessions/one.jsonl"}}}));
+    QFile log(old + "/pi/sessions/one.jsonl");
+    QVERIFY(log.open(QIODevice::WriteOnly));
+    const auto header = QJsonDocument(QJsonObject{{"type", "session"},
+                                                  {"cwd", old + "/workspace"}})
+                            .toJson(QJsonDocument::Compact);
+    const QByteArray body =
+        "{\"type\":\"message\",\"text\":\"preserve user content\"}\n";
+    log.write(header + '\n' + body);
+    log.close();
+    QVERIFY(Store::migrateProfile(old, target));
+    QCOMPARE(U::readJson(target + "/settings.json")
+                 .toMap()["credentialNamespace"]
+                 .toString(),
+             U::sha(U::cleanPath(old).toUtf8()).left(24));
+    QCOMPARE(U::readJson(target + "/sessions.json")
+                 .toList()
+                 .first()
+                 .toMap()["file"]
+                 .toString(),
+             target + "/pi/sessions/one.jsonl");
+    QFile moved(target + "/pi/sessions/one.jsonl");
+    QVERIFY(moved.open(QIODevice::ReadOnly));
+    QCOMPARE(
+        QJsonDocument::fromJson(moved.readLine()).object()["cwd"].toString(),
+        target + "/workspace");
+    QCOMPARE(moved.readAll(), body);
+    QVERIFY(QFileInfo::exists(old + "/settings.json"));
+    QVERIFY(!Store::migrateProfile(old, target));
+  }
   void context() {
     QCOMPARE(U::contextSuggestion("kimi-k3")["tokens"].toInt(), 1048576);
     QCOMPARE(U::contextSuggestion("kimi/k3-256")["tokens"].toInt(), 262144);

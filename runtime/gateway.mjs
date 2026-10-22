@@ -4,6 +4,7 @@ import { createHash, timingSafeEqual, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { once } from 'node:events';
+import { dispatcher, failureReport, providerFetch } from './transport.mjs';
 
 const MAX_BODY = 32 * 1024 * 1024;
 const textOf = content => typeof content === 'string' ? content : (content || []).filter(c => c.type === 'text').map(c => c.text || '').join('\n');
@@ -165,7 +166,7 @@ class EventQueue {
 }
 export class Gateway {
   constructor(emit = () => {}) { this.emit = emit; this.providers = []; this.models = []; this.token = ''; this.settings = {}; this.pending = new Map(); this.controllers = new Set(); this.privateServer = this.server(true); }
-  configure(input) { this.providers = input.providers || []; this.models = input.models || []; this.token = input.token || ''; this.settings = input.settings || this.settings; }
+  configure(input) { this.diagnosticsDir = input.diagnosticsDir; this.providers = input.providers || []; this.models = input.models || []; this.token = input.token || ''; this.settings = input.settings || this.settings; }
   server(isPrivate) {
     const server = http.createServer((req, res) => { void this.handle(req, res, isPrivate).catch(() => {
       if (!res.headersSent) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { type: 'invalid_request_error', message: 'Invalid request structure' } })); }
@@ -192,6 +193,20 @@ export class Gateway {
     return allowed;
   }
   async *events(provider, model, body, controller) {
+    const http = [];
+    try {
+      for await (const event of this.transportEvents(provider, model, body, controller, http)) {
+        if (event.error) throw new Error(JSON.stringify(event));
+        yield event;
+      }
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+      const records = error.diagnostics || http;
+      throw failureReport(this.diagnosticsDir, provider, { transport: provider.api, ...body, model: model.upstream },
+        records.findLast(item => item.response)?.response || {}, error, records);
+    }
+  }
+  async *transportEvents(provider, model, body, controller, http) {
     if (provider.api === 'plugin') {
       const id = randomUUID(), queue = new EventQueue(); this.pending.set(id, queue);
       const abort = () => { queue.end(new Error('Cancelled')); this.emit({ type: 'provider-cancel', id }); };
@@ -205,12 +220,26 @@ export class Gateway {
     const payload = anthropic ? openaiToAnthropic(body.messages, body.tools, body.max_tokens, body.parameters) : { messages: body.messages, max_tokens: body.max_tokens, stream: true, stream_options: { include_usage: true }, ...(body.tools.length ? { tools: body.tools.map(t => ({ type: 'function', function: t })) } : {}), ...body.parameters };
     payload.model = model.upstream;
     const suffix = anthropic ? '/messages' : '/chat/completions';
-    const response = await fetch(base + suffix, { method: 'POST', headers, body: JSON.stringify(payload), redirect: 'error', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(300000)]) });
-    if (!response.ok) { await response.body?.cancel(); throw new Error(`Provider returned HTTP ${response.status}`); }
-    let events;
-    if (response.headers.get('content-type')?.includes('event-stream')) events = parseSSE(response.body);
-    else { const raw = await response.text(); if (raw.length > MAX_BODY) throw new Error('Upstream response too large'); events = [JSON.parse(raw)]; }
-    if (anthropic) yield* anthropicEvents(events); else for await (const event of events) yield event;
+    const agent = dispatcher(provider);
+    const record = { request: { url: base + suffix, method: 'POST', headers, body: payload },
+      response: { status: null, headers: {}, body: '' } };
+    http.push(record);
+    try {
+      const response = await providerFetch(base + suffix, { method: 'POST', headers, body: JSON.stringify(payload), redirect: 'error', dispatcher: agent,
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(300000)]) });
+      record.response.status = response.status;
+      record.response.headers = Object.fromEntries(response.headers);
+      const tracked = async function* () {
+        const decoder = new TextDecoder();
+        for await (const chunk of response.body) { record.response.body += decoder.decode(chunk, {stream:true}); yield chunk; }
+        record.response.body += decoder.decode();
+      };
+      if (!response.ok) { record.response.body = await response.text(); throw new Error(`Provider returned HTTP ${response.status}`); }
+      let events;
+      if (response.headers.get('content-type')?.includes('event-stream')) events = parseSSE(tracked());
+      else { const raw = await response.text(); record.response.body = raw; if (raw.length > MAX_BODY) throw new Error('Upstream response too large'); events = [JSON.parse(raw)]; }
+      if (anthropic) yield* anthropicEvents(events); else for await (const event of events) yield event;
+    } finally { await agent.close(); }
   }
   async handle(req, res, isPrivate) {
     const json = (status, value) => { if (res.headersSent) return res.end(); res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
@@ -257,11 +286,11 @@ export class Gateway {
       }
       if (!anthropic && !res.destroyed) res.write('data: [DONE]\n\n'); res.end();
     } catch (failure) {
-      if (!res.headersSent) error(502, failure.message.startsWith('Provider returned HTTP') ? failure.message : 'Provider request failed; check configuration, Python dependencies or network', 'upstream_error');
-      else if (!res.destroyed) { const value = { error: { type: 'upstream_error', message: 'Provider stream failed; check provider status' } }; res.end(`data: ${JSON.stringify(value)}\n\n`); }
+      if (!res.headersSent) error(502, failure.reportId ? failure.message : 'Provider request failed; check configuration, Python dependencies or network', 'upstream_error');
+      else if (!res.destroyed) { const value = { error: { type: 'upstream_error', message: failure.reportId ? failure.message : 'Provider stream failed; check provider status' } }; res.end(`data: ${JSON.stringify(value)}\n\n`); }
     } finally { this.controllers.delete(controller); }
   }
-  accept(input) { const queue = this.pending.get(input.id); if (!queue) return; if (input.type === 'provider-event') queue.push(input.event); else queue.end(input.error ? new Error(input.error) : undefined); }
+  accept(input) { const queue = this.pending.get(input.id); if (!queue) return; if (input.type === 'provider-event') queue.push(input.event); else { const error = input.error ? new Error(input.error) : undefined; if (error) error.diagnostics = input.diagnostics; queue.end(error); } }
   async setPublic(enabled, settings) {
     const oldSettings = this.settings, old = this.publicServer; this.settings = settings;
     const host = settings.lan ? '0.0.0.0' : '127.0.0.1';
