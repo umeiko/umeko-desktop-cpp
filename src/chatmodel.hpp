@@ -3,10 +3,12 @@
 
 class ChatModel : public QAbstractListModel {
   Q_OBJECT
+  Q_PROPERTY(QVariantList questions READ questions NOTIFY questionsChanged)
 public:
   enum { MessageRole = Qt::UserRole + 1 };
   using QAbstractListModel::QAbstractListModel;
   QVariantList rows;
+  QVariantList questions() const { return questionRows; }
   int rowCount(const QModelIndex &parent = {}) const override {
     return parent.isValid() ? 0 : rows.size();
   }
@@ -20,4 +22,9 @@ public:
   }
   void update(const QVariantList &messages);
   static QVariantList project(const QVariantList &messages);
+signals:
+  void questionsChanged();
+
+private:
+  QVariantList questionRows;
 };

@@ -590,6 +590,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
       if (!text.isEmpty())
         last["text"] = text;
       last["error"] = !payload["error"].toString().isEmpty();
+      last["stopReason"] = payload.value("stopReason", "");
       if (payload.contains("timestamp"))
         last["timestamp"] = payload["timestamp"];
       if (payload.contains("thinking"))

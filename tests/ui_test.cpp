@@ -18,6 +18,7 @@ class NativeUiTests : public QObject {
   bool nativeTool = false, slow = false;
   bool holdReplies = false;
   bool upstreamError = false;
+  bool limitResponse = false;
   int transientFailures = 0;
   QList<std::function<void()>> heldReplies;
   void releaseReplies() {
@@ -216,7 +217,7 @@ private slots:
             return;
           }
           QVariantMap message;
-          QString finish = "stop";
+          QString finish = limitResponse ? "length" : "stop";
           if (mediaTool && mediaCalls++ == 0) {
             QVariantList items{
                 QVariantMap{{"path", mediaImage},
@@ -271,7 +272,9 @@ private slots:
                               {"message", QJsonObject::fromVariantMap(message)},
                               {"finish_reason", finish}}}},
               {"usage",
-               QJsonObject{{"prompt_tokens", 100}, {"completion_tokens", 10}}}};
+               QJsonObject{{"prompt_tokens", 100},
+                           {"completion_tokens",
+                            limitResponse ? body["max_tokens"].toInt() : 10}}}};
           auto bytes = QJsonDocument(response).toJson(QJsonDocument::Compact);
           auto send = [socket = QPointer<QTcpSocket>(socket), bytes] {
             if (!socket || socket->state() != QAbstractSocket::ConnectedState)
@@ -767,6 +770,110 @@ Item {
     QTest::mouseMove(window, QPoint(40, 40));
     QTRY_COMPARE_WITH_TIMEOUT(actions->property("opacity").toDouble(), 0.0,
                               1000);
+  }
+  void outputLimitNotice() {
+    configureAPI();
+    window->setProperty("page", "chat");
+    backend->newSession();
+    limitResponse = true;
+    backend->send("Long drawing fixture");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+    QCOMPARE(requests.last().toMap()["max_tokens"].toInt(),
+             backend->config()["agent"].toMap()["maxTokens"].toInt());
+    QCOMPARE(backend->messages().last().toMap()["stopReason"].toString(),
+             QString("length"));
+    QTest::qWait(200);
+    auto notice = find("outputLimitNotice_1");
+    QVERIFY(notice && notice->isVisible());
+    const auto before = requests.size();
+    limitResponse = false;
+    click("continueOutputButton");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+    QCOMPARE(requests.size(), before + 1);
+    QCOMPARE(backend->messages().size(), 4);
+    QCOMPARE(backend->messages().last().toMap()["stopReason"].toString(),
+             QString("stop"));
+    QTest::qWait(150);
+    QVERIFY(!find("outputLimitNotice_3")->isVisible());
+  }
+  void questionNavigator() {
+    if (backend->config()["selectedModel"] != "native-fixture")
+      configureAPI();
+    window->setProperty("page", "chat");
+    backend->newSession();
+    backend->send("navigation fixture");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+    auto model = qobject_cast<ChatModel *>(backend->messageModel());
+    QVERIFY(model);
+    QVariantList messages;
+    for (int i = 0; i < 30; ++i) {
+      messages << QVariantMap{{"role", "user"},
+                              {"error", false},
+                              {"text",
+                               QString("Question %1 navigation marker").arg(i)}}
+               << QVariantMap{
+                      {"role", "assistant"},
+                      {"error", false},
+                      {"text", QString("Answer paragraph.\n\n").repeated(10)}};
+    }
+    model->update(messages);
+    QTest::qWait(300);
+    auto nav = find("questionNavigator"), view = find("conversation");
+    QVERIFY(nav && view);
+    QQmlComponent avatarComponent(
+        engine.get(),
+        QUrl::fromLocalFile(root + "/app/qml/AssistantAvatar.qml"));
+    QVERIFY2(avatarComponent.isReady(),
+             qPrintable(avatarComponent.errorString()));
+    std::unique_ptr<QObject> avatar(
+        avatarComponent.create(engine->rootContext()));
+    QVERIFY(avatar);
+    QSet<int> variants;
+    for (int i = 0; i < 60; ++i) {
+      avatar->setProperty("messageKey", QString("fixture/%1").arg(i));
+      variants.insert(avatar->property("variant").toInt());
+      QTRY_VERIFY_WITH_TIMEOUT(avatar->property("loaded").toBool(), 1000);
+    }
+    QCOMPARE(variants, QSet<int>({0, 1, 2}));
+    QTest::mouseMove(window, point(view, 40, 40));
+    QTest::qWait(300);
+    QVERIFY(!nav->property("expanded").toBool());
+    QVERIFY(!find("conversationScrollBar")->isVisible());
+    QTest::mouseMove(window, point(nav));
+    QTRY_VERIFY_WITH_TIMEOUT(nav->property("expanded").toBool(), 1000);
+    auto listing = find("questionNavigationList");
+    QVERIFY(listing);
+    QMetaObject::invokeMethod(listing, "positionViewAtBeginning");
+    QTest::qWait(150);
+    click("questionNavigationItem_0");
+    QTest::qWait(200);
+    QCOMPARE(nav->property("activeQuestion").toInt(), 0);
+    QVERIFY(!view->property("followTail").toBool());
+    auto bubble = find("messageBubble_0");
+    QVERIFY(bubble);
+    QVERIFY(qAbs(bubble->mapToItem(view, QPointF()).y()) < 4);
+    auto header = find("assistantAvatar_1");
+    QVERIFY(header && header->property("loaded").toBool());
+    const auto source = header->property("source");
+    auto last = messages.last().toMap();
+    last["text"] = last["text"].toString() + " Streamed";
+    messages.last() = last;
+    model->update(messages);
+    QCOMPARE(header->property("source"), source);
+    QMetaObject::invokeMethod(view, "positionViewAtEnd");
+    QTest::qWait(150);
+    QMetaObject::invokeMethod(listing, "positionViewAtBeginning");
+    QTest::qWait(100);
+    click("questionNavigationItem_0");
+    QTest::qWait(200);
+    header = find("assistantAvatar_1");
+    QVERIFY(header && header->property("loaded").toBool());
+    QCOMPARE(header->property("source"), source);
+    QTest::mouseMove(window, point(view, 40, 40));
+    QTest::qWait(350);
+    QVERIFY(!nav->property("expanded").toBool());
+    backend->newSession();
+    QVERIFY(model->questions().isEmpty());
   }
   void customThemesAndReplyMascot() {
     const auto original = backend->config()["theme"].toString();

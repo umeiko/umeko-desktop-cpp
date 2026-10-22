@@ -46,6 +46,28 @@ private slots:
     QVERIFY(QFileInfo::exists(old + "/settings.json"));
     QVERIFY(!Store::migrateProfile(old, target));
   }
+  void outputDefaultMigration() {
+    QTemporaryDir temp;
+    Store store(temp.path());
+    QCOMPARE(store.data["agent"].toMap()["maxTokens"].toInt(), 32768);
+    for (int limit : {8192, 4096}) {
+      auto legacy = store.data;
+      auto agent = legacy["agent"].toMap();
+      agent.remove("outputLimitDefaultVersion");
+      agent["maxTokens"] = limit;
+      legacy["agent"] = agent;
+      QVERIFY(U::writeJson(temp.path() + "/settings.json", legacy));
+      Store migrated(temp.path());
+      QCOMPARE(migrated.data["agent"].toMap()["maxTokens"].toInt(),
+               limit == 8192 ? 32768 : limit);
+    }
+    auto agent = store.data["agent"].toMap();
+    agent["maxTokens"] = 8192;
+    store.data["agent"] = agent;
+    QVERIFY(store.save());
+    QCOMPARE(Store(temp.path()).data["agent"].toMap()["maxTokens"].toInt(),
+             8192);
+  }
   void context() {
     QCOMPARE(U::contextSuggestion("kimi-k3")["tokens"].toInt(), 1048576);
     QCOMPARE(U::contextSuggestion("kimi/k3-256")["tokens"].toInt(), 262144);
@@ -93,6 +115,36 @@ private slots:
     QCOMPARE(resets.count(), 0);
     QCOMPARE(m.rows.last().toMap()["text"].toString(),
              QString("Streamed update"));
+  }
+  void questionNavigationIndex() {
+    ChatModel model;
+    QSignalSpy changed(&model, &ChatModel::questionsChanged);
+    QVariantList messages{
+        QVariantMap{{"role", "user"}, {"text", "First\nquestion"}},
+        QVariantMap{{"role", "assistant"},
+                    {"text", "inspect"},
+                    {"tools", QVariantList{QVariantMap{{"id", "read"}}}}},
+        QVariantMap{{"role", "assistant"}, {"text", "answer"}},
+        QVariantMap{
+            {"role", "user"},
+            {"text", ""},
+            {"attachments", QVariantList{QVariantMap{{"name", "report.pdf"}}}}},
+        QVariantMap{{"role", "assistant"}, {"text", ""}}};
+    model.update(messages);
+    QCOMPARE(model.questions().size(), 2);
+    QCOMPARE(model.questions()[0].toMap()["title"].toString(),
+             QString("First question"));
+    QCOMPARE(model.questions()[1].toMap()["row"].toInt(), 2);
+    QCOMPARE(model.questions()[1].toMap()["title"].toString(),
+             QString("report.pdf"));
+    for (int i = 0; i < 50; ++i) {
+      messages.last() = QVariantMap{{"role", "assistant"},
+                                    {"text", QString("Stream %1").arg(i)}};
+      model.update(messages);
+    }
+    QCOMPARE(changed.size(), 1);
+    model.update({});
+    QVERIFY(model.questions().isEmpty());
   }
   void storage() {
     QTemporaryDir temporary;

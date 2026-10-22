@@ -497,6 +497,8 @@ QPair<QVariantList, QVariantList> U::preview(const QString &file) {
                     {"timestamp", m.value("timestamp", e["timestamp"])},
                     {"error", m["stopReason"] != "aborted" &&
                                   !m["errorMessage"].toString().isEmpty()}};
+    if (m["role"] == "assistant")
+      row["stopReason"] = m.value("stopReason", "");
     if (!thinking.isEmpty())
       row["thinking"] = thinking;
     if (!tools.isEmpty())

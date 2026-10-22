@@ -70,6 +70,7 @@ QVariantList ChatModel::project(const QVariantList &messages) {
       if (m.contains("timestamp"))
         group["timestamp"] = m["timestamp"];
       group["error"] = group["error"].toBool() || m["error"].toBool();
+      group["stopReason"] = m.value("stopReason", "");
       out.last() = group;
     } else
       out << m;
@@ -90,8 +91,11 @@ QVariantList ChatModel::project(const QVariantList &messages) {
 void ChatModel::update(const QVariantList &messages) {
   auto projected = project(messages);
   auto common = qMin(rows.size(), projected.size());
+  bool questionsDirty = rows.size() != projected.size();
   for (int i = 0; i < common; ++i)
     if (rows[i] != projected[i]) {
+      questionsDirty |= rows[i].toMap()["role"] == "user" ||
+                        projected[i].toMap()["role"] == "user";
       rows[i] = projected[i];
       emit dataChanged(index(i), index(i), {MessageRole});
     }
@@ -106,5 +110,28 @@ void ChatModel::update(const QVariantList &messages) {
     while (rows.size() > projected.size())
       rows.removeLast();
     endRemoveRows();
+  }
+  if (questionsDirty) {
+    QVariantList questions;
+    for (int i = 0; i < rows.size(); ++i) {
+      const auto message = rows[i].toMap();
+      if (message["role"] != "user")
+        continue;
+      auto title = message["text"].toString().trimmed();
+      if (title.isEmpty()) {
+        QStringList names;
+        for (auto item : message["attachments"].toList())
+          names << item.toMap()["name"].toString();
+        title = names.join("、");
+      }
+      questions << QVariantMap{{"row", i},
+                               {"title", title.isEmpty()
+                                             ? QString("…")
+                                             : title.left(500).simplified()}};
+    }
+    if (questions != questionRows) {
+      questionRows = questions;
+      emit questionsChanged();
+    }
   }
 }

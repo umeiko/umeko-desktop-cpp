@@ -15,7 +15,8 @@ QVariantMap Store::defaults() {
       {"selectedProvider", ""},
       {"selectedModel", ""},
       {"providerRuntime", QVariantMap{}},
-      {"agent", QVariantMap{{"maxTokens", 8192},
+      {"agent", QVariantMap{{"maxTokens", 32768},
+                            {"outputLimitDefaultVersion", 1},
                             {"instructions", ""},
                             {"autoCompaction", true},
                             {"agentDir", ""},
@@ -201,6 +202,15 @@ Store::Store(QString path) {
       data[it.key()] = it.value();
   }
   auto ui = data["ui"].toMap();
+  auto agent = data["agent"].toMap();
+  const bool outputDefaultMigrated =
+      saved["agent"].toMap()["outputLimitDefaultVersion"].toInt() != 1;
+  if (outputDefaultMigrated) {
+    if (agent["maxTokens"].toInt() == 8192)
+      agent["maxTokens"] = 32768;
+    agent["outputLimitDefaultVersion"] = 1;
+    data["agent"] = agent;
+  }
   if (!QStringList{"zh", "en"}.contains(ui["language"].toString())) {
     const auto preferred = QLocale::system().uiLanguages();
     const auto systemLanguage =
@@ -225,6 +235,8 @@ Store::Store(QString path) {
         U::sha((migratedFrom.isEmpty() ? directory : migratedFrom).toUtf8())
             .left(24);
   keyPrefix = data["credentialNamespace"].toString() + ":";
+  if (outputDefaultMigrated)
+    save();
 }
 bool Store::save() {
   if (!writable)
