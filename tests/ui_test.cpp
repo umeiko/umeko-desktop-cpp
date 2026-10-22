@@ -19,6 +19,7 @@ class NativeUiTests : public QObject {
   bool nativeTool = false, slow = false;
   bool holdReplies = false;
   bool upstreamError = false;
+  bool streamingReply = false;
   QList<std::function<void()>> heldReplies;
   void releaseReplies() {
     holdReplies = false;
@@ -205,6 +206,43 @@ private slots:
             return;
           }
           QVariantMap message;
+          if (streamingReply) {
+            socket->write("HTTP/1.1 200 OK\r\nContent-Type: "
+                          "text/event-stream\r\nConnection: close\r\n\r\n");
+            const auto stream = [socket = QPointer<QTcpSocket>(socket)](
+                                    QVariantMap event) {
+              if (socket && socket->state() == QAbstractSocket::ConnectedState)
+                socket->write("data: " +
+                              QJsonDocument::fromVariant(event).toJson(
+                                  QJsonDocument::Compact) +
+                              "\n\n");
+            };
+            stream({{"choices",
+                     QVariantList{QVariantMap{
+                         {"index", 0},
+                         {"delta", QVariantMap{{"role", "assistant"},
+                                               {"content", "Stream "}}}}}}});
+            QTimer::singleShot(350, this, [stream] {
+              stream({{"choices",
+                       QVariantList{QVariantMap{
+                           {"index", 0},
+                           {"delta", QVariantMap{{"content", "fixture"}}}}}}});
+            });
+            heldReplies << [stream, socket = QPointer<QTcpSocket>(socket)] {
+              stream({{"choices",
+                       QVariantList{QVariantMap{{"index", 0},
+                                                {"delta", QVariantMap{}},
+                                                {"finish_reason", "stop"}}}},
+                      {"usage", QVariantMap{{"prompt_tokens", 10},
+                                            {"completion_tokens", 20},
+                                            {"total_tokens", 30}}}});
+              if (socket) {
+                socket->write("data: [DONE]\n\n");
+                socket->disconnectFromHost();
+              }
+            };
+            return;
+          }
           QString finish = "stop";
           if (mediaTool && mediaCalls++ == 0) {
             QVariantList items{
@@ -801,7 +839,47 @@ Item {
     QVERIFY(mascot->property("reaction").toString().contains("饼干"));
     backend->setTheme(original);
   }
+  void liveGenerationSpeed() {
+    streamingReply = true;
+    auto reset = qScopeGuard([this] {
+      streamingReply = false;
+      releaseReplies();
+    });
+    window->setProperty("page", "chat");
+    backend->newSession();
+    backend->send("stream speed fixture");
+    QTRY_VERIFY_WITH_TIMEOUT(
+        backend->generation()["tokensPerSecond"].toDouble() > 0, 15000);
+    QVERIFY(backend->generation()["estimated"].toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(find("generationSpeed")->isVisible(), 3000);
+    QVERIFY(
+        find("generationSpeed")->property("text").toString().contains("tok/s"));
+    QTRY_VERIFY_WITH_TIMEOUT(lastText().contains("Stream fixture"), 5000);
+    window->grabWindow().save(root +
+                              "/build/screenshots/generation-speed-v033.png");
+    releaseReplies();
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+    QVERIFY(!find("generationSpeed")->isVisible());
+    QVERIFY(backend->generation().isEmpty());
+  }
   void appearanceAndRequestDetails() {
+    window->setProperty("page", "settings");
+    window->setProperty("settingsTab", 0);
+    QTest::qWait(250);
+    const auto editorId = backend->config()["selectedProvider"].toString();
+    click("editProvider_" + editorId);
+    QVERIFY(find("settingsPage")->property("editingProvider").toBool());
+    QCOMPARE(find("editProvider_" + editorId)->property("glyph").toString(),
+             QString("chevron-up"));
+    click("editProvider_" + editorId);
+    QVERIFY(!find("settingsPage")->property("editingProvider").toBool());
+    click("providerProxy_" + editorId);
+    QCOMPARE(find("providerNetworkTitle")->property("text").toString(),
+             QString("网络设置"));
+    QTest::keyClick(window, Qt::Key_Escape);
+    QTRY_VERIFY_WITH_TIMEOUT(!find("providerNetworkTitle") ||
+                                 !find("providerNetworkTitle")->isVisible(),
+                             3000);
     window->setProperty("page", "settings");
     window->setProperty("settingsTab", 5);
     backend->setLanguage("en");

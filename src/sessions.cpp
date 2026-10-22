@@ -70,6 +70,7 @@ void Backend::activate(std::shared_ptr<Session> s) {
   emit attachmentsChanged();
   emit approvalChanged();
   emit contextUsageChanged();
+  emit generationChanged();
   emit editorText(s->draft);
   trimPool();
 }
@@ -632,6 +633,11 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     s->resources = payload["resources"].toMap();
     if (visible)
       emit changed();
+  } else if (type == "generation_metrics") {
+    s->generation = s->cancelled ? QVariantMap{} : payload;
+    if (visible)
+      emit generationChanged();
+    return;
   } else if (type == "context_usage") {
     s->usage = payload["usage"].toMap();
     if (visible)
@@ -685,6 +691,9 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     }
     transcript = true;
   } else if (type == "done" || type == "exit") {
+    s->generation.clear();
+    if (visible)
+      emit generationChanged();
     bool was = s->busy();
     if (!s->queue.isEmpty()) {
       QStringList texts;
@@ -735,6 +744,8 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     emit sidebarChanged();
 }
 void Backend::stop() {
+  view->generation.clear();
+  emit generationChanged();
   if (view->phase == "running") {
     view->cancelled = true;
     writePi(view, {{"type", "abort"}});

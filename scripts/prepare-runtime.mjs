@@ -17,7 +17,7 @@ if (!exists) {
   await writeFile(join(ai, 'models.generated.js'), 'export const MODELS={};export const IMAGE_MODELS={};export const CLASSIFIER_MODELS={};\n');
   await writeFile(join(output, 'manifest.json'), JSON.stringify({ package: '@earendil-works/pi-coding-agent', version: manifest.version, providerCatalog: false, projection: 2, engine: 'full-coding-agent', nativeTools: true }, null, 2));
 }
-for (const name of ['bridge.mjs', 'resources.mjs', 'provider-policy.mjs', 'chatbox.mjs']) await cp(join(root, 'runtime', name), join(output, name));
+for (const name of ['bridge.mjs', 'resources.mjs', 'provider-policy.mjs', 'chatbox.mjs', 'generation-metrics.mjs']) await cp(join(root, 'runtime', name), join(output, name));
 const factoryBin=join(root,'runtime/releases/coding-1.3.0/bin');
 if(resolve(output)!==resolve(join(root,'runtime/releases/coding-1.3.0'))) {
   try { await access(factoryBin); await cp(factoryBin,join(output,'bin'),{recursive:true,dereference:true}); }
