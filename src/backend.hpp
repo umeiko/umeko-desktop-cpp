@@ -95,17 +95,24 @@ signals:
 
 class AppAbout : public QObject {
   Q_OBJECT
+  friend class NativeUiTests;
   Q_PROPERTY(QVariantMap info READ info CONSTANT)
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
   Q_PROPERTY(QVariantMap release READ release NOTIFY changed)
   Q_PROPERTY(QString checkedAt READ checkedAt NOTIFY changed)
+  Q_PROPERTY(QVariantMap download READ download NOTIFY changed)
 public:
-  explicit AppAbout(Backend *backend);
+  explicit AppAbout(Backend *backend,
+                    QNetworkAccessManager *transport = nullptr);
   QVariantMap info() const { return m_info; }
   bool busy() const { return m_busy; }
   QVariantMap release() const { return m_release; }
   QString checkedAt() const { return m_checked; }
+  QVariantMap download() const { return m_download; }
   Q_INVOKABLE void checkUpdates();
+  Q_INVOKABLE void startAutomaticChecks();
+  Q_INVOKABLE void downloadUpdate();
+  Q_INVOKABLE void showDownloadedUpdate();
   Q_INVOKABLE void openProject();
   Q_INVOKABLE void openAuthor();
   Q_INVOKABLE void openReleases();
@@ -115,10 +122,19 @@ signals:
 
 private:
   Backend *b;
-  QVariantMap m_info, m_release;
+  QVariantMap m_info, m_release, m_download;
   bool m_busy = false;
+  bool m_minimal = false;
   QString m_checked;
-  QNetworkAccessManager network;
+  QNetworkAccessManager *network;
+  QTimer m_automatic;
+  QPointer<QNetworkReply> m_downloadReply;
+  std::unique_ptr<QSaveFile> m_downloadFile;
+  QCryptographicHash m_downloadHash{QCryptographicHash::Sha256};
+  qint64 m_received = 0;
+  QString m_downloadError;
+  QString m_downloadDirectory;
+  void readRelease(QUrl url, bool minimalChannel = false);
 };
 
 struct Session {

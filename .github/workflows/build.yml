@@ -111,6 +111,8 @@ jobs:
           name: diagnostics-${{ matrix.name }}
           path: |
             build/Testing/Temporary/LastTest.log
+            build/native-core.txt
+            build/native-ui.txt
             build/packaged-smoke.log
             build/packaged-chat.png
             build/screenshots/*.png

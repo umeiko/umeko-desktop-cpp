@@ -86,6 +86,8 @@ int main(int argc, char **argv) {
   auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
   window->setTitle(app.applicationDisplayName());
   diagnostic("QML_READY");
+  if (!parser.isSet("smoke"))
+    qobject_cast<AppAbout *>(backend.appAbout())->startAutomaticChecks();
   if (parser.isSet("smoke")) {
     diagnostic("WINDOW_TITLE:" + window->title());
     diagnostic("COMPILER:" + QStringLiteral(UMEKO_COMPILER));

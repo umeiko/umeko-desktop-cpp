@@ -76,7 +76,7 @@ target_link_libraries(UmekoCoreTests PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::
 if(MSVC)
   target_compile_options(UmekoCoreTests PRIVATE /utf-8)
 endif()
-add_test(NAME native_core COMMAND UmekoCoreTests)
+add_test(NAME native_core COMMAND UmekoCoreTests -o -,txt -o "${CMAKE_BINARY_DIR}/native-core.txt,txt")
 qt_add_executable(UmekoUiTests tests/ui_test.cpp ${APP_SOURCES})
 target_include_directories(UmekoUiTests PRIVATE src ${qtkeychain_SOURCE_DIR} ${qtkeychain_BINARY_DIR})
 target_compile_definitions(UmekoUiTests PRIVATE UMEKO_VERSION="${PROJECT_VERSION}" UMEKO_COMPILER="${UMEKO_COMPILER}" UMEKO_BUILD_SYSTEM="${CMAKE_SYSTEM_NAME}" UMEKO_BUILD_ARCH="${CMAKE_SYSTEM_PROCESSOR}")
@@ -84,7 +84,7 @@ target_link_libraries(UmekoUiTests PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qu
 if(MSVC)
   target_compile_options(UmekoUiTests PRIVATE /utf-8)
 endif()
-add_test(NAME native_ui COMMAND UmekoUiTests)
+add_test(NAME native_ui COMMAND UmekoUiTests -o -,txt -o "${CMAKE_BINARY_DIR}/native-ui.txt,txt")
 set(APP_TEST_PLATFORM offscreen)
 if(APPLE)
   # Apple Keychain completion runs on the Cocoa main dispatch queue.

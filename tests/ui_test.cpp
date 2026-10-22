@@ -1,6 +1,7 @@
 #include "backend.hpp"
 #include "miniz.h"
 #include "syntaxhighlighter.hpp"
+#include "update_network_fixture.hpp"
 #include <QDesktopServices>
 #include <QQuickStyle>
 #include <QtTest>
@@ -113,6 +114,13 @@ class NativeUiTests : public QObject {
     return ok;
   }
   void configureAPI() {
+    for (auto item : backend->config()["providers"].toList()) {
+      auto provider = item.toMap();
+      if (provider["name"] == "Fixture API") {
+        backend->selectModel(provider["id"].toString(), "native-fixture");
+        return;
+      }
+    }
     auto port = upstream.serverPort();
     auto models = QString::fromUtf8(
         QJsonDocument(QJsonArray{QJsonObject{{"upstream", "fixture-model"},
@@ -674,6 +682,7 @@ Item {
     QCOMPARE(cards, 2);
   }
   void wordAndParagraphSelection() {
+    configureAPI();
     backend->newSession();
     const QString paragraph = "alpha beta gamma " +
                               QString("a wrapped sentence ").repeated(14) +
@@ -748,21 +757,16 @@ Item {
     QTest::mouseMove(window, QPoint(40, 40));
     QTest::qWait(80);
     QCOMPARE(actions->property("opacity").toDouble(), 0.0);
-    int hoverAttempts = 0;
-    auto hoverReply = [this, view, &hoverAttempts] {
-      auto bubble = find("messageBubble_1");
-      const auto visible =
-          bubble->mapRectToScene(bubble->boundingRect())
-              .intersected(view->mapRectToScene(view->boundingRect()));
-      if (visible.isEmpty())
-        return false;
-      // Cocoa can suppress repeated synthetic moves at identical coordinates.
-      // Move one pixel between retries so geometry changes get a fresh event.
-      QTest::mouseMove(window, visible.center().toPoint() +
-                                   QPoint(++hoverAttempts % 2, 0));
-      return find("messageActions_1")->property("opacity").toDouble() == 1.0;
-    };
-    QTRY_VERIFY_WITH_TIMEOUT(hoverReply(), 3000);
+    auto bubble = find("messageBubble_1");
+    const auto visible =
+        bubble->mapRectToScene(bubble->boundingRect())
+            .intersected(view->mapRectToScene(view->boundingRect()));
+    QVERIFY(!visible.isEmpty());
+    QTest::mouseMove(window, visible.center().toPoint());
+    // Poll only the result: moving out/in on every retry resets the hover state
+    // between QTRY's consecutive evaluations on different event backends.
+    QTRY_COMPARE_WITH_TIMEOUT(actions->property("opacity").toDouble(), 1.0,
+                              3000);
     QVERIFY(find("messageTime_1")->property("text").toString().contains(':'));
     click("copyMessage_1");
     QCOMPARE(QGuiApplication::clipboard()->text(),
@@ -770,6 +774,92 @@ Item {
     QTest::mouseMove(window, QPoint(40, 40));
     QTRY_COMPARE_WITH_TIMEOUT(actions->property("opacity").toDouble(), 0.0,
                               1000);
+  }
+  void applicationUpdates() {
+    auto about = qobject_cast<AppAbout *>(backend->appAbout());
+    QVERIFY(about);
+    UpdateNetworkFixture network;
+    auto original = about->network;
+    const auto oldRelease = about->m_release, oldDownload = about->m_download;
+    const auto oldDirectory = about->m_downloadDirectory;
+    const bool wasMinimal = about->m_minimal;
+    auto restore = qScopeGuard([&] {
+      about->network = original;
+      about->m_minimal = wasMinimal;
+      about->m_downloadDirectory = oldDirectory;
+      about->m_release = oldRelease;
+      about->m_download = oldDownload;
+      emit about->changed();
+    });
+    about->network = &network;
+    about->m_minimal = false;
+    about->m_downloadDirectory = directory.filePath("updates");
+    QString family;
+#ifdef Q_OS_WIN
+    family = "windows";
+#elif defined(Q_OS_MACOS)
+    family = "macos";
+#else
+    family = "linux";
+#endif
+    const auto target =
+        family +
+        (QSysInfo::buildCpuArchitecture() == "arm64" ? "-arm64" : "-x64");
+    const auto extension = family == "linux" ? ".tar.gz" : ".zip";
+    const QByteArray payload(600000, 'x');
+    const auto project = QString("https://github.com/umeiko/umeko-desktop-cpp");
+    const auto metadata = [&](bool minimal) {
+      const auto tag = QString("v99.0.0") + (minimal ? "-minimal" : "");
+      const auto name = "UmekoCpp-" + tag + "-" + target + extension;
+      return QJsonDocument(
+                 QJsonObject{
+                     {"tag_name", tag},
+                     {"draft", false},
+                     {"prerelease", minimal},
+                     {"html_url", project + "/releases/tag/" + tag},
+                     {"assets",
+                      QJsonArray{QJsonObject{
+                          {"name", name},
+                          {"size", payload.size()},
+                          {"browser_download_url",
+                           project + "/releases/download/" + tag + "/" + name},
+                          {"digest",
+                           "sha256:" +
+                               QString::fromLatin1(
+                                   QCryptographicHash::hash(
+                                       payload, QCryptographicHash::Sha256)
+                                       .toHex())}}}}})
+          .toJson();
+    };
+    network.add(metadata(false));
+    about->checkUpdates();
+    QTRY_VERIFY_WITH_TIMEOUT(!about->busy(), 2000);
+    QCOMPARE(about->release()["state"].toString(), QString("available"));
+    QVERIFY(find("sidebarUpdateButton")->isVisible());
+    network.add(payload);
+    click("sidebarUpdateButton");
+    QTRY_COMPARE_WITH_TIMEOUT(about->download()["state"].toString(),
+                              QString("ready"), 2000);
+    QFile downloaded(about->download()["path"].toString());
+    QVERIFY(downloaded.open(QIODevice::ReadOnly));
+    QCOMPARE(downloaded.readAll(), payload);
+    downloaded.close();
+    network.add(QByteArray(payload.size(), 'z'));
+    about->downloadUpdate();
+    QTRY_COMPARE_WITH_TIMEOUT(about->download()["state"].toString(),
+                              QString("error"), 2000);
+    QCOMPARE(QDir(directory.filePath("updates/Umeko"))
+                 .entryList(QDir::Files | QDir::Hidden)
+                 .size(),
+             1);
+    about->m_minimal = true;
+    network.add(metadata(false));
+    network.add(metadata(true));
+    about->checkUpdates();
+    QTRY_VERIFY_WITH_TIMEOUT(!about->busy(), 2000);
+    QVERIFY(about->release()["asset"].toMap()["name"].toString().contains(
+        "-minimal-"));
+    QVERIFY(network.urls.last().path().endsWith("/v99.0.0-minimal"));
   }
   void outputLimitNotice() {
     configureAPI();
@@ -1316,6 +1406,14 @@ Item {
     QVERIFY(!manager->saveNpmConfig(
         "{\"npmRegistry\":\"https://user:secret@example.invalid/\"}"));
     QVERIFY(manager->saveNpmConfig("{}"));
+  }
+  void cleanup() {
+    if (QTest::currentTestFailed() && window) {
+      const auto screenshots = root + "/build/screenshots";
+      QDir().mkpath(screenshots);
+      window->grabWindow().save(screenshots + "/failed-" +
+                                QTest::currentTestFunction() + ".png");
+    }
   }
   void cleanupTestCase() {
     backend->close();
