@@ -7,13 +7,19 @@ class Backend;
 class Providers : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantList rows READ rows NOTIFY changed)
+  Q_PROPERTY(QVariantList packages READ packages NOTIFY changed)
+  Q_PROPERTY(QVariantMap importError READ importError NOTIFY changed)
   Q_PROPERTY(QString pythonExecutable READ pythonExecutable NOTIFY changed)
 public:
   explicit Providers(Backend *backend);
   QVariantList rows() const;
+  QVariantList packages() const;
+  QVariantMap importError() const { return m_importError; }
   QString pythonExecutable() const;
   QString resolvePython() const;
   Q_INVOKABLE bool importZip(QString url);
+  Q_INVOKABLE bool addAccount(QString plugin, QString version);
+  Q_INVOKABLE bool uninstall(QString plugin, QString version);
   Q_INVOKABLE void login(QString id, QString raw);
   Q_INVOKABLE void refreshModels(QString id);
   Q_INVOKABLE QString configJson(QString id) const;
@@ -31,6 +37,7 @@ signals:
 private:
   Backend *b;
   QSet<QString> busy;
+  QVariantMap m_importError;
   QHash<QString, QString> statuses;
   QHash<QString, QProcess *> workers;
   QVariantMap manifest(QVariantMap provider) const;

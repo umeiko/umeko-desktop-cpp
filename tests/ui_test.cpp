@@ -65,7 +65,8 @@ class NativeUiTests : public QObject {
                               : messages.last().toMap()["text"].toString();
   }
   bool package(QString path, bool malicious = false, bool updated = false,
-               QString plugin = "example-echo", QString version = "0.1.0") {
+               QString plugin = "example-echo", QString version = "0.1.0",
+               QString prefix = {}) {
     mz_zip_archive zip{};
     if (!mz_zip_writer_init_file(&zip, path.toUtf8().constData(), 0))
       return false;
@@ -91,13 +92,19 @@ class NativeUiTests : public QObject {
           auto manifest = QJsonDocument::fromJson(raw).object();
           manifest["id"] = plugin;
           manifest["version"] = version;
+          if (!prefix.isEmpty()) {
+            manifest["entrypoint"] = "./scripts/provider.py:create_provider";
+            manifest["config"] = "./config.json";
+            manifest["configSchema"] = "./config.schema.json";
+          }
           raw = QJsonDocument(manifest).toJson();
         }
         if (updated && name == "scripts/provider.py")
           raw.replace("self.context.config[\"prefix\"] + content",
                       "\"Reinstalled: \" + content");
-        ok &= mz_zip_writer_add_mem(&zip, name.constData(), raw.constData(),
-                                    raw.size(), MZ_DEFAULT_COMPRESSION);
+        ok &= mz_zip_writer_add_mem(&zip, (prefix.toUtf8() + name).constData(),
+                                    raw.constData(), raw.size(),
+                                    MZ_DEFAULT_COMPRESSION);
       }
     }
     ok &= mz_zip_writer_finalize_archive(&zip);
@@ -885,6 +892,10 @@ Item {
     QVERIFY(QFileInfo::exists(folder + "0.1.0/manifest.json"));
     QVERIFY(!manager->importZip(QUrl::fromLocalFile(updated).toString()));
     manager->remove(second);
+    QVERIFY(QFileInfo::exists(folder + "0.1.0/manifest.json"));
+    QVERIFY(!manager->importZip(QUrl::fromLocalFile(updated).toString()));
+    QVERIFY(manager->addAccount("example-reinstall", "0.1.0"));
+    QVERIFY(manager->uninstall("example-reinstall", "0.1.0"));
     QVERIFY(!QFileInfo::exists(folder + "0.1.0"));
     QVERIFY(QFileInfo::exists(folder + "2.0.0/manifest.json"));
     const auto replacement = install(updated);
@@ -910,6 +921,17 @@ Item {
         rows.removeAt(i);
     backend->store.data["providers"] = rows;
     QVERIFY(backend->store.save());
+    bool listed = false;
+    for (const auto &value : manager->packages()) {
+      const auto p = value.toMap();
+      if (p["id"] == "example-reinstall" && p["version"] == "0.1.0") {
+        listed = true;
+        QCOMPARE(p["accountCount"].toInt(), 0);
+      }
+    }
+    QVERIFY(listed);
+    QVERIFY(!manager->importZip(QUrl::fromLocalFile(archive).toString()));
+    QVERIFY(manager->uninstall("example-reinstall", "0.1.0"));
     const auto recovered = install(archive);
     QVERIFY(!recovered.isEmpty());
     QFile code(folder + "0.1.0/scripts/provider.py");
@@ -918,8 +940,74 @@ Item {
     code.close();
     manager->remove(recovered);
     manager->remove(otherVersion);
+    QVERIFY(manager->uninstall("example-reinstall", "0.1.0"));
+    QVERIFY(manager->uninstall("example-reinstall", "2.0.0"));
     QVERIFY(!QFileInfo::exists(folder + "0.1.0"));
     QVERIFY(!QFileInfo::exists(folder + "2.0.0"));
+  }
+  void providerZipDiagnostics() {
+    auto manager = qobject_cast<Providers *>(backend->providerPlugins());
+    const auto archive = directory.filePath("dot-paths.zip");
+    QVERIFY(
+        package(archive, false, false, "example-dots", "0.1.0", "./provider/"));
+    QVERIFY(manager->importZip(QUrl::fromLocalFile(archive).toString()));
+    QVERIFY(manager->importError().isEmpty());
+    const auto id = manager->rows().last().toMap()["id"].toString();
+    manager->login(id, "{\"username\":\"dot-fixture\"}");
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->rows().last().toMap()["busy"].toBool(),
+                             15000);
+    QVERIFY2(!manager->rows().last().toMap()["models"].toList().isEmpty(),
+             qPrintable(manager->rows().last().toMap()["status"].toString()));
+    QVERIFY(manager->uninstall("example-dots", "0.1.0"));
+    const QList<QPair<QStringList, QString>> cases{
+        {{"./scripts/../bad.py"}, "PARENT_PATH"},
+        {{"/bad.py"}, "ABSOLUTE_PATH"},
+        {{"C:/bad.py"}, "COLON"},
+        {{"scripts\\bad.py"}, "BACKSLASH"},
+        {{"scripts//bad.py"}, "EMPTY_SEGMENT"},
+        {{"CON.txt"}, "RESERVED_NAME"},
+        {{"scripts/a.py", "./scripts/a.py"}, "DUPLICATE_PATH"},
+        {{"scripts", "./scripts/a.py"}, "PATH_TYPE_CONFLICT"},
+        {{"./scripts/link.py"}, "SYMLINK"}};
+    for (const auto &fixture : cases) {
+      mz_zip_archive zip{};
+      QVERIFY(mz_zip_writer_init_file(&zip, archive.toUtf8().constData(), 0));
+      QHash<QByteArray, QByteArray> names;
+      for (const auto &name : fixture.first) {
+        const auto original = name.toUtf8();
+        const auto safe = QByteArray::number(names.size())
+                              .rightJustified(original.size(), 'x');
+        names[safe] = original;
+        // The writer refuses some unsafe paths. Patch same-length names in
+        // the headers afterward to exercise the importer's validation.
+        QVERIFY(mz_zip_writer_add_mem(&zip, safe.constData(), "fixture", 7,
+                                      MZ_DEFAULT_COMPRESSION));
+      }
+      QVERIFY(mz_zip_writer_finalize_archive(&zip));
+      mz_zip_writer_end(&zip);
+      QFile file(archive);
+      QVERIFY(file.open(QIODevice::ReadWrite));
+      auto raw = file.readAll();
+      for (auto it = names.cbegin(); it != names.cend(); ++it)
+        raw.replace(it.key(), it.value());
+      if (fixture.second == "SYMLINK") {
+        const auto central = raw.indexOf(QByteArray("PK\x01\x02", 4));
+        QVERIFY(central >= 0);
+        const quint32 mode = 0120777u << 16;
+        for (int i = 0; i < 4; ++i)
+          raw[central + 38 + i] = char(mode >> (8 * i));
+      }
+      QVERIFY(file.seek(0));
+      QCOMPARE(file.write(raw), raw.size());
+      file.close();
+      QVERIFY(!manager->importZip(QUrl::fromLocalFile(archive).toString()));
+      QCOMPARE(manager->importError()["entry"].toString(),
+               fixture.first.last());
+      QCOMPARE(manager->importError()["rule"].toString(), fixture.second);
+      if (fixture.first.size() > 1)
+        QCOMPARE(manager->importError()["conflict"].toString(),
+                 fixture.first.first());
+    }
   }
   void extensionAndMcpManagement() {
     auto manager = qobject_cast<PiManagement *>(backend->piManagement());

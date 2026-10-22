@@ -3,29 +3,63 @@
 #include <QDesktopServices>
 #include <stdexcept>
 
-static bool portablePath(QString path) {
-  if (path.isEmpty() || path.startsWith('/') || path.contains('\\') ||
-      path.contains(':') || path.contains(QChar(0)))
-    return false;
-  for (auto part : path.split('/'))
-    if (part.isEmpty() || part == "." || part == ".." || part.endsWith('.') ||
-        part.endsWith(' ') ||
-        QRegularExpression("^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\\..*)?$",
+class PackagePathError : public std::runtime_error {
+public:
+  QVariantMap details;
+  PackagePathError(QString entry, QString rule, QString detail,
+                   QString conflict = {})
+      : std::runtime_error(detail.toStdString()),
+        details{{"entry", entry},
+                {"rule", rule},
+                {"detail", detail},
+                {"conflict", conflict},
+                {"message", detail}} {}
+};
+static QString portablePath(QString path, bool directory = false) {
+  auto fail = [&](QString rule, QString detail) {
+    throw PackagePathError(path, rule, detail);
+  };
+  if (path.contains(QChar(0)))
+    fail("NUL_BYTE", "路径包含空字符");
+  if (path.startsWith('/') || path.startsWith('\\'))
+    fail("ABSOLUTE_PATH", "不允许绝对路径或网络共享路径");
+  if (path.contains('\\'))
+    fail("BACKSLASH", "ZIP 路径请使用正斜杠 /，不要使用反斜杠");
+  if (path.contains(':'))
+    fail("COLON", "路径不能包含冒号、盘符或文件流名称");
+  auto value = path;
+  if (directory && value.endsWith('/'))
+    value.chop(1);
+  QStringList normalized;
+  for (const auto &part : value.split('/')) {
+    if (part == "..")
+      fail("PARENT_PATH", "路径包含上级目录段 ..，可能逃出插件目录");
+    if (part.isEmpty())
+      fail("EMPTY_SEGMENT", "路径包含空目录段或连续的斜杠");
+    if (part == ".")
+      continue;
+    if (part.endsWith('.') || part.endsWith(' '))
+      fail("TRAILING_DOT_SPACE", "文件或目录名不能以点或空格结尾");
+    if (QRegularExpression("^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\\..*)?$",
                            QRegularExpression::CaseInsensitiveOption)
             .match(part)
             .hasMatch())
-      return false;
-  return true;
-}
-static bool referencesPackage(QVariantList providers, QString plugin,
-                              QString version) {
-  for (const auto &value : providers) {
-    const auto p = value.toMap();
-    if (p["api"] == "plugin" && p["pluginId"] == plugin &&
-        p["pluginVersion"] == version)
-      return true;
+      fail("RESERVED_NAME", "路径包含 Windows 保留名称");
+    normalized << part;
   }
-  return false;
+  if (normalized.isEmpty() && !directory)
+    fail("EMPTY_PATH", "文件路径不能为空");
+  return normalized.join('/');
+}
+static QVariantMap newAccount(QVariantMap manifest) {
+  return {{"id", U::uuid()},
+          {"api", "plugin"},
+          {"name", manifest["name"]},
+          {"pluginId", manifest["id"]},
+          {"pluginVersion", manifest["version"]},
+          {"baseUrl", ""},
+          {"hasKey", false},
+          {"models", QVariantList{}}};
 }
 static QString retirePackage(QString root, QString path) {
   if (!QFileInfo::exists(path))
@@ -144,7 +178,62 @@ QVariantList Providers::rows() const {
   }
   return out;
 }
+QVariantList Providers::packages() const {
+  QVariantList out;
+  const auto base = b->store.directory + "/provider-plugins/packages";
+  for (const auto &plugin : QDir(base).entryInfoList(
+           QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks)) {
+    for (const auto &version :
+         QDir(plugin.absoluteFilePath())
+             .entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot |
+                            QDir::NoSymLinks)) {
+      QVariantMap record{{"pluginId", plugin.fileName()},
+                         {"pluginVersion", version.fileName()}};
+      if (packageDir(record).isEmpty())
+        continue;
+      auto m = manifest(record);
+      int count = 0;
+      bool active = false;
+      for (const auto &value : b->store.data["providers"].toList()) {
+        const auto account = value.toMap();
+        if (account["api"] == "plugin" &&
+            account["pluginId"] == record["pluginId"] &&
+            account["pluginVersion"] == record["pluginVersion"]) {
+          ++count;
+          active |= busy.contains(account["id"].toString()) ||
+                    b->modelsBusy(account["id"].toString()) ||
+                    !workers.isEmpty();
+        }
+      }
+      out << QVariantMap{{"id", plugin.fileName()},
+                         {"version", version.fileName()},
+                         {"name", m.value("name", plugin.fileName())},
+                         {"accountCount", count},
+                         {"busy", active},
+                         {"valid", !m.isEmpty()}};
+    }
+  }
+  return out;
+}
+bool Providers::addAccount(QString plugin, QString version) {
+  const auto m = manifest({{"pluginId", plugin}, {"pluginVersion", version}});
+  if (m["id"] != plugin || m["version"] != version)
+    return false;
+  const auto previous = b->store.data["providers"].toList();
+  auto rows = previous;
+  rows << newAccount(m);
+  b->store.data["providers"] = rows;
+  if (!b->store.save()) {
+    b->store.data["providers"] = previous;
+    emit b->toast("供应商配置保存失败");
+    return false;
+  }
+  b->notify();
+  emit changed();
+  return true;
+}
 bool Providers::importZip(QString url) {
+  m_importError.clear();
   try {
     auto path = U::localPath(url);
     if (!QFileInfo(path).isFile() ||
@@ -162,25 +251,49 @@ bool Providers::importZip(QString url) {
     if (count > 512)
       throw std::runtime_error("供应商包最多包含 512 个文件");
     QHash<QString, QByteArray> files;
-    QSet<QString> seen;
+    QHash<QString, QPair<QString, bool>> seen;
+    QHash<QString, QString> originals;
     quint64 total = 0;
     QStringList manifests;
     for (mz_uint i = 0; i < count; ++i) {
       mz_zip_archive_file_stat info{};
       if (!mz_zip_reader_file_stat(&zip, i, &info))
         throw std::runtime_error("ZIP 索引无效");
-      auto name = QString::fromUtf8(info.m_filename);
-      bool directory = name.endsWith('/');
-      if (directory)
-        name.chop(1);
-      if (!portablePath(name) ||
-          ((info.m_external_attr >> 16) & 0170000) == 0120000)
-        throw std::runtime_error("供应商包包含不安全的路径或链接");
+      const auto length = mz_zip_reader_get_filename(&zip, i, nullptr, 0);
+      QByteArray filename(length, '\0');
+      if (!length ||
+          !mz_zip_reader_get_filename(&zip, i, filename.data(), length))
+        throw std::runtime_error("ZIP 索引无效");
+      const auto original = QString::fromUtf8(filename.constData(), length - 1);
+      const bool directory = original.endsWith('/');
+      auto name = portablePath(original, directory);
+      const auto type = (info.m_external_attr >> 16) & 0170000;
+      if (type == 0120000)
+        throw PackagePathError(original, "SYMLINK",
+                               "不支持符号链接，请打包实际文件");
+      if (type && type != 0100000 && type != 0040000)
+        throw PackagePathError(original, "FILE_TYPE",
+                               "不支持设备、管道等特殊文件");
+      if (name.isEmpty())
+        continue;
+      const auto key = name.toCaseFolded();
+      if (seen.contains(key)) {
+        if (directory && seen[key].second)
+          continue;
+        throw PackagePathError(original, "DUPLICATE_PATH",
+                               "规范化后存在重复或大小写冲突的路径",
+                               seen[key].first);
+      }
+      for (auto it = seen.cbegin(); it != seen.cend(); ++it)
+        if ((key.startsWith(it.key() + "/") && !it.value().second) ||
+            (it.key().startsWith(key + "/") && !directory))
+          throw PackagePathError(original, "PATH_TYPE_CONFLICT",
+                                 "同一路径同时被用作文件和目录",
+                                 it.value().first);
+      seen.insert(key, {original, directory});
       if (directory)
         continue;
-      if (seen.contains(name.toCaseFolded()))
-        throw std::runtime_error("供应商包包含重复路径");
-      seen.insert(name.toCaseFolded());
+      originals[name] = original;
       total += info.m_uncomp_size;
       if (total > 20 * 1024 * 1024)
         throw std::runtime_error("供应商包解压大小超过 20 MB");
@@ -188,7 +301,7 @@ bool Providers::importZip(QString url) {
       if (!mz_zip_reader_extract_to_mem(&zip, i, bytes.data(), bytes.size(), 0))
         throw std::runtime_error("ZIP 数据校验失败");
       files[name] = bytes;
-      if (name.endsWith("manifest.json"))
+      if (name.section('/', -1) == "manifest.json")
         manifests << name;
     }
     QString prefix;
@@ -200,7 +313,8 @@ bool Providers::importZip(QString url) {
     QHash<QString, QByteArray> entries;
     for (auto it = files.begin(); it != files.end(); ++it) {
       if (!it.key().startsWith(prefix))
-        throw std::runtime_error("包目录外存在其他文件");
+        throw PackagePathError(originals[it.key()], "OUTSIDE_PROVIDER_FOLDER",
+                               "文件位于插件根目录之外");
       entries[it.key().mid(prefix.size())] = it.value();
     }
     auto m = QJsonDocument::fromJson(entries["manifest.json"])
@@ -218,8 +332,9 @@ bool Providers::importZip(QString url) {
       throw std::runtime_error(
           "manifest.json 缺少有效的 API 版本、ID、名称或版本");
     auto entry = m["entrypoint"].toString().split(':');
-    if (entry.size() != 2 || !portablePath(entry[0]) ||
-        !entry[0].endsWith(".py") ||
+    if (entry.size() == 2)
+      entry[0] = portablePath(entry[0]);
+    if (entry.size() != 2 || !entry[0].endsWith(".py") ||
         !QRegularExpression("^[A-Za-z_]\\w*$").match(entry[1]).hasMatch() ||
         !entries.contains(entry[0]))
       throw std::runtime_error("供应商入口无效");
@@ -239,8 +354,9 @@ bool Providers::importZip(QString url) {
     }
     auto configName = m.value("config", "config.json").toString(),
          schemaName = m.value("configSchema", "config.schema.json").toString();
-    if (!portablePath(configName) || !portablePath(schemaName) ||
-        !entries.contains(configName) || !entries.contains(schemaName))
+    configName = portablePath(configName);
+    schemaName = portablePath(schemaName);
+    if (!entries.contains(configName) || !entries.contains(schemaName))
       throw std::runtime_error("供应商配置文件缺失");
     auto config = QJsonDocument::fromJson(entries[configName]).toVariant();
     auto schema =
@@ -250,13 +366,13 @@ bool Providers::importZip(QString url) {
                        plugin + "/" + version;
     const auto providerRoot = b->store.directory + "/provider-plugins";
     const auto previous = b->store.data["providers"].toList();
-    const bool referenced = referencesPackage(previous, plugin, version);
     bool exists = QFileInfo(destination).isDir();
-    if (exists && referenced) {
+    if (exists) {
       QHash<QString, QString> existing;
-      QDirIterator it(destination, QDir::Files, QDirIterator::Subdirectories);
-      while (it.hasNext()) {
-        QFile file(it.next());
+      QDirIterator installedFiles(destination, QDir::Files,
+                                  QDirIterator::Subdirectories);
+      while (installedFiles.hasNext()) {
+        QFile file(installedFiles.next());
         auto name = QDir(destination).relativeFilePath(file.fileName());
         if (name.contains("__pycache__"))
           continue;
@@ -264,13 +380,15 @@ bool Providers::importZip(QString url) {
           existing[name] = U::sha(file.readAll());
       }
       if (existing.size() != entries.size())
-        throw std::runtime_error("该版本仍被账号使用，包内容不同；请升级插件版本号或移除所有相关账号");
+        throw std::runtime_error(
+            "该插件版本已安装但内容不同；请先卸载插件，再安装修正版");
       for (auto it = entries.begin(); it != entries.end(); ++it)
         if (existing[it.key()] != U::sha(it.value()))
-          throw std::runtime_error("该版本仍被账号使用，包内容不同；请升级插件版本号或移除所有相关账号");
+          throw std::runtime_error(
+              "该插件版本已安装但内容不同；请先卸载插件，再安装修正版");
     }
-    const bool install = !exists || !referenced;
-    QString staging, retired;
+    const bool install = !exists;
+    QString staging;
     auto cleanup = qScopeGuard(
         [&] { cleanPackageTemporary(providerRoot, staging, "staging"); });
     if (install) {
@@ -286,16 +404,11 @@ bool Providers::importZip(QString url) {
     }
     try {
       if (install) {
-        if (exists)
-          retired = retirePackage(providerRoot, destination);
         if (!QDir().mkpath(QFileInfo(destination).absolutePath()) ||
             !QDir().rename(staging, destination))
           throw std::runtime_error("无法安装供应商包");
       }
-      QVariantMap record{
-          {"id", U::uuid()},    {"api", "plugin"},          {"name", m["name"]},
-          {"pluginId", plugin}, {"pluginVersion", version}, {"baseUrl", ""},
-          {"hasKey", false},    {"models", QVariantList{}}};
+      auto record = newAccount(m);
       auto providers = previous;
       providers << record;
       b->store.data["providers"] = providers;
@@ -306,19 +419,20 @@ bool Providers::importZip(QString url) {
       if (install && QFileInfo::exists(destination) &&
           !QFileInfo::exists(staging))
         QDir().rename(destination, staging);
-      if (!retired.isEmpty())
-        QDir().rename(retired, destination);
       throw;
     }
-    cleanPackageTemporary(providerRoot, retired, "retired");
     b->notify();
     emit changed();
     emit b->toast("供应商已导入，请在本页登录并刷新模型");
     return true;
+  } catch (const PackagePathError &error) {
+    m_importError = error.details;
   } catch (const std::exception &error) {
-    emit b->toast(QString::fromUtf8(error.what()));
-    return false;
+    m_importError = {{"message", QString::fromUtf8(error.what())}};
   }
+  emit changed();
+  emit b->toast("供应商导入失败，请查看错误详情");
+  return false;
 }
 QString Providers::configJson(QString id) const {
   auto p = b->provider(id), m = manifest(p);
@@ -746,31 +860,68 @@ void Providers::remove(QString id) {
   }
   b->store.setSecret("account:" + id, {});
   statuses.remove(id);
-  if (!referencesPackage(rows, provider["pluginId"].toString(),
-                         provider["pluginVersion"].toString())) {
-    try {
-      const auto path = packageDir(provider);
-      if (!path.isEmpty())
-        cleanPackageTemporary(
-            b->store.directory + "/provider-plugins",
-            retirePackage(b->store.directory + "/provider-plugins", path),
-            "retired");
-    } catch (const std::exception &error) {
-      emit b->toast(QString::fromUtf8(error.what()));
-    }
-  }
   b->invalidate();
   b->notify();
   emit changed();
 }
+bool Providers::uninstall(QString plugin, QString version) {
+  const auto path =
+      packageDir({{"pluginId", plugin}, {"pluginVersion", version}});
+  if (path.isEmpty())
+    return false;
+  const auto previous = b->store.data["providers"].toList();
+  QVariantList rows;
+  QStringList removed;
+  for (const auto &value : previous) {
+    const auto p = value.toMap();
+    const auto id = p["id"].toString();
+    if (p["api"] == "plugin" && p["pluginId"] == plugin &&
+        p["pluginVersion"] == version) {
+      if (b->modelsBusy(id) || busy.contains(id)) {
+        emit b->toast("请等待供应商请求结束后移除");
+        return false;
+      }
+      removed << id;
+    } else
+      rows << value;
+  }
+  if (!workers.isEmpty()) {
+    emit b->toast("请等待供应商请求结束后移除");
+    return false;
+  }
+  const auto root = b->store.directory + "/provider-plugins";
+  try {
+    const auto retired = retirePackage(root, path);
+    b->store.data["providers"] = rows;
+    if (!b->store.save()) {
+      b->store.data["providers"] = previous;
+      if (!retired.isEmpty())
+        QDir().rename(retired, path);
+      throw std::runtime_error("供应商配置保存失败，未卸载");
+    }
+    for (const auto &id : removed) {
+      b->store.setSecret("account:" + id, {});
+      statuses.remove(id);
+    }
+    cleanPackageTemporary(root, retired, "retired");
+    b->invalidate();
+    b->notify();
+    emit changed();
+    emit b->toast("插件已卸载，可以重新安装");
+    return true;
+  } catch (const std::exception &error) {
+    emit b->toast(QString::fromUtf8(error.what()));
+    return false;
+  }
+}
 QString Providers::resourceFile(QString kind) const {
   return QUrl::fromLocalFile(QDir::homePath() + "/" +
-                             (kind == "sdk" ? "umeko-provider-sdk-0.2.0.zip"
+                             (kind == "sdk" ? "umeko-provider-sdk-0.2.1.zip"
                                             : "develop-umeko-provider.zip"))
       .toString();
 }
 bool Providers::exportResource(QString kind, QString url) {
-  auto name = kind == "sdk" ? "umeko-provider-sdk-0.2.0.zip"
+  auto name = kind == "sdk" ? "umeko-provider-sdk-0.2.1.zip"
                             : "develop-umeko-provider.zip";
   QFile source(b->root + "/provider-resources/" + name);
   if (!source.exists())
