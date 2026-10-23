@@ -310,6 +310,9 @@ public:
   Q_INVOKABLE void openChatDirectory();
   Q_INVOKABLE void openChatboxPath(QString path, bool reveal);
   Q_INVOKABLE void copyChatboxFile(QString path);
+  Q_INVOKABLE QVariantMap chatboxFileInfo(QString path);
+  Q_INVOKABLE void attachChatboxFile(QString path);
+  Q_INVOKABLE void activateChatWindow();
   Q_INVOKABLE void toggleArchived();
   Q_INVOKABLE void togglePinned(QString kind, QString id);
   Q_INVOKABLE void archiveSession(QString id, bool archived);

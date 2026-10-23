@@ -33,7 +33,7 @@ Pi web extensions can access the network. Configure company npm mirrors, an opti
 3. Open `UmekoCpp.exe` on Windows, `UmekoCpp.app` on macOS, or `./UmekoCpp` on Linux.
 4. Open **Settings → Accounts & Providers**, add an OpenAI-compatible or Anthropic-compatible provider, and choose a model.
 
-Choose `v0.3.6` for bundled Python or `v0.3.6-minimal` for a smaller download. Minimal releases are marked as prereleases so the update checker continues to recommend the standard edition. **Settings → About** shows the actual compiler and version used for your platform.
+Choose `v0.3.7` for bundled Python or `v0.3.7-minimal` for a smaller download. Minimal releases are marked as prereleases so the update checker continues to recommend the standard edition. **Settings → About** shows the actual compiler and version used for your platform.
 
 | Platform | Release | Requirements |
 | --- | --- | --- |
@@ -56,6 +56,8 @@ These minimum OS versions follow the [Qt 6.10 platform requirements](https://doc
 | API proxy | OpenAI / Anthropic routes, optional LAN access, model aliases, named API keys, one-time key display, revocation and activity |
 | Desktop | Resizable window and sidebar, persisted themes, provider ZIP drag-and-drop, project folder reveal, About and release checks |
 | Personality | All twelve portraits, full chat watermark, pixel reply marker, springy welcome mascot, drag/hold/tap surprises and continuous PID tab animation |
+
+Drag files anywhere in the chat to attach them and focus the input. Image previews support wheel zoom, drag to pan and click to close; right-click any attachment to copy, reveal or attach it again. On wide windows, hover either blank side margin to reveal a Yanami control and independently expand or collapse that side. Explicit output-length limits automatically continue up to five times, preserving completed tools and continuous code blocks.
 
 <img src="docs/screenshots/providers.png" width="100%" alt="Provider settings and Python runtime selection" />
 

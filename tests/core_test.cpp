@@ -116,6 +116,30 @@ private slots:
     QCOMPARE(m.rows.last().toMap()["text"].toString(),
              QString("Streamed update"));
   }
+  void lengthContinuations() {
+    const QVariantList messages{
+        QVariantMap{{"role", "assistant"},
+                    {"text", "Inspect"},
+                    {"tools", QVariantList{QVariantMap{{"id", "one"}}}}},
+        QVariantMap{{"role", "assistant"},
+                    {"thinking", "plan"},
+                    {"text", "```rust\nfn ma"},
+                    {"stopReason", "length"}},
+        QVariantMap{{"role", "assistant"},
+                    {"thinking", "check"},
+                    {"text", "in() {}\n```"},
+                    {"stopReason", "stop"}}};
+    ChatModel model;
+    model.update(messages);
+    QCOMPARE(model.rows.size(), 1);
+    const auto row = model.rows.last().toMap();
+    QCOMPARE(row["text"].toString(), QString("```rust\nfn main() {}\n```"));
+    const auto activity = row["activity"].toList();
+    QCOMPARE(activity.size(), 4);
+    QCOMPARE(activity[1].toMap()["kind"].toString(), QString("tools"));
+    QCOMPARE(activity[2].toMap()["text"].toString(), QString("plancheck"));
+    QCOMPARE(activity[3].toMap()["text"], row["text"]);
+  }
   void questionNavigationIndex() {
     ChatModel model;
     QSignalSpy changed(&model, &ChatModel::questionsChanged);

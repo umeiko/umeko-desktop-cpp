@@ -3,7 +3,11 @@
 #include "syntaxhighlighter.hpp"
 #include "update_network_fixture.hpp"
 #include <QDesktopServices>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QQuickStyle>
+#include <QWheelEvent>
 #include <QtTest>
 
 class NativeUiTests : public QObject {
@@ -50,6 +54,17 @@ class NativeUiTests : public QObject {
         ->mapToScene(QPointF(x < 0 ? item->width() / 2 : x,
                              y < 0 ? item->height() / 2 : y))
         .toPoint();
+  }
+  void movePointer(QPoint position) {
+#ifdef Q_OS_MACOS
+    QCursor::setPos(window->mapToGlobal(position));
+    QTest::qWait(80);
+#endif
+    // QWindow QtTest moves do not synthesize the preceding enter event,
+    // including on the offscreen platform used by Windows/Linux CI.
+    QEnterEvent enter(position, position, window->mapToGlobal(position));
+    QCoreApplication::sendEvent(window, &enter);
+    QTest::mouseMove(window, position);
   }
   void click(QString name) {
     auto item = find(name);
@@ -327,6 +342,73 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(qAbs(mascot->property("offsetX").toDouble()) < 0.5,
                              4000);
   }
+  void chatWidthControls() {
+    const auto previousSize = window->size();
+    const auto cleanup = qScopeGuard([this, previousSize] {
+      find("chatWidthControls")->setProperty("expandedLeft", false);
+      find("chatWidthControls")->setProperty("expandedRight", false);
+      window->resize(previousSize);
+      QTest::qWait(250);
+    });
+    window->setProperty("page", "chat");
+    window->resize(1700, 920);
+    QTest::qWait(250);
+    auto controls = find("chatWidthControls");
+    auto composer = find("composer");
+    QVERIFY(controls && composer);
+    QVERIFY(controls->property("expandable").toBool());
+    QCOMPARE(composer->width(), qreal(850));
+    movePointer(QPoint(window->width() / 2, 130));
+    QTest::qWait(250);
+    QCOMPARE(find("expandChatLeft")->opacity(), qreal(0));
+    QCOMPARE(find("expandChatRight")->opacity(), qreal(0));
+    const auto clickEdge = [this](const QString &name) {
+      auto item = find(name);
+      movePointer(point(item));
+      QTRY_VERIFY_WITH_TIMEOUT(item->opacity() > 0.95, 1000);
+      click(name);
+    };
+    auto leftEdge = find("expandChatLeft");
+    leftEdge->forceActiveFocus(Qt::TabFocusReason);
+    movePointer(point(leftEdge));
+    QTRY_VERIFY_WITH_TIMEOUT(leftEdge->opacity() > 0.95, 1000);
+    movePointer(point(find("promptInput")));
+    QTRY_VERIFY_WITH_TIMEOUT(leftEdge->opacity() < 0.01, 1000);
+    controls->setEnabled(false);
+    movePointer(QPoint(120, 120));
+    controls->setEnabled(true);
+    QTRY_VERIFY_WITH_TIMEOUT(find("expandChatLeft")->opacity() < 0.01 &&
+                                find("expandChatRight")->opacity() < 0.01,
+                            1000);
+    const qreal left = composer->x(), right = left + composer->width();
+    clickEdge("expandChatLeft");
+    QTest::qWait(150);
+    QVERIFY(composer->x() < left - 60);
+    QVERIFY(qAbs(composer->x() + composer->width() - right) < 1);
+    QCOMPARE(find("expandChatLeft")->property("text").toString(),
+             QString(QChar(0x25b6)));
+    clickEdge("expandChatRight");
+    QTest::qWait(150);
+    QVERIFY(composer->x() + composer->width() > right + 60);
+    QVERIFY(qAbs(find("conversation")->width() - composer->width() + 20) < 1);
+    clickEdge("expandChatLeft");
+    QTest::qWait(150);
+    QVERIFY(qAbs(composer->x() - left) < 1);
+    window->resize(1060, 760);
+    QTest::qWait(250);
+    QVERIFY(!controls->property("expandable").toBool());
+    QVERIFY(!find("expandChatLeft")->isVisible());
+    QVERIFY(!find("expandChatRight")->isVisible());
+    QVERIFY(controls->property("expandedRight").toBool());
+    QVERIFY(composer->x() >= 40);
+    window->resize(1700, 920);
+    QTest::qWait(250);
+    QVERIFY(find("expandChatRight")->isVisible());
+    QVERIFY(composer->width() > 850);
+    clickEdge("expandChatRight");
+    QTest::qWait(150);
+    QCOMPARE(composer->width(), qreal(850));
+  }
   void sidebarAndPid() {
     backend->saveSidebarLayout(310, false);
     QCOMPARE(backend->sidebarWidth(), 310);
@@ -600,6 +682,7 @@ Item {
   }
   void recordOpenedUrl(QUrl url) { openedUrls << url; }
   void chatboxDelivery() {
+    configureAPI();
     backend->newSession();
     mediaImage = directory.filePath("preview # image.png");
     mediaReport = directory.filePath("report.txt");
@@ -625,7 +708,7 @@ Item {
     QVERIFY(find("chatboxCard_media-delivery_1"));
     QTest::qWait(350); // Allow the tail-follow viewport to finish positioning.
     auto fileHeader = find("openChatbox_media-delivery_1");
-    QTest::mouseMove(window, point(fileHeader, 50, 17));
+    movePointer(point(fileHeader, 50, 17));
     QTRY_VERIFY_WITH_TIMEOUT(
         fileHeader->property("interactionHovered").toBool(), 1000);
     QCOMPARE(find("chatPointerArea")->property("cursorShape").toInt(),
@@ -636,20 +719,41 @@ Item {
         2000);
     QVERIFY(find("hoverTipContent_chatboxTip_media-delivery_1")->width() <=
             336);
-    click("toggleChatbox_media-delivery_1");
-    auto fileMenu = find("revealChatbox_media-delivery_1")->parent();
-    QVERIFY(fileMenu->property("visible").toBool());
-    click("toggleChatbox_media-delivery_1");
-    QVERIFY(!fileMenu->property("visible").toBool());
+    QVERIFY(!find("toggleChatbox_media-delivery_1"));
+    click("previewChatbox_media-delivery_0");
+    auto viewer = window->findChild<QObject *>("imagePreview");
+    QVERIFY(viewer && viewer->property("visible").toBool());
+    const QPoint center(window->width() / 2, window->height() / 2);
+    QWheelEvent wheel(QPointF(center), QPointF(window->mapToGlobal(center)),
+                      QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                      Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(window, &wheel);
+    QVERIFY(viewer->property("zoom").toDouble() > 1);
+    QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, center);
+    QTest::mouseMove(window, center + QPoint(70, 45), 30);
+    QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier,
+                        center + QPoint(70, 45));
+    QVERIFY(viewer->property("visible").toBool());
+    QVERIFY(viewer->property("panX").toDouble() > 40);
+    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, center);
+    QTRY_VERIFY(!viewer->property("visible").toBool());
     QDesktopServices::setUrlHandler("file", this, "recordOpenedUrl");
     click("openChatbox_media-delivery_1");
     QVERIFY(!openedUrls.isEmpty());
     QCOMPARE(U::cleanPath(openedUrls.last().toLocalFile()),
              U::cleanPath(mediaReport));
-    QCOMPARE(find("chatboxCard_media-delivery_1")->height(), qreal(34));
+    QCOMPARE(find("chatboxCard_media-delivery_1")->height(), qreal(30));
     QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier,
                       point(find("openChatbox_media-delivery_1")));
     QTest::qWait(150);
+    for (const auto &prefix : {"attachChatbox_", "copyChatboxFile_",
+                               "copyChatbox_", "revealChatbox_"}) {
+      const auto name = QString(prefix) + "media-delivery_1";
+      auto action = find(name), label = find(name + "Label");
+      QVERIFY(action && label);
+      QVERIFY(!action->property("glyph").toString().isEmpty());
+      QVERIFY(label->width() >= label->implicitWidth() - 1);
+    }
     click("copyChatboxFile_media-delivery_1");
     QVERIFY(QGuiApplication::clipboard()->mimeData()->hasUrls());
     QCOMPARE(U::cleanPath(QGuiApplication::clipboard()
@@ -664,6 +768,33 @@ Item {
     click("copyChatbox_media-delivery_1");
     QCOMPARE(U::cleanPath(QGuiApplication::clipboard()->text()),
              U::cleanPath(mediaReport));
+    QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier,
+                      point(find("openChatbox_media-delivery_1")));
+    QTest::qWait(150);
+    click("attachChatbox_media-delivery_1");
+    QTest::qWait(120);
+    QVERIFY(!backend->attachments().isEmpty());
+    QVERIFY(find("promptInput")->hasActiveFocus());
+    for (const auto &item : backend->attachments())
+      backend->removeAttachment(item.toMap()["id"].toString());
+    QMimeData dropMime;
+    dropMime.setUrls({QUrl::fromLocalFile(mediaReport)});
+    const QPoint dropPoint(window->width() - 90, 165);
+    QDragEnterEvent enter(dropPoint, Qt::CopyAction, &dropMime, Qt::LeftButton,
+                          Qt::NoModifier);
+    QDragMoveEvent move(dropPoint, Qt::CopyAction, &dropMime, Qt::LeftButton,
+                        Qt::NoModifier);
+    QCoreApplication::sendEvent(window, &enter);
+    QCoreApplication::sendEvent(window, &move);
+    QVERIFY(find("chatFileDropArea")->property("containsDrag").toBool());
+    QDropEvent dropped(QPointF(dropPoint), Qt::CopyAction, &dropMime,
+                       Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(window, &dropped);
+    QTest::qWait(120);
+    QVERIFY(dropped.isAccepted());
+    QVERIFY(find("promptInput")->hasActiveFocus());
+    for (const auto &item : backend->attachments())
+      backend->removeAttachment(item.toMap()["id"].toString());
     QVERIFY(window->grabWindow().save(root +
                                       "/build/screenshots/chatbox-media.png"));
     const auto id = backend->activeSession();
@@ -754,20 +885,6 @@ Item {
     QTest::qWait(200);
     auto actions = find("messageActions_1");
     QVERIFY(actions);
-    auto movePointer = [this](QPoint position) {
-#ifdef Q_OS_MACOS
-      // Cocoa also emits native tracking events from the system cursor. Keep it
-      // in sync with QtTest so a native leave cannot undo the synthetic hover.
-      QCursor::setPos(window->mapToGlobal(position));
-      QTest::qWait(80);
-      // QtTest's QWindow mouseMove bypasses the platform plugin and does not
-      // synthesize a window-enter event. Supply that part of the input sequence
-      // after native tracking has settled on headless Cocoa runners.
-      QEnterEvent enter(position, position, window->mapToGlobal(position));
-      QCoreApplication::sendEvent(window, &enter);
-#endif
-      QTest::mouseMove(window, position);
-    };
     movePointer(QPoint(40, 40));
     QTest::qWait(80);
     QCOMPARE(actions->property("opacity").toDouble(), 0.0);
@@ -939,11 +1056,11 @@ Item {
       QTRY_VERIFY_WITH_TIMEOUT(avatar->property("loaded").toBool(), 1000);
     }
     QCOMPARE(variants, QSet<int>({0, 1, 2}));
-    QTest::mouseMove(window, point(view, 40, 40));
+    movePointer(point(view, 40, 40));
     QTest::qWait(300);
     QVERIFY(!nav->property("expanded").toBool());
     QVERIFY(!find("conversationScrollBar")->isVisible());
-    QTest::mouseMove(window, point(nav));
+    movePointer(point(nav));
     QTRY_VERIFY_WITH_TIMEOUT(nav->property("expanded").toBool(), 1000);
     auto listing = find("questionNavigationList");
     QVERIFY(listing);

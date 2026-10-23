@@ -43,15 +43,44 @@ QVariantList ChatModel::project(const QVariantList &messages) {
         activity << QVariantMap{{"kind", "tools"}, {"tools", batch}};
       m["activity"] = activity;
     }
+    const bool continuing = !out.isEmpty() &&
+                            out.last().toMap()["stopReason"] == "length" &&
+                            !m["error"].toBool();
     if (!out.isEmpty() && m["role"] == "assistant" &&
         out.last().toMap()["role"] == "assistant" &&
-        (!out.last().toMap()["tools"].toList().isEmpty() ||
+        (continuing || !out.last().toMap()["tools"].toList().isEmpty() ||
          !m["tools"].toList().isEmpty())) {
       auto group = out.last().toMap();
       if (m.contains("diagnosticId"))
         group["diagnosticId"] = m["diagnosticId"];
       auto activity = group["activity"].toList();
       auto steps = m["activity"].toList();
+      if (continuing) {
+        QVariantList tail, head;
+        const auto prose = [](const QVariant &value) {
+          const auto kind = value.toMap()["kind"].toString();
+          return kind == "thinking" || kind == "text";
+        };
+        while (!activity.isEmpty() && prose(activity.last()))
+          tail.prepend(activity.takeLast());
+        while (!steps.isEmpty() && prose(steps.first()))
+          head.append(steps.takeFirst());
+        tail.append(head);
+        for (const auto kind : {"thinking", "text"}) {
+          QString text;
+          for (const auto &value : tail) {
+            const auto step = value.toMap();
+            if (step["kind"] == kind)
+              text += step["text"].toString();
+          }
+          if (!text.isEmpty()) {
+            QVariantMap step{{"kind", kind}, {"text", text}};
+            if (QString(kind) == "text")
+              step["error"] = false;
+            activity.append(step);
+          }
+        }
+      }
       if (!activity.isEmpty() && !steps.isEmpty() &&
           activity.last().toMap()["kind"] == "tools" &&
           steps.first().toMap()["kind"] == "tools") {
@@ -66,7 +95,8 @@ QVariantList ChatModel::project(const QVariantList &messages) {
       auto tools = group["tools"].toList();
       tools.append(m["tools"].toList());
       group["tools"] = tools;
-      group["text"] = m["text"];
+      group["text"] = (continuing ? group["text"].toString() : QString()) +
+                      m["text"].toString();
       if (m.contains("timestamp"))
         group["timestamp"] = m["timestamp"];
       group["error"] = group["error"].toBool() || m["error"].toBool();

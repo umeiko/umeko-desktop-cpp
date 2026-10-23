@@ -361,6 +361,8 @@ QVariantList U::mediaView(QVariantList items) {
                            qint64(size.width()) * size.height() <= 16000000;
       row["pixelWidth"] = size.width();
       row["pixelHeight"] = size.height();
+      auto format = QString::fromLatin1(reader.format());
+      row["mime"] = "image/" + (format == "jpg" ? QString("jpeg") : format);
       row["preview"] = preview;
       row["previewNote"] =
           preview ? "" : "图片过大或暂不可预览，可打开原文件查看";

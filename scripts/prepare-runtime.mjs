@@ -17,6 +17,16 @@ if (!exists) {
   await writeFile(join(ai, 'models.generated.js'), 'export const MODELS={};export const IMAGE_MODELS={};export const CLASSIFIER_MODELS={};\n');
   await writeFile(join(output, 'manifest.json'), JSON.stringify({ package: '@earendil-works/pi-coding-agent', version: manifest.version, providerCatalog: false, projection: 2, engine: 'full-coding-agent', nativeTools: true }, null, 2));
 }
+// Diagnostic UUIDs can contain status digits such as 503. Keep the report in
+// the displayed error, but exclude its opaque marker from Pi's retry matching.
+const retryPath = join(output, 'node_modules/@earendil-works/pi-ai/dist/utils/retry.js');
+const originalRetry = 'const errorMessage = message.errorMessage;';
+const adaptedRetry = String.raw`const errorMessage = message.errorMessage.replace(/\[Umeko:[a-f0-9-]{36}\]/gi, "[Umeko report]");`;
+const retrySource = await readFile(retryPath, 'utf8');
+if (!retrySource.includes(adaptedRetry)) {
+  if (retrySource.split(originalRetry).length !== 2) throw new Error('Pi retry classifier changed; update the diagnostics adapter');
+  await writeFile(retryPath, retrySource.replace(originalRetry, adaptedRetry));
+}
 for (const name of ['bridge.mjs', 'resources.mjs', 'provider-policy.mjs', 'chatbox.mjs', 'network-retry.mjs']) await cp(join(root, 'runtime', name), join(output, name));
 const factoryBin=join(root,'runtime/releases/coding-1.3.0/bin');
 if(resolve(output)!==resolve(join(root,'runtime/releases/coding-1.3.0'))) {

@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { NETWORK_RETRY, transientFailure, upstreamFailure, retryOmissions } from '../runtime/network-retry.mjs';
+import { isRetryableAssistantError } from '../runtime/releases/coding-1.3.0/node_modules/@earendil-works/pi-ai/dist/compat.js';
+
+test('diagnostic IDs do not act as HTTP status codes', () => {
+  const errorMessage = '400 Provider request failed [Umeko:00000503-0500-4502-8429-000000000504]';
+  const message = {stopReason:'error', errorMessage};
+  assert.equal(isRetryableAssistantError(message), false);
+  assert.equal(message.errorMessage, errorMessage);
+  assert.equal(isRetryableAssistantError({...message, errorMessage:'Network error: ' + errorMessage}), true);
+});
 
 test('five bounded exponential backoffs', () => {
   assert.equal(NETWORK_RETRY.maxRetries, 5);

@@ -5,6 +5,12 @@
 #include <QMimeData>
 #include <QNetworkProxyFactory>
 #include <stdexcept>
+#if defined(Q_OS_WIN)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
     : QObject(parent), store(directory), root(U::cleanPath(resourceRoot)),
@@ -380,6 +386,45 @@ void Backend::openChatboxPath(QString path, bool reveal) {
   }
   if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path)))
     emit toast("无法打开，请检查文件关联");
+}
+QVariantMap Backend::chatboxFileInfo(QString path) {
+  QFileInfo file(path);
+  if (!file.isAbsolute() || !file.exists())
+    return {};
+  QImageReader reader(path);
+  const auto kind = file.isDir()       ? "folder"
+                    : reader.canRead() ? "image"
+                                       : "file";
+  const auto items =
+      U::mediaView({QVariantMap{{"path", path}, {"kind", kind}}});
+  return items.isEmpty() ? QVariantMap{} : items.first().toMap();
+}
+void Backend::attachChatboxFile(QString path) {
+  if (!QFileInfo(path).isAbsolute() || !QFileInfo::exists(path)) {
+    emit toast("文件已移动或不存在");
+    return;
+  }
+  addAttachments(QString::fromUtf8(
+      QJsonDocument(QJsonArray{QUrl::fromLocalFile(path).toString()})
+          .toJson(QJsonDocument::Compact)));
+}
+void Backend::activateChatWindow() {
+  for (auto window : QGuiApplication::topLevelWindows()) {
+    if (window->objectName() != "mainWindow")
+      continue;
+    if (window->visibility() == QWindow::Minimized)
+      window->showNormal();
+    window->raise();
+    window->requestActivate();
+#if defined(Q_OS_WIN)
+    if (QGuiApplication::platformName() == "windows") {
+      const auto handle = reinterpret_cast<HWND>(window->winId());
+      BringWindowToTop(handle);
+      SetForegroundWindow(handle);
+    }
+#endif
+    return;
+  }
 }
 void Backend::copyChatboxFile(QString path) {
   if (!QFileInfo(path).isAbsolute() || !QFileInfo(path).exists()) {
