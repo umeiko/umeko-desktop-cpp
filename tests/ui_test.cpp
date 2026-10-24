@@ -1632,24 +1632,47 @@ Item {
     backend->store.data["providers"] = QVariantList{account("group-a","Provider A","model-a"),account("group-b","Provider B","model-b")};
     auto server = backend->store.data["server"].toMap(); server["lan"] = false; backend->store.data["server"] = server;
     backend->notify(); window->setProperty("page","settings"); window->setProperty("settingsTab",1); QTest::qWait(200);
-    auto revealAndClick = [&](QString name) {
-      auto item = find(name); QVERIFY(item);
-      auto flick = qobject_cast<QQuickItem*>(find("settingsScroll")->property("contentItem").value<QObject*>()); QVERIFY(flick);
-      const auto y = flick->property("contentY").toReal() + item->mapToItem(flick,QPointF()).y() - flick->height()/2;
-      flick->setProperty("contentY",qBound(0.,y,qMax(0.,flick->property("contentHeight").toReal()-flick->height())));
-      QTest::qWait(100); click(name);
+    auto revealAndClick = [&](QString name) -> bool {
+      auto item = find(name);
+      auto scroll = find("settingsScroll");
+      if (!item || !scroll) return false;
+      auto flick = qobject_cast<QQuickItem*>(scroll->property("contentItem").value<QObject*>());
+      if (!flick) return false;
+      // Cocoa can finish polishing the new column after its backend signal.
+      // Check the actual viewport before sending a native mouse event.
+      scroll->forceActiveFocus();
+      QMetaObject::invokeMethod(flick,"cancelFlick");
+      for (int attempt = 0; attempt < 12; ++attempt) {
+        QTest::qWait(100);
+        flick->ensurePolished(); item->ensurePolished();
+        const QPointF center(item->width()/2,item->height()/2);
+        const auto local = item->mapToItem(flick,center);
+        const auto scene = item->mapToScene(center);
+        if (item->isVisible() && flick->contains(local) &&
+            QRectF(0,0,window->width(),window->height()).contains(scene)) {
+          QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,scene.toPoint());
+          QTest::qWait(100);
+          return true;
+        }
+        const auto y = flick->property("contentY").toReal() + local.y() - flick->height()/2;
+        flick->setProperty("contentY",qBound(0.,y,qMax(0.,flick->property("contentHeight").toReal()-flick->height())));
+      }
+      qWarning() << "Could not reveal" << name << "at" << point(item)
+                 << "viewport" << flick->size() << "contentHeight" << flick->property("contentHeight");
+      return false;
     };
     QVERIFY(!find("proxyAddressPicker"));
     QCOMPARE(find("proxyOpenaiBaseUrl")->property("text").toString(),QString("http://127.0.0.1:%1/v1").arg(server["port"].toInt()));
     QVERIFY(!find("mappingModelId_0")); QVERIFY(!find("mappingModelId_1"));
-    revealAndClick("mappingProvider_group-a");
-    QVERIFY(find("mappingModelId_0")->isVisible()); QVERIFY(!find("mappingModelId_1"));
+    QVERIFY(revealAndClick("mappingProvider_group-a"));
+    QTRY_VERIFY(find("mappingModelId_0") && find("mappingModelId_0")->isVisible()); QVERIFY(!find("mappingModelId_1"));
     auto alias = find("mappingAlias_0"); alias->setProperty("text","renamed-a"); QMetaObject::invokeMethod(alias,"textEdited");
-    revealAndClick("backToMappingProviders"); revealAndClick("mappingProvider_group-b");
-    QVERIFY(!find("mappingModelId_0")); QVERIFY(find("mappingModelId_1")->isVisible());
-    revealAndClick("backToMappingProviders"); revealAndClick("mappingProvider_group-a");
+    QVERIFY(revealAndClick("backToMappingProviders")); QVERIFY(revealAndClick("mappingProvider_group-b"));
+    QVERIFY(!find("mappingModelId_0")); QTRY_VERIFY(find("mappingModelId_1") && find("mappingModelId_1")->isVisible());
+    QVERIFY(revealAndClick("backToMappingProviders")); QVERIFY(revealAndClick("mappingProvider_group-a"));
+    QTRY_VERIFY(find("mappingAlias_0"));
     QCOMPARE(find("mappingAlias_0")->property("text").toString(),QString("renamed-a"));
-    revealAndClick("saveMappingsButton");
+    QVERIFY(revealAndClick("saveMappingsButton"));
     const auto saved = backend->store.data["providers"].toList();
     QCOMPARE(saved[0].toMap()["models"].toList()[0].toMap()["alias"].toString(),QString("renamed-a"));
     QCOMPARE(saved[1].toMap()["models"].toList()[0].toMap()["alias"].toString(),QString("model-b"));
@@ -1658,7 +1681,7 @@ Item {
     const auto base = addresses.size() > 1 ? QString("http://%1:%2").arg(addresses[1]).arg(server["port"].toInt()) : QString();
     QCOMPARE(find("proxyAnthropicBaseUrl")->property("text").toString(),base);
     if (!base.isEmpty()) {
-      revealAndClick("copyProxyOpenaiBaseUrl"); QCOMPARE(QGuiApplication::clipboard()->text(),base+"/v1");
+      QVERIFY(revealAndClick("copyProxyOpenaiBaseUrl")); QCOMPARE(QGuiApplication::clipboard()->text(),base+"/v1");
     }
   }
   void proxyLifecycleAndRollback() {

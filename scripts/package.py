@@ -130,10 +130,14 @@ def main():
         selected=next((line.removeprefix('PYTHON_EXECUTABLE:') for line in diagnostics.splitlines() if line.startswith('PYTHON_EXECUTABLE:')), '')
         if not selected or Path(selected).resolve()!=python.resolve():
             raise RuntimeError('Installed app did not automatically select bundled Python')
-        run(python,'-I','-c','import ssl,sqlite3,ctypes,venv,ensurepip; print(ssl.OPENSSL_VERSION)')
-        run(python,'-I','-m','pip','--version')
+        # Isolated mode ignores PYTHONDONTWRITEBYTECODE; keep the sealed
+        # macOS bundle unchanged while importing the bundled standard library.
+        run(python,'-I','-B','-c','import ssl,sqlite3,ctypes,venv,ensurepip; print(ssl.OPENSSL_VERSION)')
+        run(python,'-I','-B','-m','pip','--version')
         # Exercise real SDK login, vendor dependencies and inference in fresh processes.
-        run(python,'-I',ROOT/'tests/worker_test.py')
+        run(python,'-I','-B',ROOT/'tests/worker_test.py')
+    if sys.platform=='darwin':
+        run('codesign','--verify','--deep','--strict',prefix/'UmekoCpp.app')
     output=ROOT/'release-assets';output.mkdir(exist_ok=True)
     stem='UmekoCpp-v'+build_config['version']+('' if bundle_python else '-minimal')+'-'+target
     if sys.platform=='linux':
