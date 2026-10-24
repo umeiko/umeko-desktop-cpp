@@ -1,11 +1,19 @@
 #include "backend.hpp"
 #include "syntaxhighlighter.hpp"
+#include "update.hpp"
+#include "tray.hpp"
+#include "notifications.hpp"
+#include <QApplication>
 #include <QFontDatabase>
 #include <QLibraryInfo>
+#include <QPluginLoader>
 #include <QQuickStyle>
 
-static void inputMethod() {
+static void inputMethod(const char *executable) {
 #ifdef Q_OS_LINUX
+  auto path = QFileInfo(QString::fromLocal8Bit(executable)).absolutePath();
+  const auto plugins = path + "/plugins";
+  QCoreApplication::addLibraryPath(plugins);
   if (qEnvironmentVariableIsSet("UMEKO_QT_IM_MODULE")) {
     qputenv("QT_IM_MODULE", qgetenv("UMEKO_QT_IM_MODULE"));
     return;
@@ -15,18 +23,17 @@ static void inputMethod() {
                qgetenv("XMODIFIERS").contains("fcitx");
   if (!fcitx || (!chosen.isEmpty() && chosen != "fcitx" && chosen != "fcitx5"))
     return;
-  auto plugins =
-      QLibraryInfo::path(QLibraryInfo::PluginsPath) + "/platforminputcontexts";
-  if (!QDir(plugins).entryList({"*fcitx*"}, QDir::Files).isEmpty())
+  auto contexts = plugins + "/platforminputcontexts";
+  if (!QDir(contexts).entryList({"*fcitx*"}, QDir::Files).isEmpty())
     qputenv("QT_IM_MODULE", "fcitx");
-  else if (!QDir(plugins).entryList({"*ibus*"}, QDir::Files).isEmpty())
-    qputenv("QT_IM_MODULE", "ibus");
+#else
+  Q_UNUSED(executable);
 #endif
 }
 int main(int argc, char **argv) {
-  inputMethod();
+  inputMethod(argv[0]);
   QQuickStyle::setStyle("Basic");
-  QGuiApplication app(argc, argv);
+  QApplication app(argc, argv);
   app.setApplicationName("Umeko-Desktop");
   app.setApplicationDisplayName("Umeko-Desktop");
   app.setApplicationVersion(UMEKO_VERSION);
@@ -47,6 +54,7 @@ int main(int argc, char **argv) {
        {"smoke", "Render the actual application and exit"},
        {"snapshot", "Save the real window to a PNG file", "path"},
        {"demo", "Populate isolated screenshot demonstration data"}});
+  parser.addOption({"install-update", "Run the detached update installer", "job"});
   parser.process(app);
   auto root = parser.value("resource-root");
   if (root.isEmpty()) {
@@ -58,7 +66,16 @@ int main(int argc, char **argv) {
 #endif
   }
   root = U::cleanPath(root);
-  app.setWindowIcon(QIcon("qrc:/qt/qml/Umeko/App/app/icons/app.webp"));
+  app.setWindowIcon(QIcon(":/qt/qml/Umeko/App/app/icons/app.webp"));
+  if (parser.isSet("install-update")) {
+    UpdateInstaller installer(parser.value("install-update"), root);
+    QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty("installer", &installer);
+    engine.load(QUrl("qrc:/qt/qml/Umeko/App/app/qml/Installer.qml"));
+    if (engine.rootObjects().isEmpty()) return 1;
+    QTimer::singleShot(0, &installer, &UpdateInstaller::begin);
+    return app.exec();
+  }
   qmlRegisterType<SyntaxHighlighter>("Umeko.Text", 1, 0, "SyntaxHighlighter");
   Backend backend(root, parser.value("data-dir"));
   QQmlApplicationEngine engine;
@@ -85,10 +102,30 @@ int main(int argc, char **argv) {
   }
   auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
   window->setTitle(app.applicationDisplayName());
+  const QIcon trayIcon(":/qt/qml/Umeko/App/app/icons/yanami-pixel.webp");
+  TrayController tray(window, trayIcon);
+  TaskNotifications notifications(window, tray.systemTray());
+  notifications.setLanguage(backend.language());
+  QObject::connect(&backend, &Backend::appearanceChanged, &notifications, [&] {notifications.setLanguage(backend.language());});
+  QObject::connect(&backend, &Backend::taskFinished, &notifications, &TaskNotifications::taskFinished);
+  QObject::connect(&notifications, &TaskNotifications::activated, &backend, [&](const QString &session) {
+    window->setProperty("page", "chat"); backend.openSession(session); tray.restore();
+  });
+  tray.setLanguage(backend.language());
+  QObject::connect(&backend, &Backend::appearanceChanged, &tray, [&] {tray.setLanguage(backend.language());});
+  QObject::connect(&tray, &TrayController::quitRequested, &app, &QCoreApplication::quit);
+  QObject::connect(&tray, &TrayController::notificationRequested, &backend, &Backend::toast);
   diagnostic("QML_READY");
   if (!parser.isSet("smoke"))
     qobject_cast<AppAbout *>(backend.appAbout())->startAutomaticChecks();
   if (parser.isSet("smoke")) {
+#ifdef Q_OS_LINUX
+    QPluginLoader ime(QCoreApplication::applicationDirPath() + "/plugins/platforminputcontexts/libfcitx5platforminputcontextplugin.so");
+    diagnostic("IME_PLUGIN_READY:" + QString::number(ime.load()));
+#else
+    diagnostic("NATIVE_NOTIFICATIONS_READY:" + QString::number(notifications.isNativeReady()));
+#endif
+    diagnostic("TRAY_ICON_READY:" + QString::number(!trayIcon.pixmap(32, 32).isNull()));
     diagnostic("WINDOW_TITLE:" + window->title());
     diagnostic("COMPILER:" + QStringLiteral(UMEKO_COMPILER));
     diagnostic("NODE_EXECUTABLE:" + U::node());

@@ -4,6 +4,7 @@ import argparse, hashlib, json, os, platform, re, shutil, subprocess, sys, tarfi
 from pathlib import Path
 from bundle_python import install_python
 from bundle_node import install_node, node_binary
+from macos_dmg import create_dmg
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -55,7 +56,8 @@ def main():
         found=re.search(r'^Qt6_DIR:PATH=(.+)$',cache,re.M)
         if found:qt_root=str(Path(found.group(1)).parents[2])
     # A fresh staging folder prevents stale DLLs or previous versions entering a release.
-    prefix=Path(tempfile.mkdtemp(prefix='package-'+target+'-',dir=ROOT/'build'))
+    # Qt deployment creates library symlinks; workspaces may live on exFAT.
+    prefix=Path(tempfile.mkdtemp(prefix='umeko-package-'+target+'-'))
     run(args.cmake,'--install',args.build,'--config','Release','--component','Runtime','--prefix',prefix)
     resources=prefix/'UmekoCpp.app/Contents/Resources' if sys.platform=='darwin' else prefix
     resources.mkdir(parents=True,exist_ok=True)
@@ -65,7 +67,7 @@ def main():
         candidates=sorted((Path(installation)/'VC/Redist/MSVC').glob('*/x64/Microsoft.VC143.CRT'))
         if not candidates: raise RuntimeError('App-local MSVC redistributable was not found')
         for dll in candidates[-1].glob('*.dll'):copy(dll,prefix/dll.name)
-    for relative in ['runtime/gateway.mjs','runtime/transport.mjs','runtime/bridge.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/chatbox.mjs','runtime/network-retry.mjs','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime']:
+    for relative in ['runtime/gateway.mjs','runtime/transport.mjs','runtime/openai-responses.mjs','runtime/bridge.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/chatbox.mjs','runtime/update-engine.mjs','runtime/network-retry.mjs','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime']:
         copy(ROOT/relative,resources/relative)
     copy(ROOT/'build/provider-resources',resources/'provider-resources')
     python_distribution=install_python(target,resources/'runtime/python') if bundle_python else None
@@ -104,6 +106,11 @@ def main():
     if result.returncode or not log.exists() or 'QML_READY' not in log.read_text(encoding='utf-8') or 'EXIT:0' not in log.read_text(encoding='utf-8'):
         raise RuntimeError('Packaged application failed ('+str(result.returncode)+'): '+result.stderr.decode('utf-8','replace')+'\n'+(log.read_text(encoding='utf-8') if log.exists() else 'no diagnostics'))
     diagnostics=log.read_text(encoding='utf-8')
+    if 'TRAY_ICON_READY:1' not in diagnostics:
+        raise RuntimeError('Installed Yanami tray avatar could not be decoded')
+    required = 'IME_PLUGIN_READY:1' if sys.platform == 'linux' else 'NATIVE_NOTIFICATIONS_READY:1'
+    if required not in diagnostics:
+        raise RuntimeError('Installed input method or native notification adapter could not be loaded: '+required)
     if 'WINDOW_TITLE:Umeko-Desktop' not in diagnostics or 'COMPILER:'+build_config['compiler'] not in diagnostics:
         raise RuntimeError('Installed title or compiler metadata does not match the build')
     node=node_binary(resources/'runtime/node',target)
@@ -142,7 +149,8 @@ def main():
                 elif file.is_file():stream.write(file,Path('UmekoCpp')/file.relative_to(prefix))
     digest=hashlib.sha256(archive.read_bytes()).hexdigest()
     archive.with_name(archive.name+'.sha256').write_text(digest+'  '+archive.name+'\n',encoding='ascii')
-    (output/(stem+'.json')).write_text(json.dumps({**info,'bytes':archive.stat().st_size,'sha256':digest},indent=2)+'\n',encoding='utf-8')
+    disk_image = {'diskImage': create_dmg(prefix/'UmekoCpp.app', output/(stem+'.dmg'), 'Umeko-Desktop')} if sys.platform == 'darwin' else {}
+    (output/(stem+'.json')).write_text(json.dumps({**info,'bytes':archive.stat().st_size,'sha256':digest,**disk_image},indent=2)+'\n',encoding='utf-8')
     print(json.dumps({'archive':str(archive),'bytes':archive.stat().st_size,'sha256':digest}))
 
 if __name__=='__main__':main()

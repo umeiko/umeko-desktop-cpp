@@ -46,7 +46,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libegl1 libsecret-1-dev gnome-keyring dbus-x11 fonts-noto-cjk patchelf
+          sudo apt-get install -y libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 libxcb1-dev libx11-dev extra-cmake-modules libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libegl1 libsecret-1-dev gnome-keyring dbus-x11 fonts-noto-cjk patchelf
       - name: Install build tools and Qt SDK
         shell: bash
         run: |
@@ -64,7 +64,8 @@ jobs:
           node scripts/prepare-runtime.mjs
           python scripts/fetch-search-tools.py
           python scripts/build-provider-resources.py
-          node --test tests/gateway.test.mjs tests/network_retry_test.mjs
+          node --test tests/update-engine.test.mjs
+          node --test tests/gateway.test.mjs tests/openai-responses.test.mjs tests/network_retry_test.mjs
           python -m unittest discover -s tests -p test_release_retention.py
           python tests/worker_test.py
       - name: Configure and compile C++
@@ -93,6 +94,12 @@ jobs:
         shell: bash
         run: |
           dbus-run-session -- sh -c 'printf "ci-ephemeral-password" | gnome-keyring-daemon --unlock --components=secrets; ctest --test-dir build -C Release --output-on-failure --timeout 180'
+      - name: macOS disk image build tools
+        if: runner.os == 'macOS'
+        run: |
+          python -m pip install ds-store==1.3.1 mac-alias==2.2.3
+          python -m unittest discover -s tests -p test_macos_dmg.py -v
+
       - name: Package and verify installed application
         shell: bash
         run: python scripts/package.py --platform ${{ matrix.name }}

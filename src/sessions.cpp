@@ -581,6 +581,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
       texts << v.toString();
     restoreQueued(s, texts);
   } else if (type == "message" && payload["role"] == "assistant") {
+    if (!payload["error"].toString().isEmpty() || payload["stopReason"] == "error") s->failed = true;
     if (!s->messages.isEmpty() &&
         s->messages.last().toMap()["role"] == "assistant") {
       auto last = s->messages.last().toMap();
@@ -742,8 +743,10 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
         }
       }
     }
-    if (was && s->action == "prompt" && !s->cancelled && !s->id.isEmpty())
+    if (was && s->action == "prompt" && !s->cancelled && !s->id.isEmpty()) {
       setMetadata(s->id, {{"unread", !(visible && chatVisible)}});
+      emit taskFinished(s->id, s->title, type == "done" && !s->failed);
+    }
     if (visible)
       emit approvalChanged();
     if (s->stale || (type == "done" && !s->ready))

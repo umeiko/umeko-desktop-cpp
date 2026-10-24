@@ -1,6 +1,6 @@
 # Build Umeko-Desktop
 
-Use CMake 3.24+, a C++20 compiler, Qt 6.10.2 (Core, Gui, Quick, Quick Controls, Quick Dialogs, Network, Concurrent, Test, SVG and Image Formats), Node.js 22.19+, and Python 3.12+ for build helpers/tests. Standard releases include a standalone Python interpreter; minimal releases omit it.
+Use CMake 3.24+, a C++20 compiler, Qt 6.10.2 (Core, Gui, Widgets, Quick, Quick Controls, Quick Dialogs, Network, Concurrent, Test, SVG and Image Formats), Node.js 22.19+, and Python 3.12+ for build helpers/tests. Standard releases include a standalone Python interpreter; minimal releases omit it.
 
 The [native build workflow](../.github/workflows/build.yml) is the reproducible recipe for Windows MSVC 2022, macOS ARM/Intel and Linux GCC. CMake fetches pinned QtKeychain and miniz sources. The Qt Image Formats module is required for the lossless WebP character assets.
 
@@ -48,7 +48,7 @@ The pinned downloads are approximately 21 MiB (Windows), 24 MiB (macOS) and 33 M
 
 ## Linux input methods
 
-For fcitx5, install the distribution's `fcitx5-frontend-qt6` plugin only when compatible with the bundled Qt ABI. Otherwise enable fcitx5's IBus frontend and run `fcitx5 --enable ibus`. The app automatically selects the bundled IBus input context when an fcitx context is unavailable. To explicitly select an installed context, use `UMEKO_QT_IM_MODULE=ibus ./UmekoCpp` (or `fcitx` for a compatible plugin). Restart the app after changing input method settings.
+Linux builds require `extra-cmake-modules`, `libxkbcommon-dev`, `libxcb1-dev` and `libx11-dev`. CMake builds the pinned fcitx5-qt 5.1.13 input plugin with the application's own Qt SDK and includes it in the portable package. DBusAddons is included in the plugin; no system Qt input plugin or IBus fallback is required. Keep fcitx5 and your language engine running. Explicit overrides such as `UMEKO_QT_IM_MODULE=ibus ./UmekoCpp` are preserved. See the [input method regression and verification guide](linux-ime-fcitx5.md).
 
 Native IME composition, desktop credential prompts, file dialogs and interactive terminal appearance require manual checks on an actual desktop. CI checks the real UI and credentials with isolated test data (offscreen on Windows/Linux, Cocoa on macOS); it does not prove every user's desktop configuration.
 
@@ -57,3 +57,5 @@ Native IME composition, desktop credential prompts, file dialogs and interactive
 Release packaging excludes the build SDK, development environment, PySide, duplicate source PNGs and JavaScript source maps. It retains the complete Pi coding package, CLI, extension loader, search binaries, runtime modules, public SDK/Skill archives and licenses. Standard releases also retain the complete stripped Python installation. Images are losslessly encoded as WebP; decoded RGBA equality is recorded in `app/icons/lossless-assets.json`.
 
 Do not strip Pi's CLI bundle or extension dependencies to reduce size: doing so would break the native terminal, package management or extension execution. Node.js 22.23.3 and npm are bundled in both editions, with official archive hashes pinned in `scripts/node-distributions.json`. GUI startup, the Pi tool loop and npm are verified with system Node removed from PATH. Earlier size comparisons refer to the minimal edition, without an external Python installation.
+
+macOS packaging also needs `python -m pip install ds-store==1.3.1 mac-alias==2.2.3`. It creates and mounts a verified DMG alongside the updater ZIP; see [macOS disk images](macos-dmg.md).

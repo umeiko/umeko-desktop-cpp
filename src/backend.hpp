@@ -101,6 +101,7 @@ class AppAbout : public QObject {
   Q_PROPERTY(QVariantMap release READ release NOTIFY changed)
   Q_PROPERTY(QString checkedAt READ checkedAt NOTIFY changed)
   Q_PROPERTY(QVariantMap download READ download NOTIFY changed)
+  Q_PROPERTY(QVariantMap installation READ installation NOTIFY changed)
 public:
   explicit AppAbout(Backend *backend,
                     QNetworkAccessManager *transport = nullptr);
@@ -109,9 +110,12 @@ public:
   QVariantMap release() const { return m_release; }
   QString checkedAt() const { return m_checked; }
   QVariantMap download() const { return m_download; }
+  QVariantMap installation() const { return m_installation; }
   Q_INVOKABLE void checkUpdates();
   Q_INVOKABLE void startAutomaticChecks();
   Q_INVOKABLE void downloadUpdate();
+  Q_INVOKABLE void installUpdate();
+  Q_INVOKABLE void cancelUpdate();
   Q_INVOKABLE void showDownloadedUpdate();
   Q_INVOKABLE void openProject();
   Q_INVOKABLE void openAuthor();
@@ -135,6 +139,10 @@ private:
   QString m_downloadError;
   QString m_downloadDirectory;
   void readRelease(QUrl url, bool minimalChannel = false);
+  QVariantMap m_installation, updateJob;
+  QString updateJobFile;
+  void runUpdate();
+  void launchInstaller(QString executable);
 };
 
 struct Session {
@@ -177,6 +185,7 @@ private:
 
 class Backend : public QObject {
   Q_OBJECT
+  friend class NativeUiTests;
   Q_PROPERTY(QVariantMap config READ config NOTIFY changed)
   Q_PROPERTY(QVariantList customThemes READ customThemes NOTIFY changed)
   Q_PROPERTY(QVariantMap themeStyle READ themeStyle NOTIFY changed)
@@ -188,6 +197,7 @@ class Backend : public QObject {
   Q_PROPERTY(QObject *piManagement READ piManagement CONSTANT)
   Q_PROPERTY(QObject *sessionPreview READ sessionPreview CONSTANT)
   Q_PROPERTY(QObject *appAbout READ appAbout CONSTANT)
+  Q_PROPERTY(QVariantList commonProviders READ commonProviders CONSTANT)
   Q_PROPERTY(QString language READ language NOTIFY appearanceChanged)
   Q_PROPERTY(double fontScale READ fontScale NOTIFY appearanceChanged)
   Q_PROPERTY(QString userDataDirectory READ userDataDirectory CONSTANT)
@@ -340,6 +350,9 @@ public:
   Q_INVOKABLE void removeQueued(QString id);
   Q_INVOKABLE void stop();
   Q_INVOKABLE void selectModel(QString provider, QString model);
+  QVariantList commonProviders() const;
+  Q_INVOKABLE bool addCommonProvider(QString preset, QString key, QString alias,
+                                     QString region = "cn");
   Q_INVOKABLE bool saveProvider(QString id, QString name, QString api,
                                 QString url, QString key, QString models);
   Q_INVOKABLE void removeProvider(QString id);
@@ -389,6 +402,7 @@ signals:
   void sidebarChanged();
   void layoutChanged();
   void toast(QString message);
+  void taskFinished(QString session, QString title, bool success);
   void approvalChanged();
   void attachmentsChanged();
   void contextUsageChanged();

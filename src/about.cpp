@@ -168,6 +168,7 @@ void AppAbout::downloadUpdate() {
   if (m_busy || m_download["state"] == "downloading")
     return;
   const auto asset = m_release["asset"].toMap();
+  const auto version = m_release["version"].toString();
   const auto name = asset["name"].toString();
   if (asset.isEmpty() ||
       !QRegularExpression("^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
@@ -236,7 +237,7 @@ void AppAbout::downloadUpdate() {
   };
   connect(reply, &QIODevice::readyRead, this, consume);
   connect(reply, &QNetworkReply::finished, this,
-          [this, reply, asset, path, consume] {
+          [this, reply, asset, path, consume, version] {
             if (reply->bytesAvailable() && m_downloadError.isEmpty())
               consume();
             const bool valid = m_downloadError.isEmpty() &&
@@ -252,12 +253,14 @@ void AppAbout::downloadUpdate() {
             m_download =
                 saved ? QVariantMap{{"state", "ready"},
                                     {"path", path},
+                                    {"sha256", asset["sha256"]},
+                                    {"version", version},
                                     {"name", asset["name"]},
                                     {"progress", 100},
-                                    {"message", "更新包已下载"}}
+                                    {"message", "SHA-256 校验通过，可以安装。"}}
                       : QVariantMap{
-                            {"state", "error"},
-                            {"message", "更新包下载或校验失败，请重新下载"}};
+                            {"state", m_downloadError == "cancelled" ? "cancelled" : "error"},
+                            {"message", m_downloadError == "cancelled" ? "下载已取消" : "更新包下载或校验失败，请重新下载"}};
             emit changed();
             emit b->toast(m_download["message"].toString());
           });

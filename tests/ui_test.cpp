@@ -975,6 +975,16 @@ Item {
     QVERIFY(downloaded.open(QIODevice::ReadOnly));
     QCOMPARE(downloaded.readAll(), payload);
     downloaded.close();
+    QCOMPARE(about->download()["version"].toString(), QString("v99.0.0"));
+    QCOMPARE(about->download()["sha256"].toString(),
+             QString::fromLatin1(QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex()));
+    click("sidebarUpdateButton");
+    QTRY_VERIFY(find("confirmAppInstallButton"));
+    QVERIFY(!about->busy());
+    QVERIFY(about->installation().isEmpty());
+    click("cancelAppInstallButton");
+    QTRY_VERIFY(!find("confirmAppInstallButton") || !find("confirmAppInstallButton")->isVisible());
+    QCOMPARE(about->download()["state"].toString(), QString("ready"));
     network.add(QByteArray(payload.size(), 'z'));
     about->downloadUpdate();
     QTRY_COMPARE_WITH_TIMEOUT(about->download()["state"].toString(),
@@ -991,6 +1001,154 @@ Item {
     QVERIFY(about->release()["asset"].toMap()["name"].toString().contains(
         "-minimal-"));
     QVERIFY(network.urls.last().path().endsWith("/v99.0.0-minimal"));
+  }
+  void taskCompletionEventsAreNotDuplicatedOrSentForCancellation() {
+    const auto metadata = backend->store.data["sessionMeta"];
+    auto restore = qScopeGuard([&] {backend->store.data["sessionMeta"] = metadata; backend->store.save();});
+    QSignalSpy finished(backend.get(), &Backend::taskFinished);
+    auto task = std::make_shared<Session>(); task->id = "notification-fixture"; task->title = "Local task";
+    task->action = "prompt"; task->phase = "running"; task->ready = true;
+    backend->event(task, {{"type","done"}}); backend->event(task, {{"type","done"}});
+    QCOMPARE(finished.count(),1); QVERIFY(finished.first()[2].toBool());
+    task->phase = "running"; task->cancelled = true; backend->event(task, {{"type","done"}}); QCOMPARE(finished.count(),1);
+    task->cancelled = false; task->failed = true; task->phase = "running"; backend->event(task, {{"type","done"}});
+    QCOMPARE(finished.count(),2); QVERIFY(!finished.last()[2].toBool());
+    task->action = "reload"; task->phase = "working"; backend->event(task, {{"type","done"}}); QCOMPARE(finished.count(),2);
+  }
+  void commonProviderAccounts() {
+    const auto original = backend->store.data;
+    const auto previousPage = window->property("page");
+    const auto previousTab = window->property("settingsTab");
+    QStringList added;
+    QDesktopServices::setUrlHandler("https", this, "recordOpenedUrl");
+    auto restore = qScopeGuard([&] {
+      QDesktopServices::unsetUrlHandler("https");
+      for (const auto &id : added) backend->store.setSecret("provider:" + id, {});
+      backend->store.data = original;
+      backend->notify();
+      backend->selectModel(original["selectedProvider"].toString(), original["selectedModel"].toString());
+      window->setProperty("page", previousPage); window->setProperty("settingsTab", previousTab);
+    });
+    QCOMPARE(backend->commonProviders().size(), 6);
+    window->setProperty("page", "settings"); window->setProperty("settingsTab", 0);
+    QTest::qWait(100);
+    find("settingsScroll")->property("contentItem").value<QObject *>()->setProperty("contentY", 0);
+    const auto inside = [](QQuickItem *item, QQuickItem *section) {
+      while (item) {if (item == section) return true; item = item->parentItem();}
+      return false;
+    };
+    QVERIFY(find("commonProvidersSection")); QVERIFY(find("apiProvidersSection"));
+    QCOMPARE(find("commonProvidersSection")->parentItem(), find("apiProvidersSection")->parentItem());
+    QVERIFY(inside(find("addCommonProviderButton"), find("commonProvidersSection")));
+    QVERIFY(!inside(find("addCommonProviderButton"), find("apiProvidersSection")));
+    click("addCommonProviderButton");
+    QTRY_VERIFY(find("commonProvider_kimi"));
+    for (const auto &value : backend->commonProviders())
+      QVERIFY(find("commonProvider_" + value.toMap()["id"].toString())->isVisible());
+    for (const auto &value : backend->commonProviders()) {
+      const auto preset = value.toMap();
+      click("commonProvider_" + preset["id"].toString());
+      QCOMPARE(find("commonProviderRegion")->isVisible(), preset.contains("international"));
+      QCOMPARE(find("commonProviderRegion")->property("currentIndex").toInt(), 0);
+      if (preset["id"] == "glm")
+        QCOMPARE(find("commonProviderRegion")->property("currentText").toString(), QString("zcode.z.ai/cn（中国大陆）"));
+      QCOMPARE(find("commonProviderKeyLink")->property("targetUrl").toString(), preset["keyUrl"].toString());
+      const auto count = openedUrls.size();
+      click("commonProviderKeyLink");
+      QCOMPARE(openedUrls.size(), count + 1);
+      QCOMPARE(openedUrls.last(), QUrl(preset["keyUrl"].toString()));
+      if (preset.contains("international")) {
+        click("commonProviderRegion");
+        QCOMPARE(find("commonProviderRegion")->property("count").toInt(), 2);
+        QTest::keyClick(window, Qt::Key_End); QTest::keyClick(window, Qt::Key_Return);
+        QTest::qWait(100);
+        QCOMPARE(find("commonProviderRegion")->property("currentIndex").toInt(), 1);
+        if (preset["id"] == "glm")
+          QCOMPARE(find("commonProviderRegion")->property("currentText").toString(), QString("z.ai（国际）"));
+        const auto url = preset["international"].toMap()["keyUrl"].toString();
+        QCOMPARE(find("commonProviderKeyLink")->property("targetUrl").toString(), url);
+        click("commonProviderKeyLink");
+        QCOMPARE(openedUrls.last(), QUrl(url));
+      }
+      click("commonProviderBack");
+    }
+    QDir().mkpath(root + "/build/screenshots");
+    QVERIFY(window->grabWindow().save(root + "/build/screenshots/common-provider-menu.png"));
+    click("commonProvider_kimi");
+    QVERIFY(!find("confirmCommonProvider")->property("enabled").toBool());
+    find("commonProviderKey")->setProperty("text", "fixture-native-key");
+    find("commonProviderAlias")->setProperty("text", "Work");
+    QCOMPARE(find("commonProviderNamePreview")->property("text").toString(), QString("Kimi(Work)"));
+    click("confirmCommonProvider");
+    auto account = backend->store.data["providers"].toList().last().toMap();
+    added << account["id"].toString();
+    QCOMPARE(account["name"].toString(), QString("Kimi(Work)"));
+    QCOMPARE(backend->store.secret("provider:" + added.last()), QByteArray("fixture-native-key"));
+    QTRY_VERIFY(find("editProvider_" + added.last()));
+    QVERIFY(inside(find("editProvider_" + added.last()), find("commonProvidersSection")));
+    click("editProvider_" + added.last());
+    QTRY_VERIFY(inside(find("providerEditor"), find("commonProvidersSection")));
+    QCOMPARE(find("providerName")->property("text").toString(), QString("Kimi(Work)"));
+    click("editProvider_" + added.last());
+    QVERIFY(backend->addCommonProvider("kimi", "fixture-native-key-2", ""));
+    account = backend->store.data["providers"].toList().last().toMap(); added << account["id"].toString();
+    QCOMPARE(account["name"].toString(), QString("Kimi(2)"));
+    const auto count = backend->store.data["providers"].toList().size();
+    QVERIFY(!backend->addCommonProvider("kimi", "fixture", "Work"));
+    QVERIFY(!backend->addCommonProvider("kimi", "", ""));
+    QCOMPARE(backend->store.data["providers"].toList().size(), count);
+    QVERIFY(backend->addCommonProvider("codex", "fixture-native-codex", ""));
+    account = backend->store.data["providers"].toList().last().toMap(); added << account["id"].toString();
+    QCOMPARE(account["wireApi"].toString(), QString("responses"));
+    QCOMPARE(backend->store.data["selectedProvider"].toString(), added.last());
+    for (const auto &value : backend->commonProviders()) {
+      const auto preset = value.toMap();
+      if (!preset["subscription"].toBool()) continue;
+      const auto id = preset["id"].toString();
+      for (const auto &region : {QString("cn"), QString("international")}) {
+        if (region == "international" && !preset.contains("international")) continue;
+        const auto effective = region == "international" ? preset["international"].toMap() : preset;
+        const auto name = effective["name"].toString(), alias = region == "international" ? QString("Global") : QString("Work");
+        click("addCommonProviderButton"); click("commonProvider_" + id);
+        QCOMPARE(find("commonProviderRegion")->property("currentIndex").toInt(), 0);
+        if (region == "international") {
+          find("commonProviderKey")->setProperty("text", "key-for-other-region");
+          find("commonProviderAlias")->setProperty("text", alias);
+          click("commonProviderRegion");
+          QCOMPARE(find("commonProviderRegion")->property("count").toInt(), 2);
+          QTest::keyClick(window, Qt::Key_End); QTest::keyClick(window, Qt::Key_Return);
+          QTest::qWait(100);
+          QCOMPARE(find("commonProviderRegion")->property("currentIndex").toInt(), 1);
+          QCOMPARE(find("commonProviderKey")->property("text").toString(), QString());
+          QCOMPARE(find("commonProviderAlias")->property("text").toString(), alias);
+          QVERIFY(!find("confirmCommonProvider")->isEnabled());
+        }
+        QCOMPARE(find("commonProviderKeyHint")->property("text").toString(), region == "international" ? QString("填写国际站订阅 Key，即可添加使用。") : QString("填写国内站订阅 Key，即可添加使用。"));
+        find("commonProviderKey")->setProperty("text", "fixture-subscription-key");
+        find("commonProviderAlias")->setProperty("text", alias);
+        click("confirmCommonProvider");
+        account = backend->store.data["providers"].toList().last().toMap(); added << account["id"].toString();
+        QCOMPARE(account["presetId"].toString(), id);
+        QCOMPARE(account["presetRegion"].toString(), region);
+        QCOMPARE(account["name"].toString(), name + "(" + alias + ")");
+        QCOMPARE(account["baseUrl"].toString(), effective["baseUrl"].toString());
+        QCOMPARE(backend->store.secret("provider:" + added.last()), QByteArray("fixture-subscription-key"));
+        QVERIFY(backend->saveProvider(added.last(), account["name"].toString(), account["api"].toString(), account["baseUrl"].toString(), "", QString::fromUtf8(QJsonDocument::fromVariant(account["models"]).toJson())));
+        QCOMPARE(backend->provider(added.last())["presetRegion"].toString(), region);
+        QVERIFY(backend->addCommonProvider(id, "fixture-subscription-key-2", "", region));
+        account = backend->store.data["providers"].toList().last().toMap(); added << account["id"].toString();
+        QCOMPARE(account["name"].toString(), name + (id == "minimax" && region == "international" ? "(3)" : "(2)"));
+        QCOMPARE(account["models"].toList().first().toMap()["upstream"].toString(), effective["models"].toList().first().toMap()["upstream"].toString());
+      }
+    }
+    QVERIFY(!backend->addCommonProvider("kimi", "fixture", "", "international"));
+    QVERIFY(!backend->addCommonProvider("glm", "fixture", "", "invalid-region"));
+    QSet<QString> aliases;
+    for (const auto &value : backend->store.data["providers"].toList())
+      for (const auto &row : value.toMap()["models"].toList()) {
+        const auto alias = row.toMap()["alias"].toString();
+        QVERIFY(!aliases.contains(alias)); aliases.insert(alias);
+      }
   }
   void outputLimitNotice() {
     configureAPI();
@@ -1459,6 +1617,49 @@ Item {
     auto before = backend->readMcp("global");
     backend->saveMcp("global", "{\"mcpServers\":[]}");
     QCOMPARE(backend->readMcp("global"), before);
+  }
+  void proxyProviderSubmenusAndAutomaticAddresses() {
+    auto original = backend->store.data;
+    const auto previousPage = window->property("page"), previousTab = window->property("settingsTab");
+    auto restore = qScopeGuard([&] {
+      backend->store.data = original; backend->invalidate(); backend->notify();
+      window->setProperty("page",previousPage); window->setProperty("settingsTab",previousTab);
+    });
+    auto account = [](QString id, QString name, QString model) {
+      return QVariantMap{{"id",id},{"name",name},{"api","openai"},{"baseUrl","http://127.0.0.1:18181/v1"},
+        {"models",QVariantList{U::normalizeModel({{"upstream",model},{"alias",model}})}}};
+    };
+    backend->store.data["providers"] = QVariantList{account("group-a","Provider A","model-a"),account("group-b","Provider B","model-b")};
+    auto server = backend->store.data["server"].toMap(); server["lan"] = false; backend->store.data["server"] = server;
+    backend->notify(); window->setProperty("page","settings"); window->setProperty("settingsTab",1); QTest::qWait(200);
+    auto revealAndClick = [&](QString name) {
+      auto item = find(name); QVERIFY(item);
+      auto flick = qobject_cast<QQuickItem*>(find("settingsScroll")->property("contentItem").value<QObject*>()); QVERIFY(flick);
+      const auto y = flick->property("contentY").toReal() + item->mapToItem(flick,QPointF()).y() - flick->height()/2;
+      flick->setProperty("contentY",qBound(0.,y,qMax(0.,flick->property("contentHeight").toReal()-flick->height())));
+      QTest::qWait(100); click(name);
+    };
+    QVERIFY(!find("proxyAddressPicker"));
+    QCOMPARE(find("proxyOpenaiBaseUrl")->property("text").toString(),QString("http://127.0.0.1:%1/v1").arg(server["port"].toInt()));
+    QVERIFY(!find("mappingModelId_0")); QVERIFY(!find("mappingModelId_1"));
+    revealAndClick("mappingProvider_group-a");
+    QVERIFY(find("mappingModelId_0")->isVisible()); QVERIFY(!find("mappingModelId_1"));
+    auto alias = find("mappingAlias_0"); alias->setProperty("text","renamed-a"); QMetaObject::invokeMethod(alias,"textEdited");
+    revealAndClick("backToMappingProviders"); revealAndClick("mappingProvider_group-b");
+    QVERIFY(!find("mappingModelId_0")); QVERIFY(find("mappingModelId_1")->isVisible());
+    revealAndClick("backToMappingProviders"); revealAndClick("mappingProvider_group-a");
+    QCOMPARE(find("mappingAlias_0")->property("text").toString(),QString("renamed-a"));
+    revealAndClick("saveMappingsButton");
+    const auto saved = backend->store.data["providers"].toList();
+    QCOMPARE(saved[0].toMap()["models"].toList()[0].toMap()["alias"].toString(),QString("renamed-a"));
+    QCOMPARE(saved[1].toMap()["models"].toList()[0].toMap()["alias"].toString(),QString("model-b"));
+    server["lan"] = true; backend->store.data["server"] = server; emit backend->changed(); QTest::qWait(100);
+    const auto addresses = backend->proxyAddresses();
+    const auto base = addresses.size() > 1 ? QString("http://%1:%2").arg(addresses[1]).arg(server["port"].toInt()) : QString();
+    QCOMPARE(find("proxyAnthropicBaseUrl")->property("text").toString(),base);
+    if (!base.isEmpty()) {
+      revealAndClick("copyProxyOpenaiBaseUrl"); QCOMPARE(QGuiApplication::clipboard()->text(),base+"/v1");
+    }
   }
   void proxyLifecycleAndRollback() {
     QTcpServer freePort, blocked;

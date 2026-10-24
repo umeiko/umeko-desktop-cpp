@@ -33,7 +33,7 @@ Pi web extensions can access the network. Configure company npm mirrors, an opti
 3. Open `UmekoCpp.exe` on Windows, `UmekoCpp.app` on macOS, or `./UmekoCpp` on Linux.
 4. Open **Settings → Accounts & Providers**, add an OpenAI-compatible or Anthropic-compatible provider, and choose a model.
 
-Choose `v0.3.7` for bundled Python or `v0.3.7-minimal` for a smaller download. Minimal releases are marked as prereleases so the update checker continues to recommend the standard edition. **Settings → About** shows the actual compiler and version used for your platform.
+Choose `v0.4.0` for bundled Python or `v0.4.0-minimal` for a smaller download. Minimal releases are marked as prereleases so the update checker continues to recommend the standard edition. **Settings → About** shows the actual compiler and version used for your platform.
 
 | Platform | Release | Requirements |
 | --- | --- | --- |
@@ -41,7 +41,9 @@ Choose `v0.3.7` for bundled Python or `v0.3.7-minimal` for a smaller download. M
 | macOS | Apple Silicon / Intel ZIP | macOS 13+ |
 | Linux | x64 tar.gz | Ubuntu 24.04+ or compatible glibc 2.39 system, desktop session |
 
-These minimum OS versions follow the [Qt 6.10 platform requirements](https://doc.qt.io/qt-6.10/supported-platforms.html); release CI uses Windows 2022, macOS 15 and Ubuntu 24.04. The builds are unsigned. macOS may require **System Settings → Privacy & Security → Open Anyway** after your first launch attempt. Linux stores credentials in the desktop Secret Service keyring; unlock it before saving account credentials. Under fcitx5, enable its IBus frontend when the release's bundled Qt lacks a matching fcitx plugin; see the [Linux input method guide](docs/BUILDING.md#linux-input-methods).
+These minimum OS versions follow the [Qt 6.10 platform requirements](https://doc.qt.io/qt-6.10/supported-platforms.html); release CI uses Windows 2022, macOS 15 and Ubuntu 24.04. The builds are unsigned. macOS may require **System Settings → Privacy & Security → Open Anyway** after your first launch attempt. Linux stores credentials in the desktop Secret Service keyring; unlock it before saving account credentials. Linux packages include an fcitx5 plugin built against the application's Qt; see the [Linux input method guide](docs/BUILDING.md#linux-input-methods).
+
+After a verified update download, the independent Yanami installer can stop all agents, install the new version and restart it. Closing the main window keeps agents running in the system tray; right-click the Yanami avatar to quit. [Updates and recovery](docs/updating.md).
 
 ## Features
 
@@ -121,3 +123,9 @@ Profiles live in `~/.umeko/desktop-cpp`, separate from the Python edition at `~/
 Created by [umeiko](https://github.com/umeiko). The Yanami images reuse the original application's [fan-art asset and provenance](app/icons/yanami-pixel.provenance.json). This independent fan project is unaffiliated with the character's rights holders. See [third-party notices](THIRD_PARTY_NOTICES.md) for dependency licenses.
 
 Custom color themes use portable JSON files. Import, update or delete them under **Settings → Appearance**, and copy a complete creation prompt from the same page. See the [theme format and example](docs/themes.md). Reply mascots react to taps, click combos and holds.
+
+Common providers: **账号与供应商 → 添加常见供应商** offers Claude Code, Codex, Kimi Code, DeepSeek, GLM Coding Plan (including Z.ai) and MiniMax subscriptions (M Plan). GLM and MiniMax offer a site dropdown inside the Key form with just China and International; China is selected by default. Enter an API Key and optional account alias; endpoints and models are preconfigured. Multiple accounts receive distinct names and model mappings. See [Common provider accounts](docs/common-providers.md).
+
+Background task completion uses [native desktop notifications](docs/notifications.md) while the window is minimized or in the tray. Click a notification to return to its conversation; permissions and sound follow system settings.
+
+macOS releases include a [drag-to-Applications DMG](docs/macos-dmg.md) for Apple Silicon and Intel, alongside the ZIP used by automatic updates. API proxy aliases use [provider submenus and automatic Base URLs](docs/api-proxy-menus.md).

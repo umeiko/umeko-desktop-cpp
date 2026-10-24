@@ -700,6 +700,8 @@ bool Backend::saveProvider(QString id, QString name, QString api, QString url,
         {"hasKey", hasKey},
         {"proxy", old.value("proxy", QVariantMap{})},
         {"models", models}};
+    for (const auto &field : {"presetId", "presetRegion", "accountAlias", "wireApi"})
+      if (old.contains(field)) record[field] = old[field];
     auto rows = store.data["providers"].toList();
     bool replaced = false;
     for (auto &v : rows)
@@ -798,17 +800,24 @@ QStringList Backend::proxyAddresses() const {
   QStringList out{"127.0.0.1"};
   if (!store.data["server"].toMap()["lan"].toBool())
     return out;
+  QMap<QString, int> candidates;
   for (auto iface : QNetworkInterface::allInterfaces()) {
-    if (!(iface.flags() & QNetworkInterface::IsUp))
+    if (!(iface.flags() & QNetworkInterface::IsUp) || (iface.flags() & QNetworkInterface::IsLoopBack))
       continue;
     for (auto entry : iface.addressEntries()) {
       auto ip = entry.ip();
-      if (ip.protocol() == QAbstractSocket::IPv4Protocol && !ip.isLoopback() &&
-          !out.contains(ip.toString()))
-        out << ip.toString();
+      if (ip.protocol() != QAbstractSocket::IPv4Protocol || ip.isLoopback() || ip.isNull() || ip.isMulticast()) continue;
+      auto text = ip.toString();
+      if (text.startsWith("169.254.") || text == "0.0.0.0" || text == "255.255.255.255") continue;
+      const bool virtualInterface = QRegularExpression("^(docker|veth|virbr|br-|tun|tap|utun|tailscale|wg)", QRegularExpression::CaseInsensitiveOption).match(iface.name()).hasMatch();
+      const bool physical = iface.type() == QNetworkInterface::Ethernet || iface.type() == QNetworkInterface::Wifi;
+      const int rank = (virtualInterface ? 100 : 0) + (physical ? 0 : 10) + ((iface.flags() & QNetworkInterface::IsPointToPoint) ? 1 : 0);
+      if (!candidates.contains(text) || rank < candidates[text]) candidates[text] = rank;
     }
   }
-  return out;
+  auto addresses = candidates.keys();
+  std::stable_sort(addresses.begin(), addresses.end(), [&](const auto &a, const auto &b) {return candidates[a] < candidates[b];});
+  return out + addresses;
 }
 QString Backend::generateProxyKey() {
   return "umeko-" +
@@ -1068,6 +1077,7 @@ void Backend::close() {
   if (closing)
     return;
   closing = true;
+  appearanceSave.stop();
   previewLoader->cancel();
   streaming.stop();
   providers->close();

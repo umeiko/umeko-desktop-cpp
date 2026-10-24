@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { once } from 'node:events';
 import { upstreamFailure } from './network-retry.mjs';
 import { dispatcher, failureReport, providerFetch } from './transport.mjs';
+import { responsesRequest, responsesEvents } from './openai-responses.mjs';
 
 const MAX_BODY = 32 * 1024 * 1024;
 const textOf = content => typeof content === 'string' ? content : (content || []).filter(c => c.type === 'text').map(c => c.text || '').join('\n');
@@ -217,11 +218,11 @@ export class Gateway {
       try { yield* queue; } finally { this.pending.delete(id); controller.signal.removeEventListener('abort', abort); this.emit({ type: 'provider-cancel', id }); }
       return;
     }
-    const anthropic = provider.api === 'anthropic', base = validateBase(provider.baseUrl);
-    const headers = { 'Content-Type': 'application/json', ...(anthropic ? { 'x-api-key': provider.key || '', 'anthropic-version': '2023-06-01' } : { Authorization: `Bearer ${provider.key || ''}` }) };
-    const payload = anthropic ? openaiToAnthropic(body.messages, body.tools, body.max_tokens, body.parameters) : { messages: body.messages, max_tokens: body.max_tokens, stream: true, stream_options: { include_usage: true }, ...(body.tools.length ? { tools: body.tools.map(t => ({ type: 'function', function: t })) } : {}), ...body.parameters };
+    const anthropic = provider.api === 'anthropic', responses = provider.wireApi === 'responses', base = validateBase(provider.baseUrl);
+    const headers = { 'Content-Type': 'application/json', 'User-Agent':'Umeko-Desktop', ...(anthropic ? { 'x-api-key': provider.key || '', 'anthropic-version': '2023-06-01' } : { Authorization: `Bearer ${provider.key || ''}` }) };
+    const payload = anthropic ? openaiToAnthropic(body.messages, body.tools, body.max_tokens, body.parameters) : responses ? responsesRequest(body.messages, body.tools, body.max_tokens, body.parameters) : { messages: body.messages, max_tokens: body.max_tokens, stream: true, stream_options: { include_usage: true }, ...(body.tools.length ? { tools: body.tools.map(t => ({ type: 'function', function: t })) } : {}), ...body.parameters };
     payload.model = model.upstream;
-    const suffix = anthropic ? '/messages' : '/chat/completions';
+    const suffix = anthropic ? '/messages' : responses ? '/responses' : '/chat/completions';
     const agent = dispatcher(provider);
     const record = { request: { url: base + suffix, method: 'POST', headers, body: payload },
       response: { status: null, headers: {}, body: '' } };
@@ -240,7 +241,7 @@ export class Gateway {
       let events;
       if (response.headers.get('content-type')?.includes('event-stream')) events = parseSSE(tracked());
       else { const raw = await response.text(); record.response.body = raw; if (raw.length > MAX_BODY) throw new Error('Upstream response too large'); events = [JSON.parse(raw)]; }
-      if (anthropic) yield* anthropicEvents(events); else for await (const event of events) yield event;
+      if (anthropic) yield* anthropicEvents(events); else if (responses) yield* responsesEvents(events); else for await (const event of events) yield event;
     } finally { await agent.close(); }
   }
   async handle(req, res, isPrivate) {
