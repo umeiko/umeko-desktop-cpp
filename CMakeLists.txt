@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
 project(UmekoCpp VERSION 0.4.0 LANGUAGES C CXX)
+if(APPLE)
+  # The notification library also links into targets declared in this scope.
+  enable_language(OBJCXX)
+endif()
 set(UMEKO_COMPILER_NAME "${CMAKE_CXX_COMPILER_ID}")
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   set(UMEKO_COMPILER_NAME "GCC")
