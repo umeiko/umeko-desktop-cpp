@@ -1463,11 +1463,20 @@ Item {
     QTRY_VERIFY_WITH_TIMEOUT(nav->property("expanded").toBool(), 1000);
     auto listing = find("questionNavigationList");
     QVERIFY(listing);
-    QMetaObject::invokeMethod(listing, "positionViewAtBeginning");
-    QTest::qWait(150);
-    click("questionNavigationItem_0");
-    QTest::qWait(200);
-    QCOMPARE(nav->property("activeQuestion").toInt(), 0);
+    const auto selectFirstQuestion = [&] {
+      QMetaObject::invokeMethod(listing, "positionViewAtBeginning");
+      QTest::qWait(150);
+      auto first = find("questionNavigationItem_0");
+      QVERIFY(first);
+      // Cocoa also observes the native cursor. Move into the popup before
+      // clicking so its leave timer cannot close it under a synthetic click.
+      movePointer(point(first));
+      QTRY_VERIFY_WITH_TIMEOUT(first->property("hovered").toBool(), 1000);
+      click("questionNavigationItem_0");
+      QTRY_COMPARE_WITH_TIMEOUT(nav->property("activeQuestion").toInt(), 0, 2000);
+      QTRY_VERIFY_WITH_TIMEOUT(!view->property("restoring").toBool(), 2000);
+    };
+    selectFirstQuestion();
     QVERIFY(!view->property("followTail").toBool());
     auto bubble = find("messageBubble_0");
     QVERIFY(bubble);
@@ -1482,10 +1491,7 @@ Item {
     QCOMPARE(header->property("source"), source);
     QMetaObject::invokeMethod(view, "positionViewAtEnd");
     QTest::qWait(150);
-    QMetaObject::invokeMethod(listing, "positionViewAtBeginning");
-    QTest::qWait(100);
-    click("questionNavigationItem_0");
-    QTest::qWait(200);
+    selectFirstQuestion();
     header = find("assistantAvatar_1");
     QVERIFY(header && header->property("loaded").toBool());
     QCOMPARE(header->property("source"), source);
