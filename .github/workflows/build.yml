@@ -53,7 +53,7 @@ jobs:
           python -m pip install aqtinstall==3.3.0 cmake==3.31.6
           extra=()
           if [ "$RUNNER_OS" = "Linux" ]; then extra=(icu qtwayland); fi
-          python -m aqt install-qt ${{ matrix.host }} desktop 6.10.2 ${{ matrix.arch }} --outputdir "$RUNNER_TEMP/Qt" --archives qtbase qtdeclarative qtsvg qttools "${extra[@]}" --modules qtimageformats
+          python -m aqt install-qt ${{ matrix.host }} desktop 6.10.2 ${{ matrix.arch }} --outputdir "$RUNNER_TEMP/Qt" --archives qtbase qtdeclarative qtsvg qttools "${extra[@]}" --modules qtimageformats qtwebview ${{ runner.os == 'Linux' && 'qtwebengine qtwebchannel qtpositioning qtwebsockets' || '' }}
           echo "QT_ROOT=$RUNNER_TEMP/Qt/6.10.2/${{ matrix.qt_dir }}" >> "$GITHUB_ENV"
           echo "$RUNNER_TEMP/Qt/6.10.2/${{ matrix.qt_dir }}/bin" >> "$GITHUB_PATH"
           echo "UMEKO_TEST_PYTHON=$(python -c 'import sys;print(sys.executable)')" >> "$GITHUB_ENV"
@@ -64,9 +64,10 @@ jobs:
           node scripts/prepare-runtime.mjs
           python scripts/fetch-search-tools.py
           python scripts/build-provider-resources.py
-          node --test tests/update-engine.test.mjs
+          node --test tests/update-engine.test.mjs tests/webview.test.mjs tests/pi-commands.test.mjs tests/pi-commands-integration.test.mjs
           node --test tests/gateway.test.mjs tests/openai-responses.test.mjs tests/network_retry_test.mjs
           python -m unittest discover -s tests -p test_release_retention.py
+          python -m unittest discover -s tests -p test_webview_package.py
           python tests/worker_test.py
       - name: Configure and compile C++
         shell: bash

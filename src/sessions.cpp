@@ -284,6 +284,7 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   values["workspace"] = s->workspace;
   values["defaultCwd"] = fallback;
   values["agentDir"] = agentDir();
+  values["webview"] = webviewConfiguration();
   values["sessionDir"] = store.directory + "/pi/sessions";
   values["sessionFile"] = s->file;
   values["models"] = modelCatalog();
@@ -628,8 +629,17 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
                                         payload["args"].toMap(), s->workspace)
                           : tools[index].toMap();
     tool["state"] = payload["state"];
-    if (!payload["media"].toList().isEmpty())
+    if (!payload["media"].toList().isEmpty()) {
       tool["media"] = payload["media"];
+      if (visible && payload["name"] == "submit_to_chatbox" && payload["state"] == "done")
+        for (const auto &value : payload["media"].toList()) {
+          const auto item = value.toMap();
+          const auto url = normalizeWebUrl(item["url"].toString());
+          if (webviewAvailable() && item["kind"] == "web" && item["presentation"] == "webview" && !url.isEmpty()) emit webRequested(url, item["title"].toString());
+          const auto kind = U::documentKind(item["path"].toString(), item["kind"].toString());
+          if (!kind.isEmpty() && QFileInfo(item["path"].toString()).isAbsolute()) emit documentRequested(item["path"].toString(), item["title"].toString(), kind);
+        }
+    }
     if (payload.contains("result"))
       tool["result"] = payload["result"];
     if (index < 0)

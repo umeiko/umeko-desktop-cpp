@@ -1,0 +1,43 @@
+name: Optional Linux WebView component
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  component:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Install matching Qt runtime
+        run: |
+          python -m pip install aqtinstall==3.3.0
+          python -m aqt install-qt linux desktop 6.10.2 linux_gcc_64 --outputdir "$RUNNER_TEMP/Qt" --archives qtbase qtdeclarative --modules qtwebview qtwebengine qtwebchannel qtpositioning qtwebsockets
+      - name: Build component and verify pinned checksum
+        run: |
+          python scripts/webview_package.py --qt-root "$RUNNER_TEMP/Qt/6.10.2/gcc_64" --engine release-assets/webview
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          expected=json.loads(Path('runtime/webview-component.json').read_text())
+          built=json.loads(Path('release-assets/webview/webview-component.json').read_text())
+          if built!=expected: raise SystemExit('Component differs from the reviewed registry. Review the artifact and update the registry before publishing.')
+          Path('build').mkdir(exist_ok=True)
+          Path('build/component-tag.txt').write_text(expected['id'])
+          PY
+      - name: Publish the dedicated component tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          component_tag=$(cat build/component-tag.txt)
+          gh release create "$component_tag" release-assets/webview/* --target "$GITHUB_SHA" --title "Qt WebEngine 6.10.2 · Linux x64 component" --notes-file docs/webview-component-release.md --prerelease --latest=false
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: linux-webview-component
+          path: release-assets/webview/*
+          if-no-files-found: error

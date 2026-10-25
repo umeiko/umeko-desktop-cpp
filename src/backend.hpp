@@ -1,6 +1,8 @@
 #pragma once
 #include "chatmodel.hpp"
 #include "store.hpp"
+#include "webview_support.hpp"
+#include "document_preview.hpp"
 #include <QtQuick>
 
 class Backend;
@@ -77,6 +79,7 @@ public:
   Q_INVOKABLE void openCatalog();
   Q_INVOKABLE void resetInstall();
   Q_INVOKABLE void installExtension(QString command, bool local);
+  Q_INVOKABLE void addMcp(QString text, bool local);
   Q_INVOKABLE void openTerminal();
   Q_INVOKABLE void setRecoveryMode(bool enabled);
   Q_INVOKABLE void restoreFactory();
@@ -231,6 +234,8 @@ class Backend : public QObject {
   Q_PROPERTY(QVariantMap networkRetry READ networkRetry NOTIFY retryChanged)
   Q_PROPERTY(double scrollPosition READ scrollPosition NOTIFY viewChanged)
   Q_PROPERTY(int scrollAnchor READ scrollAnchor NOTIFY viewChanged)
+  Q_PROPERTY(bool webviewAvailable READ webviewAvailable CONSTANT)
+  Q_PROPERTY(QObject *documentPreview READ documentPreview CONSTANT)
   Q_PROPERTY(bool followTail READ followTail NOTIFY viewChanged)
   Q_PROPERTY(bool serverRunning READ serverRunning NOTIFY changed)
   Q_PROPERTY(QVariantList proxyKeys READ proxyKeys NOTIFY proxyKeysChanged)
@@ -241,6 +246,9 @@ public:
   ~Backend() override;
   Store store;
   QString root;
+  bool webviewAvailable() const { return webviewConfiguration()["available"].toBool(); }
+  Q_INVOKABLE QString normalizeWebUrl(QString raw) const;
+  QObject *documentPreview() const { return documents; }
   QVariantMap config() const;
   QVariantList customThemes() const;
   QVariantMap themeStyle() const;
@@ -322,6 +330,7 @@ public:
   Q_INVOKABLE void copyChatboxFile(QString path);
   Q_INVOKABLE QVariantMap chatboxFileInfo(QString path);
   Q_INVOKABLE void attachChatboxFile(QString path);
+  Q_INVOKABLE void attachChatboxUrl(QString url);
   Q_INVOKABLE void activateChatWindow();
   Q_INVOKABLE void toggleArchived();
   Q_INVOKABLE void togglePinned(QString kind, QString id);
@@ -402,6 +411,8 @@ signals:
   void sidebarChanged();
   void layoutChanged();
   void toast(QString message);
+  void webRequested(QString url, QString title);
+  void documentRequested(QString path, QString title, QString kind);
   void taskFinished(QString session, QString title, bool success);
   void approvalChanged();
   void attachmentsChanged();
@@ -421,6 +432,7 @@ private:
   PiManagement *management;
   AppAbout *about;
   SessionPreview *previewLoader;
+  DocumentPreview *documents;
   std::shared_ptr<Session> view;
   QHash<QString, std::shared_ptr<Session>> records, drafts;
   QList<QString> lru;

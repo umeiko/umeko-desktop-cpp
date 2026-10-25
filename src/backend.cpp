@@ -34,7 +34,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
     // upgraded separately. Keep web/queue fixes with the application update.
     for (const auto &name :
          {"bridge.mjs", "resources.mjs", "provider-policy.mjs", "chatbox.mjs",
-          "network-retry.mjs"}) {
+          "network-retry.mjs", "pi-commands.mjs", "webview-component.mjs", "webview-component.json"}) {
       if (!compatible)
         break;
       QFile source(root + "/runtime/" + name);
@@ -69,6 +69,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
   management = new PiManagement(this);
   about = new AppAbout(this);
   previewLoader = new SessionPreview(this);
+  documents = new DocumentPreview(this);
   appearanceSave.setSingleShot(true);
   appearanceSave.setInterval(250);
   connect(&appearanceSave, &QTimer::timeout, this, [this] { store.save(); });
@@ -407,6 +408,21 @@ void Backend::attachChatboxFile(QString path) {
   addAttachments(QString::fromUtf8(
       QJsonDocument(QJsonArray{QUrl::fromLocalFile(path).toString()})
           .toJson(QJsonDocument::Compact)));
+}
+void Backend::attachChatboxUrl(QString raw) {
+  const auto url = normalizeWebUrl(raw);
+  if (url.isEmpty())
+    return;
+  for (const auto &item : view->attachments)
+    if (item.toMap()["path"] == url)
+      return;
+  if (view->attachments.size() >= 20) {
+    emit toast("最多添加 20 个附件");
+    return;
+  }
+  view->attachments << QVariantMap{{"id", U::uuid()}, {"name", QUrl(url).host()},
+                                  {"kind", "web"}, {"path", url}, {"url", url}};
+  emit attachmentsChanged();
 }
 void Backend::activateChatWindow() {
   for (auto window : QGuiApplication::topLevelWindows()) {
@@ -1074,6 +1090,7 @@ void Backend::gatewayEvent(QVariantMap payload) {
   }
 }
 void Backend::close() {
+  if (documents) documents->cancel();
   if (closing)
     return;
   closing = true;
@@ -1106,6 +1123,34 @@ void Backend::close() {
   saveSessions();
 }
 void Backend::injectDemo() {
+  const auto preview = normalizeWebUrl(qEnvironmentVariable("UMEKO_WEB_PREVIEW_URL"));
+  const auto document = qEnvironmentVariable("UMEKO_DOCUMENT_PREVIEW_PATH");
+  const auto input = QJsonDocument::fromJson(document.toUtf8());
+  const auto paths = input.isArray() ? input.array().toVariantList() : QVariantList{document};
+  QVariantList documents;
+  for (const auto &value : paths.mid(0, 11)) {
+    const auto path = value.toString(), kind = U::documentKind(path);
+    if (QFileInfo(path).isAbsolute() && !kind.isEmpty()) documents << QVariantMap{{"path", path}, {"kind", kind}, {"title", QFileInfo(path).fileName()}};
+  }
+  if ((qEnvironmentVariableIsSet("UMEKO_WEB_PREVIEW_URL") && !preview.isEmpty()) || !documents.isEmpty()) {
+    store.data["theme"] = "light";
+    store.data["dark"] = false;
+    view->id = "webview-preview";
+    view->title = documents.isEmpty() ? "侧边网页预览" : "产物预览";
+    view->messages = {QVariantMap{{"role", "user"}, {"text", documents.isEmpty() ? "打开这个网页。" : "看看这些产物。"}},
+                      QVariantMap{{"role", "assistant"}, {"text", "已展示。"}}};
+    QVariantList media;
+    if (!preview.isEmpty() && qEnvironmentVariableIsSet("UMEKO_WEB_PREVIEW_URL"))
+      media << QVariantMap{{"path", preview}, {"url", preview}, {"kind", "web"}, {"title", "Umeko 网页预览"}, {"presentation", "webview"}};
+    media << documents;
+    QVariantList arguments;
+    for (const auto &value : media) arguments << QVariantMap{{"path", value.toMap()["path"]}};
+    event(view, {{"type", "tool"}, {"id", "web-preview"}, {"name", "submit_to_chatbox"}, {"state", "done"},
+                {"args", QVariantMap{{"items", arguments}}},
+                {"media", media}});
+    emit appearanceChanged(); emit changed(); emit chatChanged();
+    return;
+  }
   auto path = store.directory + "/umeko-notes";
   QDir().mkpath(path);
   auto p = ensureProject(path, true);
@@ -1185,4 +1230,12 @@ void Backend::injectDemo() {
   emit chatChanged();
   emit contextUsageChanged();
   emit viewChanged();
+}
+
+QString Backend::normalizeWebUrl(QString raw) const {
+  raw = raw.trimmed();
+  if (!raw.contains("://")) raw.prepend("https://");
+  const QUrl url(raw, QUrl::StrictMode);
+  if (!url.isValid() || !QStringList{"http", "https"}.contains(url.scheme()) || url.host().isEmpty() || !url.userInfo().isEmpty()) return {};
+  return url.toString(QUrl::FullyEncoded);
 }

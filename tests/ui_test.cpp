@@ -412,12 +412,28 @@ private slots:
   void sidebarAndPid() {
     backend->saveSidebarLayout(310, false);
     QCOMPARE(backend->sidebarWidth(), 310);
+    auto motion = find("sidebarWidthMotion"), sidebar = find("sidebar");
+    QVERIFY(motion && sidebar);
+    QTRY_VERIFY_WITH_TIMEOUT(!motion->property("moving").toBool(), 4000);
     QTest::keyClick(window, Qt::Key_B, Qt::ControlModifier);
     QTest::qWait(100);
     QVERIFY(backend->sidebarCollapsed());
+    QVERIFY(motion->property("moving").toBool());
+    QVERIFY(sidebar->width() > 0 && sidebar->width() < 310);
+    QTRY_VERIFY_WITH_TIMEOUT(!motion->property("moving").toBool(), 4000);
+    QCOMPARE(sidebar->width(), qreal(0));
+    QVERIFY(!sidebar->isVisible());
     QTest::keyClick(window, Qt::Key_B, Qt::ControlModifier);
     QTest::qWait(100);
     QVERIFY(!backend->sidebarCollapsed());
+    QVERIFY(motion->property("moving").toBool());
+    QVERIFY(sidebar->width() > 0 && sidebar->width() < 310);
+    // Reverse twice while moving; the latest target must win without snapping.
+    QTest::keyClick(window, Qt::Key_B, Qt::ControlModifier);
+    QTest::qWait(25);
+    QTest::keyClick(window, Qt::Key_B, Qt::ControlModifier);
+    QTRY_VERIFY_WITH_TIMEOUT(!motion->property("moving").toBool(), 4000);
+    QCOMPARE(sidebar->width(), qreal(310));
     click("settingsButton");
     auto highlight = find("settingsTabHighlight");
     QVERIFY(highlight);
@@ -431,6 +447,7 @@ private slots:
             0.2);
     window->setProperty("page", "chat");
     backend->saveSidebarLayout(244, false);
+    QTRY_VERIFY_WITH_TIMEOUT(!motion->property("moving").toBool(), 4000);
   }
   void screenshotsAndPortraits() {
     auto mascot = find("welcomeMascot");
@@ -540,6 +557,64 @@ Item {
     QVERIFY(!highlighter->colored());
     editor->setProperty("text", "const restored = 42");
     QTRY_VERIFY_WITH_TIMEOUT(highlighter->colored(), 2000);
+  }
+  void migratedProjectHistoryStaysUniqueAndClickable() {
+    QTemporaryDir temporary;
+    const auto workspace = temporary.filePath("workspace");
+    QDir().mkpath(workspace);
+    const auto history = temporary.filePath("history.jsonl");
+    QFile log(history);
+    QVERIFY(log.open(QIODevice::WriteOnly));
+    const auto header = QJsonObject{{"type", "session"}, {"version", 3}, {"id", "moved-chat"}, {"cwd", workspace}};
+    const auto entry = QJsonObject{{"type", "message"}, {"id", "user-entry"},
+      {"message", QJsonObject{{"role", "user"}, {"content", QJsonArray{QJsonObject{{"type", "text"}, {"text", "Preserved migrated question"}}}}}}};
+    log.write(QJsonDocument(header).toJson(QJsonDocument::Compact) + '\n');
+    log.write(QJsonDocument(entry).toJson(QJsonDocument::Compact) + '\n');
+    log.close();
+    Store seed(temporary.path());
+    seed.data["workspace"] = workspace;
+    seed.data["activeProject"] = "old-id";
+    seed.data["projects"] = QVariantList{
+      QVariantMap{{"id", "old-id"}, {"path", workspace}, {"name", "My workspace"}},
+      QVariantMap{{"id", "duplicate-id"}, {"path", workspace}, {"name", "workspace"}}};
+    QVERIFY(seed.save());
+    QVERIFY(seed.saveSessions(QVariantList{QVariantMap{{"id", "moved-chat"}, {"file", history}, {"workspace", workspace}, {"title", "Preserved migrated question"}}}));
+    Backend restored(root, temporary.path());
+    QQmlApplicationEngine restoredEngine;
+    restoredEngine.rootContext()->setContextProperty("backend", &restored);
+    restoredEngine.load(QUrl::fromLocalFile(root + "/app/qml/Main.qml"));
+    QVERIFY(!restoredEngine.rootObjects().isEmpty());
+    auto restoredWindow = qobject_cast<QQuickWindow*>(restoredEngine.rootObjects().first());
+    QVERIFY(restoredWindow);
+    restoredWindow->requestActivate();
+    QTest::qWait(400);
+    QCOMPARE(restored.projectRows().size(), 2);
+    auto item = [&](QString name) -> QQuickItem* {
+      QList<QQuickItem*> pending{restoredWindow->contentItem()};
+      while (!pending.isEmpty()) {
+        auto next = pending.takeLast();
+        if (next->objectName() == name) return next;
+        pending.append(next->childItems());
+      }
+      return nullptr;
+    };
+    auto clickRestored = [&](QString name) -> bool {
+      auto target = item(name);
+      if (!target || !target->isVisible()) return false;
+      QTest::mouseClick(restoredWindow, Qt::LeftButton, Qt::NoModifier,
+          target->mapToScene(QPointF(target->width()/2, target->height()/2)).toPoint());
+      return true;
+    };
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      QVERIFY(clickRestored("sidebarRow_moved-chat"));
+      QTRY_COMPARE_WITH_TIMEOUT(restored.activeSession(), QString("moved-chat"), 5000);
+      QVERIFY(!restored.messages().isEmpty());
+      QCOMPARE(restored.messages().first().toMap()["text"].toString(), QString("Preserved migrated question"));
+      QTRY_VERIFY(!restoredWindow->property("sidebarSwitching").toBool());
+      QVERIFY(clickRestored("newChatButton"));
+      QTRY_VERIFY(restored.activeSession().isEmpty());
+    }
+    restored.close();
   }
   void coldHistoryWithRetiredModel() {
     auto profile = directory.filePath("cold-profile");
@@ -685,7 +760,7 @@ Item {
     configureAPI();
     backend->newSession();
     mediaImage = directory.filePath("preview # image.png");
-    mediaReport = directory.filePath("report.txt");
+    mediaReport = directory.filePath("report.pdf");
     QImage image(640, 280, QImage::Format_RGB32);
     image.fill(QColor("#d8e4ff"));
     QVERIFY(image.save(mediaImage));
@@ -811,6 +886,128 @@ Item {
         if (step.toMap()["kind"] == "media")
           cards += step.toMap()["items"].toList().size();
     QCOMPARE(cards, 2);
+  }
+  void documentDeliveryAndResize() {
+    backend->newSession();
+    const auto previousUrl = qgetenv("UMEKO_WEB_PREVIEW_URL"), previousDocument = qgetenv("UMEKO_DOCUMENT_PREVIEW_PATH");
+    const auto cleanup = qScopeGuard([&] {
+      if (previousUrl.isNull()) qunsetenv("UMEKO_WEB_PREVIEW_URL"); else qputenv("UMEKO_WEB_PREVIEW_URL", previousUrl);
+      if (previousDocument.isNull()) qunsetenv("UMEKO_DOCUMENT_PREVIEW_PATH"); else qputenv("UMEKO_DOCUMENT_PREVIEW_PATH", previousDocument);
+      backend->newSession();
+    });
+    qunsetenv("UMEKO_WEB_PREVIEW_URL");
+    const auto markdown = directory.filePath("artifact.md"), code = directory.filePath("artifact.py");
+    { QFile file(markdown); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("# Preview\n\n**Markdown**\n"); }
+    { QFile file(code); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("def hello():\n    return 42\n"); }
+    auto reader = qobject_cast<DocumentPreview *>(backend->documentPreview());
+    auto pane = find("webPane");
+    qputenv("UMEKO_DOCUMENT_PREVIEW_PATH", markdown.toUtf8()); backend->injectDemo();
+    QTRY_VERIFY_WITH_TIMEOUT(!reader->state()["html"].toString().isEmpty(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!pane->property("moving").toBool(), 4000);
+    QCOMPARE(pane->property("mode").toString(), QString("document"));
+    QVERIFY(find("documentPreviewText"));
+    qputenv("UMEKO_DOCUMENT_PREVIEW_PATH", code.toUtf8()); backend->injectDemo();
+    QTRY_COMPARE(reader->state()["kind"].toString(), QString("code"));
+    auto editor = find("documentPreviewText");
+    auto colors = editor->property("syntaxColors").value<QObject *>();
+    QVERIFY(colors); QTRY_VERIFY(colors->property("colored").toBool());
+    click("copyDocumentPreviewButton");
+    QCOMPARE(QGuiApplication::clipboard()->text(), QString("def hello():\n    return 42\n"));
+    auto handle = find("webPaneResizeHandle");
+    const auto start = point(handle, handle->width() / 2, 100);
+    const auto width = pane->width();
+    QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, start);
+    for (int delta : {30, 60, 100}) { QTest::mouseMove(window, start - QPoint(delta, 0)); QTest::qWait(40); }
+    QVERIFY(handle->property("pressed").toBool()); QVERIFY(pane->width() > width + 90);
+    QTest::mouseRelease(window, Qt::LeftButton, Qt::NoModifier, start - QPoint(100, 0));
+    const auto enlarged = pane->width();
+    click("closeWebPaneButton"); QTRY_VERIFY(!pane->property("moving").toBool());
+    QVERIFY(reader->state().isEmpty());
+    click("openChatbox_web-preview_0"); QTRY_VERIFY(!reader->state()["text"].toString().isEmpty());
+    QTRY_VERIFY(!pane->property("moving").toBool()); QCOMPARE(pane->width(), enlarged);
+    backend->newSession(); QVERIFY(!pane->property("opened").toBool()); QVERIFY(reader->state().isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!pane->property("moving").toBool(), 4000);
+  }
+  void deliveryHoverClearsAfterLeavingAndClickingElsewhere() {
+    backend->newSession();
+    const auto previousUrl = qgetenv("UMEKO_WEB_PREVIEW_URL"), previousDocument = qgetenv("UMEKO_DOCUMENT_PREVIEW_PATH");
+    const auto cleanup = qScopeGuard([&] {
+      if (previousUrl.isNull()) qunsetenv("UMEKO_WEB_PREVIEW_URL"); else qputenv("UMEKO_WEB_PREVIEW_URL", previousUrl);
+      if (previousDocument.isNull()) qunsetenv("UMEKO_DOCUMENT_PREVIEW_PATH"); else qputenv("UMEKO_DOCUMENT_PREVIEW_PATH", previousDocument);
+      backend->newSession();
+    });
+    qunsetenv("UMEKO_WEB_PREVIEW_URL");
+    QVariantList paths;
+    for (const auto &name : {"notes.txt", "example.py", "readme.md"})
+      paths << root + "/tests/fixtures/preview/" + name;
+    qputenv("UMEKO_DOCUMENT_PREVIEW_PATH", QJsonDocument::fromVariant(paths).toJson(QJsonDocument::Compact));
+    backend->injectDemo();
+    QTRY_VERIFY_WITH_TIMEOUT(!find("webPane")->property("moving").toBool(), 4000);
+    QTest::qWait(300);
+    for (int index = 0; index < 3; ++index) {
+      const auto key = "web-preview_" + QString::number(index);
+      auto header = find("openChatbox_" + key);
+      QVERIFY(header);
+      movePointer(point(header, 50, 15));
+      QTRY_VERIFY(header->property("interactionHovered").toBool());
+      QTRY_VERIFY_WITH_TIMEOUT(find("hoverTipContent_chatboxTip_" + key) && find("hoverTipContent_chatboxTip_" + key)->isVisible(), 2000);
+      QPointer<QQuickItem> tip = find("hoverTipContent_chatboxTip_" + key);
+      click("openChatbox_" + key);
+      movePointer(point(find("promptInput"), 30, 15));
+      QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, point(find("promptInput"), 30, 15));
+      for (int other = 0; other < 3; ++other) {
+        auto target = find("openChatbox_web-preview_" + QString::number(other));
+        QTRY_VERIFY_WITH_TIMEOUT(!target->property("interactionHovered").toBool(), 1000);
+      }
+      QTRY_VERIFY_WITH_TIMEOUT(!tip || !tip->isVisible(), 1000);
+    }
+  }
+  void webCardContextActions() {
+    backend->newSession();
+    const auto previous = qgetenv("UMEKO_WEB_PREVIEW_URL");
+    const auto restore = qScopeGuard([&] {
+      if (previous.isNull()) qunsetenv("UMEKO_WEB_PREVIEW_URL");
+      else qputenv("UMEKO_WEB_PREVIEW_URL", previous);
+      QDesktopServices::unsetUrlHandler("https");
+      backend->newSession();
+    });
+    const QString url = "https://example.com/review?q=1#section";
+    qputenv("UMEKO_WEB_PREVIEW_URL", url.toUtf8());
+    backend->injectDemo();
+    QTRY_VERIFY(find("openChatbox_web-preview_0"));
+    QTRY_VERIFY_WITH_TIMEOUT(!find("webPane")->property("moving").toBool(), 4000);
+    QTest::qWait(150);
+    auto prompt = find("promptInput");
+    prompt->setProperty("text", "Existing draft");
+    const auto menu = [this] {
+      QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier,
+                        point(find("openChatbox_web-preview_0")));
+      QTest::qWait(180);
+    };
+    menu();
+    for (auto prefix : {"openChatboxWeb_", "copyChatboxUrl_", "attachChatboxWeb_"}) {
+      auto action = find(QString(prefix) + "web-preview_0");
+      QVERIFY(action && action->isVisible());
+    }
+    for (auto prefix : {"attachChatbox_", "copyChatboxFile_", "copyChatbox_", "revealChatbox_"})
+      QVERIFY(!find(QString(prefix) + "web-preview_0")->isVisible());
+    window->grabWindow().save(root + "/build/screenshots/webview-context-menu.png");
+    click("copyChatboxUrl_web-preview_0");
+    QCOMPARE(QGuiApplication::clipboard()->text(), url);
+    QDesktopServices::setUrlHandler("https", this, "recordOpenedUrl");
+    const auto count = openedUrls.size();
+    menu(); click("openChatboxWeb_web-preview_0");
+    QCOMPARE(openedUrls.size(), count + 1);
+    QCOMPARE(openedUrls.last(), QUrl(url));
+    menu(); click("attachChatboxWeb_web-preview_0");
+    QCOMPARE(backend->attachments().size(), 1);
+    QCOMPARE(backend->attachments().first().toMap()["url"].toString(), url);
+    QCOMPARE(prompt->property("text").toString(), QString("Existing draft"));
+    QVERIFY(prompt->hasActiveFocus());
+    backend->attachChatboxUrl(url);
+    backend->attachChatboxUrl("javascript:alert(1)");
+    QCOMPARE(backend->attachments().size(), 1);
+    QVERIFY(!find("webPane")->property("opened").toBool());
   }
   void wordAndParagraphSelection() {
     configureAPI();
@@ -1617,6 +1814,54 @@ Item {
     auto before = backend->readMcp("global");
     backend->saveMcp("global", "{\"mcpServers\":[]}");
     QCOMPARE(backend->readMcp("global"), before);
+  }
+  void mcpAddPopupUsesTheCurrentPiConfiguration() {
+    auto manager = qobject_cast<PiManagement*>(backend->piManagement());
+    QVERIFY(manager);
+    const auto original = backend->store.data;
+    const auto global = backend->readMcp("global"), project = backend->readMcp("project");
+    const auto previousPage = window->property("page"), previousTab = window->property("settingsTab");
+    const auto restore = qScopeGuard([&] {
+      U::writeJson(backend->mcpConfigPath("global"), QJsonDocument::fromJson(global.toUtf8()).toVariant());
+      if (!backend->mcpConfigPath("project").isEmpty()) U::writeJson(backend->mcpConfigPath("project"), QJsonDocument::fromJson(project.toUtf8()).toVariant());
+      backend->store.data = original;
+      window->setProperty("page",previousPage); window->setProperty("settingsTab",previousTab);
+      backend->invalidate(); backend->notify();
+      QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(),15000);
+    });
+    if (backend->config()["workspace"].toString().isEmpty()) {
+      const auto workspace = directory.filePath("mcp-workspace");
+      QDir().mkpath(workspace);
+      backend->setWorkspace(QUrl::fromLocalFile(workspace).toString());
+    }
+    manager->setRecoveryMode(false);
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(),15000);
+    window->setProperty("page","settings"); window->setProperty("settingsTab",3); QTest::qWait(200);
+    click("openPiSettingsButton");
+    find("piFold_kernel")->setProperty("expanded",false);
+    find("piFold_extensions")->setProperty("expanded",true);
+    find("piFold_mcp")->setProperty("expanded",true);
+    QTest::qWait(200);
+    QTRY_VERIFY_WITH_TIMEOUT(find("addMcpButton")->isEnabled(),15000);
+    QMetaObject::invokeMethod(find("addMcpButton"),"clicked");
+    QTRY_VERIFY(find("mcpInstallCommand") && find("mcpInstallCommand")->isVisible());
+    auto command = find("mcpInstallCommand"), scope = find("mcpInstallScope");
+    command->setProperty("text","pi mcp add ui-fixture --url http://127.0.0.1:9/mcp");
+    window->grabWindow().save(root + "/build/screenshots/mcp-add-popup.png");
+    click("confirmMcpInstallButton");
+    QTRY_VERIFY_WITH_TIMEOUT(manager->installState() != "installing",15000);
+    QCOMPARE(manager->installState(),QString("succeeded"));
+    QVERIFY(QJsonDocument::fromJson(backend->readMcp("global").toUtf8()).object()["mcpServers"].toObject().contains("ui-fixture"));
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
+    scope->setProperty("currentIndex",1);
+    command->setProperty("text","{\"mcpServers\":{\"project-fixture\":{\"url\":\"http://127.0.0.1:9/mcp\",\"enabled\":false}}}");
+    click("confirmMcpInstallButton");
+    QTRY_VERIFY_WITH_TIMEOUT(manager->installState() != "installing",15000);
+    QCOMPARE(manager->installState(),QString("succeeded"));
+    QVERIFY(QJsonDocument::fromJson(backend->readMcp("project").toUtf8()).object()["mcpServers"].toObject().contains("project-fixture"));
+    QVERIFY(!QJsonDocument::fromJson(backend->readMcp("global").toUtf8()).object()["mcpServers"].toObject().contains("project-fixture"));
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
+    click("closeMcpInstallButton");
   }
   void proxyProviderSubmenusAndAutomaticAddresses() {
     auto original = backend->store.data;

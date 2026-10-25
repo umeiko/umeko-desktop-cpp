@@ -489,6 +489,31 @@ void PiManagement::installExtension(QString text, bool local) {
   timer->start(180000);
   p->start(U::node(), args);
 }
+void PiManagement::addMcp(QString text, bool local) {
+  if (m_busy || b->kernelUpdating) return;
+  if (text.trimmed().isEmpty() || text.size() > 1000000 ||
+      (local && b->view->workspace.isEmpty()) ||
+      b->store.data["agent"].toMap()["safeMode"].toBool()) {
+    m_installState = "failed";
+    m_installMessage = "请填写 MCP 命令或 JSON；项目范围需先打开项目，并关闭恢复模式";
+    emit changed(); return;
+  }
+  const auto cwd = b->view->workspace.isEmpty() ? b->store.directory + "/workspace" : b->view->workspace;
+  QDir().mkpath(cwd);
+  const QVariantMap input{{"text", text}, {"local", local}, {"cwd", cwd}, {"agentDir", b->agentDir()}};
+  m_busy = true; m_installState = "installing"; m_installMessage = "正在添加 MCP 服务器…";
+  emit changed();
+  U::run(this, U::node(), {b->release + "/pi-commands.mjs", "--add-mcp"},
+      QJsonDocument::fromVariant(input).toJson(QJsonDocument::Compact),
+      [this](bool ok, QByteArray raw, QString error) {
+        const auto result = QJsonDocument::fromJson(raw).object();
+        const bool passed = ok && result["ok"].toBool();
+        m_busy = false; m_installState = passed ? "succeeded" : "failed";
+        m_installMessage = passed ? result["message"].toString() : result.value("error").toString(error);
+        if (passed) b->invalidate();
+        emit changed(); emit b->changed();
+      }, 30000, cwd);
+}
 void PiManagement::setRecoveryMode(bool enabled) {
   if (m_busy || b->kernelUpdating)
     return;

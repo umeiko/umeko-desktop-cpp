@@ -1,6 +1,7 @@
 #include "chatmodel.hpp"
 #include "common.hpp"
 #include "store.hpp"
+#include "document_preview.hpp"
 #include <QtTest>
 
 class CoreTests : public QObject {
@@ -13,7 +14,9 @@ private slots:
     QDir().mkpath(old + "/provider-plugins/packages/example/1.0.0");
     QDir().mkpath(old + "/pi/sessions");
     QVERIFY(U::writeJson(old + "/settings.json",
-                         QVariantMap{{"workspace", old + "/workspace"}}));
+                         QVariantMap{{"workspace", old + "/workspace"},
+                                     {"activeProject", "old-id"},
+                                     {"projects", QVariantList{QVariantMap{{"id", "old-id"}, {"path", old + "/workspace"}, {"name", "My project"}, {"pinned", true}}}}}));
     QVERIFY(U::writeJson(
         old + "/sessions.json",
         QVariantList{QVariantMap{{"file", old + "/pi/sessions/one.jsonl"}}}));
@@ -27,6 +30,18 @@ private slots:
     log.write(header + '\n' + body);
     log.close();
     QVERIFY(Store::migrateProfile(old, target));
+    const auto migrated = U::readJson(target + "/settings.json").toMap();
+    auto projectKey = U::cleanPath(target + "/workspace");
+#ifdef Q_OS_WIN
+    projectKey = projectKey.toLower();
+#endif
+    const auto projectId = U::sha(projectKey.toUtf8()).left(16);
+    QCOMPARE(migrated["activeProject"].toString(), projectId);
+    const auto project = migrated["projects"].toList().first().toMap();
+    QCOMPARE(project["id"].toString(), projectId);
+    QCOMPARE(project["path"].toString(), target + "/workspace");
+    QCOMPARE(project["name"].toString(), QString("My project"));
+    QVERIFY(project["pinned"].toBool());
     QCOMPARE(U::readJson(target + "/settings.json")
                  .toMap()["credentialNamespace"]
                  .toString(),
@@ -45,6 +60,29 @@ private slots:
     QCOMPARE(moved.readAll(), body);
     QVERIFY(QFileInfo::exists(old + "/settings.json"));
     QVERIFY(!Store::migrateProfile(old, target));
+  }
+  void repairsMovedAndDuplicatedProjectsOnStartup() {
+    QTemporaryDir temp;
+    const auto path = temp.path() + "/workspace";
+    QDir().mkpath(path);
+    const QVariantList projects{
+        QVariantMap{{"id", "old-path-id"}, {"path", path}, {"name", "My project"}},
+        QVariantMap{{"id", "new-path-id"}, {"path", path + "/."}, {"name", "workspace"}, {"pinned", true}}};
+    QVERIFY(U::writeJson(temp.filePath("settings.json"),
+                         QVariantMap{{"projects", projects}, {"activeProject", "new-path-id"}, {"credentialNamespace", "preserve-credentials"}}));
+    const QByteArray history = "{\"id\":\"same-session\",\"content\":\"untouched\"}\n";
+    QFile log(temp.filePath("history.jsonl"));
+    QVERIFY(log.open(QIODevice::WriteOnly)); log.write(history); log.close();
+    Store repaired(temp.path());
+    const auto rows = repaired.data["projects"].toList();
+    QCOMPARE(rows.size(), 1);
+    const auto project = rows.first().toMap();
+    QCOMPARE(project["name"].toString(), QString("My project"));
+    QVERIFY(project["pinned"].toBool());
+    QCOMPARE(repaired.data["activeProject"], project["id"]);
+    QCOMPARE(repaired.data["credentialNamespace"].toString(), QString("preserve-credentials"));
+    QCOMPARE(Store(temp.path()).data["projects"].toList(), rows);
+    QVERIFY(log.open(QIODevice::ReadOnly)); QCOMPARE(log.readAll(), history);
   }
   void outputDefaultMigration() {
     QTemporaryDir temp;
@@ -67,6 +105,57 @@ private slots:
     QVERIFY(store.save());
     QCOMPARE(Store(temp.path()).data["agent"].toMap()["maxTokens"].toInt(),
              8192);
+  }
+  void webDeliveryCards() {
+    const auto rows = U::mediaView(QVariantList{
+      QVariantMap{{"kind", "web"}, {"path", "http://127.0.0.1:8791/review.html"}, {"title", "Preview"}},
+      QVariantMap{{"kind", "web"}, {"path", "javascript:alert(1)"}},
+      QVariantMap{{"kind", "web"}, {"path", "https://user:password@example.com/"}},
+      QVariantMap{{"kind", "web"}, {"path", "https://example.com/page"}}});
+    QCOMPARE(rows.size(), 2);
+    QCOMPARE(rows.first().toMap()["url"].toString(), QString("http://127.0.0.1:8791/review.html"));
+    ChatModel model;
+    model.update(QVariantList{QVariantMap{{"role", "assistant"}, {"text", ""}, {"tools", QVariantList{QVariantMap{{"id", "web"}, {"name", "submit_to_chatbox"}, {"media", rows}}}}}});
+    const auto activity = model.rows.first().toMap()["activity"].toList();
+    QCOMPARE(activity.last().toMap()["kind"].toString(), QString("media"));
+    QCOMPARE(activity.last().toMap()["items"].toList().size(), 2);
+  }
+  void boundedDocumentPreviews() {
+    QTemporaryDir temp;
+    auto write = [&](QString name, QByteArray text) { QFile file(temp.filePath(name)); if (!file.open(QIODevice::WriteOnly)) return QString(); file.write(text); return file.fileName(); };
+    auto code = DocumentPreview::read(write("example.py", "def hello():\n    return 42\n"), "file");
+    QCOMPARE(code["kind"].toString(), QString("code"));
+    QVERIFY(code["highlight"].toBool()); QVERIFY(!code["truncated"].toBool());
+    auto markdown = DocumentPreview::read(write("readme.md", "# Hello\n\n**world**\n\n![image](https://example.invalid/slow.png)"), "file");
+    QVERIFY(markdown["html"].toString().contains("Hello"));
+    QVERIFY(!markdown["html"].toString().contains("<img"));
+    auto complex = DocumentPreview::read(write("complex.md", QByteArray(15000, '|')), "file");
+    QVERIFY(complex["simple"].toBool()); QVERIFY(complex["html"].toString().isEmpty());
+    const auto big = write("huge.py", QByteArray(270000, 'x'));
+    QFile huge(big); QVERIFY(huge.open(QIODevice::ReadWrite)); QVERIFY(huge.resize(512ll * 1024 * 1024)); huge.close();
+    auto limited = DocumentPreview::read(big, "file");
+    QVERIFY(limited["truncated"].toBool()); QVERIFY(limited["text"].toString().size() <= 48002);
+    QVERIFY(!limited["highlight"].toBool());
+    auto lines = DocumentPreview::read(write("lines.txt", QByteArray("line\n").repeated(2000)), "file");
+    QVERIFY(lines["truncated"].toBool()); QVERIFY(lines["text"].toString().count('\n') < 1000);
+    auto binary = DocumentPreview::read(write("binary.txt", QByteArray("a\0b", 3)), "text");
+    QVERIFY(!binary["error"].toString().isEmpty());
+    QVERIFY(!DocumentPreview::read(temp.filePath("missing.md"), "markdown")["error"].toString().isEmpty());
+  }
+  void webAttachmentsRoundTrip() {
+    const QString url = "https://example.com/page?q=1#section";
+    const auto prompt = U::attachmentPrompt("Compare this", QVariantList{
+      QVariantMap{{"kind", "web"}, {"path", url}},
+      QVariantMap{{"kind", "file"}, {"path", "/tmp/report.txt"}}});
+    const auto parsed = U::splitAttachments(prompt);
+    QCOMPARE(parsed.first, QString("Compare this"));
+    QCOMPARE(parsed.second.size(), 2);
+    const auto web = parsed.second.first().toMap();
+    QCOMPARE(web["url"].toString(), url);
+    QCOMPARE(web["name"].toString(), QString("example.com"));
+    const auto malformed = U::attachmentPrompt("Keep visible", QVariantList{
+      QVariantMap{{"kind", "web"}, {"path", "javascript:alert(1)"}}});
+    QCOMPARE(U::splitAttachments(malformed).first, malformed);
   }
   void context() {
     QCOMPARE(U::contextSuggestion("kimi-k3")["tokens"].toInt(), 1048576);

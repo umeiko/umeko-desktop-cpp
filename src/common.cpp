@@ -322,16 +322,34 @@ QVariantMap U::normalizeModel(QVariantMap m, QVariantMap previous) {
          : vis.value("vision");
   return m;
 }
+QString U::documentKind(QString path, QString kind) {
+  if (QStringList{"markdown", "code", "text"}.contains(kind)) return kind;
+  if (!QStringList{"", "auto", "file"}.contains(kind)) return {};
+  const auto suffix = QFileInfo(path).suffix().toLower(), name = QFileInfo(path).fileName().toLower();
+  if (QStringList{"md", "markdown", "mdown"}.contains(suffix)) return "markdown";
+  if (QStringList{"txt", "log", "csv", "tsv", "rst", "text"}.contains(suffix) && name != "cmakelists.txt") return "text";
+  static const auto code = QString("c h cpp hpp cxx cc cs java kt go rs py pyw js mjs cjs jsx ts tsx json jsonc yaml yml toml ini cfg conf css scss html htm xml svg sh bash zsh fish ps1 bat cmd sql diff patch vue svelte qml cmake rb php lua dart swift r asm").split(' ');
+  if (code.contains(suffix) || QStringList{"dockerfile", "makefile", "cmakelists.txt", ".gitignore", ".env"}.contains(name)) return "code";
+  return {};
+}
 QVariantList U::mediaView(QVariantList items) {
   static QCache<QString, QVariantMap> cache(256);
   QVariantList out;
   for (auto value : items.mid(0, 12)) {
     auto item = value.toMap();
     const auto path = item["path"].toString();
-    const auto kind = item["kind"].toString();
+    auto kind = item["kind"].toString();
+    const auto document = documentKind(path, kind);
+    if (!document.isEmpty()) kind = document;
+    if (kind == "web") {
+      const QUrl url(path, QUrl::StrictMode);
+      if (url.isValid() && QStringList{"http", "https"}.contains(url.scheme()) && !url.host().isEmpty() && url.userInfo().isEmpty())
+        out << QVariantMap{{"path", url.toString()}, {"url", url.toString()}, {"kind", "web"}, {"name", url.host()}, {"title", item.value("title", url.host()).toString().left(160)}, {"caption", item["caption"].toString().left(1000)}};
+      continue;
+    }
     if (!QFileInfo(path).isAbsolute() || path.contains(QChar(0)) ||
         path.contains('\n') || path.contains('\r') ||
-        !QStringList{"image", "file", "folder"}.contains(kind))
+        !QStringList{"image", "file", "folder", "markdown", "code", "text"}.contains(kind))
       continue;
     QFileInfo file(path);
     auto title = item.value("title", file.fileName()).toString().left(160);
@@ -535,14 +553,21 @@ QPair<QString, QVariantList> U::splitAttachments(QString text) {
     auto tail = text.mid(index + header.size());
     for (auto line : tail.split('\n')) {
       auto part =
-          QRegularExpression("^- (file|folder|image): (.+)$").match(line);
+          QRegularExpression("^- (file|folder|image|web): (.+)$").match(line);
       if (!part.hasMatch())
         return {text, {}};
       auto path = part.captured(2);
       auto name = QString(path).replace('\\', '/').section('/', -1);
-      attachments << QVariantMap{{"kind", part.captured(1)},
-                                 {"path", path},
-                                 {"name", name.isEmpty() ? path : name}};
+      QVariantMap item{{"kind", part.captured(1)}, {"path", path},
+                       {"name", name.isEmpty() ? path : name}};
+      if (part.captured(1) == "web") {
+        const QUrl url(path, QUrl::StrictMode);
+        if (!url.isValid() || !QStringList{"http", "https"}.contains(url.scheme()) || url.host().isEmpty() || !url.userInfo().isEmpty())
+          return {text, {}};
+        item["url"] = path;
+        item["name"] = url.host();
+      }
+      attachments << item;
     }
     if (attachments.isEmpty())
       return {text, {}};

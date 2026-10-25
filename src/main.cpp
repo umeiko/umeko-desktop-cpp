@@ -1,4 +1,5 @@
 #include "backend.hpp"
+#include "webview_support.hpp"
 #include "syntaxhighlighter.hpp"
 #include "update.hpp"
 #include "tray.hpp"
@@ -32,6 +33,13 @@ static void inputMethod(const char *executable) {
 }
 int main(int argc, char **argv) {
   inputMethod(argv[0]);
+  auto earlyRoot = QFileInfo(QString::fromLocal8Bit(argv[0])).absolutePath();
+#ifdef Q_OS_MACOS
+  earlyRoot += "/../Resources";
+#endif
+  for (int i = 1; i + 1 < argc; ++i)
+    if (QString::fromLocal8Bit(argv[i]) == "--resource-root") earlyRoot = QString::fromLocal8Bit(argv[i + 1]);
+  configureWebView(U::cleanPath(earlyRoot));
   QQuickStyle::setStyle("Basic");
   QApplication app(argc, argv);
   app.setApplicationName("Umeko-Desktop");
@@ -79,6 +87,8 @@ int main(int argc, char **argv) {
   qmlRegisterType<SyntaxHighlighter>("Umeko.Text", 1, 0, "SyntaxHighlighter");
   Backend backend(root, parser.value("data-dir"));
   QQmlApplicationEngine engine;
+  const auto browserImports = webviewConfiguration()["qmlPath"].toString();
+  if (!browserImports.isEmpty()) engine.addImportPath(browserImports);
   engine.rootContext()->setContextProperty("backend", &backend);
   auto diagnostic = [](QString line) {
     auto path = qEnvironmentVariable("UMEKO_DIAGNOSTICS");
@@ -136,16 +146,18 @@ int main(int argc, char **argv) {
   QObject::connect(&app, &QCoreApplication::aboutToQuit, &backend,
                    &Backend::close);
   QTimer::singleShot(200, &backend, &Backend::loadNativeIndex);
-  if (parser.isSet("demo"))
+  if (parser.isSet("demo")) {
     QTimer::singleShot(600, &backend, &Backend::injectDemo);
+
+  }
   if (parser.isSet("snapshot"))
-    QTimer::singleShot(1200, &app,
+    QTimer::singleShot(qEnvironmentVariableIsSet("UMEKO_WEB_PREVIEW_URL") ? 4000 : 1200, &app,
                        [window, path = parser.value("snapshot"), diagnostic] {
                          if (!window->grabWindow().save(path))
                            diagnostic("SNAPSHOT_FAILED");
                        });
   if (parser.isSet("smoke"))
-    QTimer::singleShot(2000, &app, &QCoreApplication::quit);
+    QTimer::singleShot(qEnvironmentVariableIsSet("UMEKO_WEB_PREVIEW_URL") ? 5500 : 2000, &app, &QCoreApplication::quit);
   int result = app.exec();
   backend.close();
   diagnostic("EXIT:" + QString::number(result));

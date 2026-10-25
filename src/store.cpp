@@ -2,6 +2,58 @@
 #include "qtkeychain/keychain.h"
 #include <stdexcept>
 
+namespace {
+bool normalizeProjects(QVariantMap &settings) {
+  const auto previous = settings.value("projects").toList();
+  const auto previousActive = settings.value("activeProject").toString();
+  const auto previousRemoved = settings.value("removedProjects").toList();
+  QVariantList projects;
+  QHash<QString, int> positions;
+  QHash<QString, QString> identifiers;
+  for (auto value : previous) {
+    auto project = value.toMap();
+    if (project["path"].toString().isEmpty()) {
+      projects << project;
+      continue;
+    }
+    const auto path = U::cleanPath(project["path"].toString());
+    auto key = path;
+#ifdef Q_OS_WIN
+    key = key.toLower();
+#endif
+    const auto id = U::sha(key.toUtf8()).left(16);
+    const auto oldId = project["id"].toString();
+    if (!oldId.isEmpty()) identifiers[oldId] = id;
+    project["path"] = path;
+    project["id"] = id;
+    if (!positions.contains(id)) {
+      positions[id] = projects.size();
+      projects << project;
+    } else {
+      auto merged = projects[positions[id]].toMap();
+      for (auto it = project.cbegin(); it != project.cend(); ++it)
+        if (!merged.contains(it.key())) merged[it.key()] = it.value();
+      if (project["pinned"].toBool()) merged["pinned"] = true;
+      if (merged["name"].toString().isEmpty()) merged["name"] = project["name"];
+      projects[positions[id]] = merged;
+    }
+  }
+  const auto active = identifiers.value(previousActive, previousActive);
+  QVariantList removed;
+  for (auto value : previousRemoved) {
+    const auto id = identifiers.value(value.toString(), value.toString());
+    if (!removed.contains(id)) removed << id;
+  }
+  const bool changed = projects != previous || active != previousActive || removed != previousRemoved;
+  if (changed) {
+    settings["projects"] = projects;
+    settings["activeProject"] = active;
+    settings["removedProjects"] = removed;
+  }
+  return changed;
+}
+}
+
 QVariantMap Store::defaults() {
   return {
       {"projects", QVariantList{}},
@@ -103,6 +155,7 @@ bool Store::migrateProfile(QString previous, QString target) {
     value = project;
   }
   settings["projects"] = projects;
+  normalizeProjects(settings);
   ok = U::writeJson(staging + "/settings.json", settings);
   if (QFileInfo::exists(staging + "/sessions.json")) {
     auto sessions =
@@ -235,7 +288,8 @@ Store::Store(QString path) {
         U::sha((migratedFrom.isEmpty() ? directory : migratedFrom).toUtf8())
             .left(24);
   keyPrefix = data["credentialNamespace"].toString() + ":";
-  if (outputDefaultMigrated)
+  const bool projectsMigrated = normalizeProjects(data);
+  if (outputDefaultMigrated || projectsMigrated)
     save();
 }
 bool Store::save() {

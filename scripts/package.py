@@ -59,6 +59,9 @@ def main():
     # Qt deployment creates library symlinks; workspaces may live on exFAT.
     prefix=Path(tempfile.mkdtemp(prefix='umeko-package-'+target+'-'))
     run(args.cmake,'--install',args.build,'--config','Release','--component','Runtime','--prefix',prefix)
+    if sys.platform=='linux':
+        from webview_package import strip_linux_engine
+        strip_linux_engine(prefix)
     resources=prefix/'UmekoCpp.app/Contents/Resources' if sys.platform=='darwin' else prefix
     resources.mkdir(parents=True,exist_ok=True)
     if os.name=='nt':
@@ -67,7 +70,7 @@ def main():
         candidates=sorted((Path(installation)/'VC/Redist/MSVC').glob('*/x64/Microsoft.VC143.CRT'))
         if not candidates: raise RuntimeError('App-local MSVC redistributable was not found')
         for dll in candidates[-1].glob('*.dll'):copy(dll,prefix/dll.name)
-    for relative in ['runtime/gateway.mjs','runtime/transport.mjs','runtime/openai-responses.mjs','runtime/bridge.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/chatbox.mjs','runtime/update-engine.mjs','runtime/network-retry.mjs','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime']:
+    for relative in ['runtime/gateway.mjs','runtime/transport.mjs','runtime/openai-responses.mjs','runtime/bridge.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/chatbox.mjs','runtime/update-engine.mjs','runtime/network-retry.mjs','runtime/pi-commands.mjs','runtime/webview-component.mjs','runtime/webview-component.json','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime']:
         copy(ROOT/relative,resources/relative)
     copy(ROOT/'build/provider-resources',resources/'provider-resources')
     python_distribution=install_python(target,resources/'runtime/python') if bundle_python else None

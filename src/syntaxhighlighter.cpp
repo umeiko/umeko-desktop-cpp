@@ -106,7 +106,7 @@ void SyntaxHighlighter::apply() {
       {"jsx", "javascript"}, {"ts", "typescript"},  {"tsx", "typescript"},
       {"sh", "bash"},        {"ps1", "powershell"}, {"yml", "yaml"},
       {"c++", "cpp"},        {"cc", "cpp"},         {"rs", "rust"},
-      {"golang", "go"},      {"htm", "html"},       {"cs", "csharp"}};
+      {"golang", "go"},      {"htm", "html"}, {"mjs", "javascript"}, {"cjs", "javascript"}, {"pyw", "python"}, {"hpp", "cpp"}, {"h", "c"}, {"cxx", "cpp"}, {"jsonc", "json"}, {"qml", "javascript"}, {"scss", "css"}, {"svg", "xml"},       {"cs", "csharp"}};
   language = aliases.value(language, language);
   static const QSet<QString> supported = {
       "python",     "javascript", "typescript", "json",   "yaml", "bash",
