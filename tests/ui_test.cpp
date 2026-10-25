@@ -928,6 +928,50 @@ Item {
     backend->newSession(); QVERIFY(!pane->property("opened").toBool()); QVERIFY(reader->state().isEmpty());
     QTRY_VERIFY_WITH_TIMEOUT(!pane->property("moving").toBool(), 4000);
   }
+  void settingsDismissesArtifactPreview() {
+    backend->newSession();
+    const auto previousUrl = qgetenv("UMEKO_WEB_PREVIEW_URL"), previousDocument = qgetenv("UMEKO_DOCUMENT_PREVIEW_PATH");
+    const auto cleanup = qScopeGuard([&] {
+      window->setProperty("page", "chat");
+      if (previousUrl.isNull()) qunsetenv("UMEKO_WEB_PREVIEW_URL"); else qputenv("UMEKO_WEB_PREVIEW_URL", previousUrl);
+      if (previousDocument.isNull()) qunsetenv("UMEKO_DOCUMENT_PREVIEW_PATH"); else qputenv("UMEKO_DOCUMENT_PREVIEW_PATH", previousDocument);
+      backend->newSession();
+    });
+    qunsetenv("UMEKO_WEB_PREVIEW_URL");
+    qputenv("UMEKO_DOCUMENT_PREVIEW_PATH", (root + "/tests/fixtures/preview/readme.md").toUtf8());
+    backend->injectDemo();
+    auto reader = qobject_cast<DocumentPreview *>(backend->documentPreview());
+    auto pane = find("webPane");
+    auto handle = find("webPaneResizeHandle");
+    window->setProperty("webPreferredWidth", 420);
+    for (int entry = 0; entry < 3; ++entry) {
+      QTRY_VERIFY_WITH_TIMEOUT(!reader->state()["html"].toString().isEmpty(), 5000);
+      QTRY_VERIFY_WITH_TIMEOUT(!pane->property("moving").toBool(), 4000);
+      QVERIFY(pane->isVisible());
+      const auto width = pane->width();
+      if (entry == 0) click("settingsButton");
+      else if (entry == 1) QTest::keyClick(window, Qt::Key_Comma, Qt::ControlModifier);
+      else window->setProperty("page", "settings");
+      QCOMPARE(window->property("page").toString(), QString("settings"));
+      QVERIFY(!pane->property("opened").toBool());
+      QVERIFY(!pane->isVisible());
+      QVERIFY(!handle->isVisible());
+      QVERIFY(reader->state().isEmpty());
+      QTRY_VERIFY(!find("documentSurfaceLoader")->property("item").value<QObject *>());
+      QTRY_VERIFY_WITH_TIMEOUT(!pane->property("moving").toBool(), 4000);
+      QCOMPARE(pane->width(), 0.0);
+      QCOMPARE(find("settingsPage")->width(), find("mainArea")->width());
+      if (entry == 0)
+        QVERIFY(window->grabWindow().save(root + "/build/screenshots/settings-preview-dismissed.png"));
+      QTest::keyClick(window, Qt::Key_Escape);
+      QCOMPARE(window->property("page").toString(), QString("chat"));
+      QVERIFY(!pane->property("opened").toBool());
+      QVERIFY(!pane->isVisible());
+      click("openChatbox_web-preview_0");
+      QTRY_VERIFY_WITH_TIMEOUT(!pane->property("moving").toBool(), 4000);
+      QCOMPARE(pane->width(), width);
+    }
+  }
   void deliveryHoverClearsAfterLeavingAndClickingElsewhere() {
     backend->newSession();
     const auto previousUrl = qgetenv("UMEKO_WEB_PREVIEW_URL"), previousDocument = qgetenv("UMEKO_DOCUMENT_PREVIEW_PATH");
