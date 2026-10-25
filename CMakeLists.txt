@@ -97,7 +97,11 @@ target_link_libraries(UmekoUiTests PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qu
 if(MSVC)
   target_compile_options(UmekoUiTests PRIVATE /utf-8)
 endif()
-add_test(NAME native_ui COMMAND UmekoUiTests -o -,txt -o "${CMAKE_BINARY_DIR}/native-ui.txt,txt")
+add_test(NAME native_ui COMMAND UmekoUiTests -v1 -o -,txt -o "${CMAKE_BINARY_DIR}/native-ui.txt,txt")
+# This suite includes live Pi sessions and multiple navigation scenarios.
+# Intel macOS already takes ~160 s; keep each assertion bounded while allowing
+# the complete suite to finish on slower CI runners.
+set_tests_properties(native_ui PROPERTIES TIMEOUT 300)
 set(APP_TEST_PLATFORM offscreen)
 if(APPLE)
   # Apple Keychain completion runs on the Cocoa main dispatch queue.
