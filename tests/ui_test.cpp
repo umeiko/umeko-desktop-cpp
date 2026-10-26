@@ -1505,7 +1505,9 @@ Item {
     movePointer(point(view, 40, 40));
     QTest::qWait(300);
     QVERIFY(!nav->property("expanded").toBool());
-    QVERIFY(!find("conversationScrollBar")->isVisible());
+    // The hidden attached scrollbar was removed to avoid feeding estimated
+    // content sizes back into virtualized history positioning.
+    QVERIFY(!find("conversationScrollBar"));
     movePointer(point(nav));
     QTRY_VERIFY_WITH_TIMEOUT(nav->property("expanded").toBool(), 1000);
     auto listing = find("questionNavigationList");
