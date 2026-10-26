@@ -1207,6 +1207,15 @@ Item {
     about->checkUpdates();
     QTRY_VERIFY_WITH_TIMEOUT(!about->busy(), 10000);
     QCOMPARE(about->release()["state"].toString(), QString("available"));
+    const auto beforeFallback = network.urls.size();
+    network.add({}, 0); network.add(metadata(false));
+    about->m_updateProxy = "http://fixture.invalid:8080";
+    about->m_busy = true;
+    about->readRelease(QUrl("https://api.github.com/repos/umeiko/umeko-desktop-cpp/releases/latest"));
+    QTRY_VERIFY_WITH_TIMEOUT(!about->busy(), 10000);
+    QCOMPARE(about->release()["state"].toString(), QString("available"));
+    QCOMPARE(network.urls.size(), beforeFallback + 2);
+    QCOMPARE(network.proxy().type(), QNetworkProxy::NoProxy);
     QVERIFY(find("sidebarUpdateButton")->isVisible());
     const auto partial = directory.filePath("updates/Umeko/.umeko-downloads/" + U::sha(payload) + "/full.part");
     QDir().mkpath(QFileInfo(partial).absolutePath());

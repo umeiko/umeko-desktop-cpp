@@ -10,7 +10,7 @@ ApplicationWindow {
     width: 1320; height: 860
     minimumWidth: 1060; minimumHeight: 700
     visible: true
-    title: "Umeko-Desktop"
+    title: "Umeko"
     color: Theme.bg
     flags: Qt.Window | Qt.FramelessWindowHint
     property string page: "chat"
@@ -75,13 +75,23 @@ ApplicationWindow {
     property real sidebarPreferredWidth: backend.sidebarWidth
     property bool sidebarCollapsed: backend.sidebarCollapsed
     readonly property real sidebarMinimumWidth: 200
+    readonly property real sidebarCollapseThreshold: 140
     readonly property real sidebarMaximumWidth: Math.min(480, width - 760)
+    property bool sidebarCollapseHintPending: false
+    function showSidebarCollapseHint() {
+        if (!sidebarCollapseHintPending || !sidebarCollapsed || sidebarWidthMotion.moving) return
+        sidebarCollapseHintPending = false
+        sidebarToggle.flashCollapseHint()
+    }
     function saveSidebarLayout() {
         backend.saveSidebarLayout(Math.round(sidebarPreferredWidth), sidebarCollapsed)
         sidebarPreferredWidth = backend.sidebarWidth
         sidebarCollapsed = backend.sidebarCollapsed
     }
-    function toggleSidebar() { sidebarCollapsed = !sidebarCollapsed; saveSidebarLayout() }
+    function toggleSidebar() {
+        sidebarCollapseHintPending = false; sidebarToggle.stopCollapseHint()
+        sidebarCollapsed = !sidebarCollapsed; saveSidebarLayout()
+    }
     function settings(tab) { settingsTab = tab === 2 ? 1 : tab === 4 ? 3 : tab; page = "settings" }
     function startChat() { cancelSidebarSelection(); backend.newSession(); page = "chat"; composer.focusInput() }
     function startProjectChat(row) { cancelSidebarSelection(); backend.openProject(row.id); backend.newSession(); if (row.collapsed) backend.toggleProject(row.id); page = "chat"; composer.focusInput() }
@@ -120,7 +130,7 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+B"; onActivated: window.toggleSidebar() }
     Shortcut { sequences: [StandardKey.Copy]; enabled: chatSelection.activeFocus && chatSelection.hasSelection; onActivated: Qt.callLater(chatSelection.copy) }
     Shortcut { sequences: [StandardKey.SelectAll]; enabled: chatSelection.activeFocus; onActivated: chatSelection.selectAll() }
-    Shortcut { sequence: "Escape"; enabled: !imageViewer.visible && backend.pendingApproval.id === undefined; onActivated: { if (window.page === "settings") window.page = "chat"; else modelPopup.close() } }
+    Shortcut { sequence: "Escape"; enabled: !imageViewer.visible; onActivated: { if (window.page === "settings") window.page = "chat"; else modelPopup.close() } }
     Connections { target: backend; function onToast(message) { window.notification = message; toastTimer.restart() }
         function onViewChanged() { window.avatarChatKey = String(Math.random()); webPane.dismiss() }
         function onWebRequested(url, title) { window.page = "chat"; webPane.submit(url, title) }
@@ -137,18 +147,19 @@ ApplicationWindow {
 
     PidMotion {
         id: sidebarWidthMotion; objectName: "sidebarWidthMotion"
-        targetRect: Qt.rect(0, 0, window.sidebarCollapsed ? 1 : Math.min(window.sidebarPreferredWidth, window.sidebarMaximumWidth) + 1, 1)
+        targetRect: Qt.rect(0, 0, (sidebarResizeHandle.resizing ? sidebarResizeHandle.dragWidth : window.sidebarCollapsed ? 0 : Math.min(window.sidebarPreferredWidth, window.sidebarMaximumWidth)) + 1, 1)
+        onMovingChanged: if (!moving) window.showSidebarCollapseHint()
     }
     Rectangle {
         id: sidebar; objectName: "sidebar"
-        width: Math.max(0, sidebarWidthMotion.value.width - 1)
+        width: sidebarResizeHandle.resizing ? sidebarResizeHandle.dragWidth : Math.max(0, sidebarWidthMotion.value.width - 1)
         visible: width > 0.5; clip: true
         anchors.top: parent.top; anchors.bottom: parent.bottom
         color: Theme.sidebar
         Rectangle { width: 1; anchors.right: parent.right; height: parent.height; color: Theme.line }
         Item {
             // Keep content at its expanded width while the outer panel reveals or clips it.
-            width: Math.min(window.sidebarPreferredWidth, window.sidebarMaximumWidth)
+            width: Math.max(window.sidebarMinimumWidth, sidebarResizeHandle.resizing ? sidebarResizeHandle.dragWidth : Math.min(window.sidebarPreferredWidth, window.sidebarMaximumWidth))
             anchors.top: parent.top; anchors.bottom: parent.bottom
             enabled: !window.sidebarCollapsed && !sidebarWidthMotion.moving
             MouseArea { width: parent.width; height: 20; enabled: !chatSelection.dragging; onPressed: window.startSystemMove(); onDoubleClicked: window.visibility === Window.Maximized ? window.showNormal() : window.showMaximized() }
@@ -182,12 +193,12 @@ ApplicationWindow {
                         onClicked: mouse => { if (mouse.button === Qt.RightButton) { sidebarMenus.openFor(modelData, mapToItem(sidebarMenus, mouse.x, mouse.y)); return } window.selectSidebar(modelData) }
                     }
                     Glyph { visible: modelData.kind === "project"; name: "folder"; x: 15; anchors.verticalCenter: parent.verticalCenter; width: Theme.icon(16); height: Theme.icon(16) }
-                    Text { x: modelData.kind === "label" ? 17 : 42; width: parent.width - x - (modelData.kind === "project" ? 64 : 32); anchors.verticalCenter: parent.verticalCenter; text: modelData.kind === "label" ? I18n.t(modelData.title) : modelData.title; elide: Text.ElideRight; font.pixelSize: Theme.font(modelData.kind === "label" ? 10 : 11); color: modelData.kind === "label" ? Theme.muted : Theme.ink }
+                    Text { x: modelData.kind === "label" ? 17 : 42; width: parent.width - x - (modelData.kind === "project" ? Theme.control(56) + (modelData.pinned ? Theme.icon(12) + 12 : 8) : 32); anchors.verticalCenter: parent.verticalCenter; text: modelData.kind === "label" ? I18n.t(modelData.title) : modelData.title; elide: Text.ElideRight; font.pixelSize: Theme.font(modelData.kind === "label" ? 10 : 11); color: modelData.kind === "label" ? Theme.muted : Theme.ink }
                     ActivitySpinner { objectName: "sessionSpinner_" + modelData.id; anchors.right: parent.right; anchors.rightMargin: 10; anchors.verticalCenter: parent.verticalCenter; width: Theme.icon(15); height: Theme.icon(15); visible: modelData.kind === "session" && modelData.running === true; color: modelData.waiting ? Theme.accent : Theme.muted }
                     Rectangle { objectName: "sessionUnread_" + modelData.id; anchors.right: parent.right; anchors.rightMargin: 14; anchors.verticalCenter: parent.verticalCenter; width: 6; height: 6; radius: 3; color: "#4c9c6d"; visible: modelData.kind === "session" && modelData.unread === true && !modelData.running }
-                    Glyph { anchors.right: parent.right; anchors.rightMargin: 11; anchors.verticalCenter: parent.verticalCenter; width: Theme.icon(12); height: Theme.icon(12); name: "pin"; visible: modelData.pinned === true && !modelData.running && !modelData.unread && !(rowMouse.containsMouse) }
+                    Glyph { anchors.right: parent.right; anchors.rightMargin: modelData.kind === "project" ? Theme.control(56) + 4 : 11; anchors.verticalCenter: parent.verticalCenter; width: Theme.icon(12); height: Theme.icon(12); name: "pin"; visible: modelData.pinned === true && !modelData.running && !modelData.unread && !(rowMouse.containsMouse) }
                     ActionButton { objectName: "newProjectSession_" + modelData.id; anchors.right: parent.right; anchors.rightMargin: Theme.control(28); anchors.verticalCenter: parent.verticalCenter; width: Theme.control(28); height: Theme.control(28); quiet: true; glyph: "plus"; visible: modelData.kind === "project" && !backend.showArchived; hint: I18n.t("新增会话"); onClicked: window.startProjectChat(modelData) }
-                    ActionButton { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; width: Theme.control(28); height: Theme.control(28); quiet: true; glyph: modelData.collapsed ? "chevron-right" : "chevron-down"; visible: modelData.kind === "project" && (rowMouse.containsMouse || hovered || modelData.collapsed); onClicked: backend.toggleProject(modelData.id) }
+                    ActionButton { objectName: "toggleProject_" + modelData.id; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; width: Theme.control(28); height: Theme.control(28); quiet: true; glyph: modelData.collapsed ? "chevron-right" : "chevron-down"; visible: modelData.kind === "project"; onClicked: backend.toggleProject(modelData.id) }
                 }
             }
             DropArea {
@@ -221,23 +232,43 @@ ApplicationWindow {
 
     MouseArea {
         id: sidebarResizeHandle; objectName: "sidebarResizeHandle"
-        x: sidebar.width - width / 2; y: 5; width: 8; height: window.height - 10; z: 40
-        visible: !window.sidebarCollapsed && !sidebarWidthMotion.moving; enabled: !chatSelection.dragging
+        x: sidebar.width - width / 2; y: 5; width: 14; height: window.height - 10; z: 40
+        // A PID target change must not hide the active handle and cancel its grab.
+        visible: resizing || !window.sidebarCollapsed && !sidebarWidthMotion.moving; enabled: !chatSelection.dragging
         cursorShape: Qt.SizeHorCursor; hoverEnabled: true; preventStealing: true
+        property bool resizing: false
         property real pressX: 0
         property real pressWidth: 0
+        property real dragWidth: 0
+        function finishResize(collapse) {
+            if (!resizing) return
+            if (collapse) {
+                // Preserve the last committed width for the next expansion.
+                window.sidebarCollapseHintPending = true
+                window.sidebarCollapsed = true
+            } else {
+                window.sidebarPreferredWidth = Math.max(window.sidebarMinimumWidth, Math.min(window.sidebarMaximumWidth, dragWidth))
+            }
+            resizing = false
+            window.saveSidebarLayout()
+            window.showSidebarCollapseHint()
+        }
         onPressed: mouse => {
             pressX = mapToItem(window.contentItem, mouse.x, mouse.y).x
             pressWidth = sidebar.width
-        }
-        onPositionChanged: mouse => {
-            if (!pressed) return
-            const delta = mapToItem(window.contentItem, mouse.x, mouse.y).x - pressX
-            window.sidebarPreferredWidth = Math.max(window.sidebarMinimumWidth, Math.min(window.sidebarMaximumWidth, pressWidth + delta))
+            dragWidth = pressWidth
+            resizing = true
+            window.sidebarCollapseHintPending = false; sidebarToggle.stopCollapseHint()
             sidebarWidthMotion.snap()
         }
-        onReleased: window.saveSidebarLayout()
-        onCanceled: window.saveSidebarLayout()
+        onPositionChanged: mouse => {
+            if (!pressed || !resizing) return
+            const delta = mapToItem(window.contentItem, mouse.x, mouse.y).x - pressX
+            dragWidth = Math.max(0, Math.min(window.sidebarMaximumWidth, pressWidth + delta))
+            sidebarWidthMotion.snap()
+        }
+        onReleased: finishResize(dragWidth <= window.sidebarCollapseThreshold)
+        onCanceled: finishResize(false)
         Rectangle { width: 2; height: parent.height; anchors.horizontalCenter: parent.horizontalCenter; color: parent.containsMouse || parent.pressed ? Theme.accent : "transparent"; opacity: 0.5 }
     }
 
@@ -248,7 +279,27 @@ ApplicationWindow {
             id: header; height: 72; width: parent.width
             MouseArea { anchors.fill: parent; enabled: !chatSelection.dragging; onPressed: window.startSystemMove(); onDoubleClicked: window.visibility === Window.Maximized ? window.showNormal() : window.showMaximized() }
             Row { x: 20; anchors.verticalCenter: parent.verticalCenter; spacing: 10
-                ActionButton { objectName: "toggleSidebarButton"; glyph: "layout"; quiet: true; width: Theme.control(30); height: Theme.control(30); hint: window.sidebarCollapsed ? I18n.t("展开侧栏（Ctrl+B）") : I18n.t("收起侧栏（Ctrl+B）"); Accessible.name: window.sidebarCollapsed ? I18n.t("展开侧栏") : I18n.t("收起侧栏"); onClicked: window.toggleSidebar() }
+                ActionButton {
+                    id: sidebarToggle; objectName: "toggleSidebarButton"; glyph: "layout"; quiet: true
+                    width: Theme.control(30); height: Theme.control(30)
+                    hint: window.sidebarCollapsed ? I18n.t("展开侧栏（Ctrl+B）") : I18n.t("收起侧栏（Ctrl+B）")
+                    Accessible.name: window.sidebarCollapsed ? I18n.t("展开侧栏") : I18n.t("收起侧栏")
+                    property real collapseHint: 0
+                    function flashCollapseHint() { collapseHintPulse.restart() }
+                    function stopCollapseHint() { collapseHintPulse.stop(); collapseHint = 0 }
+                    background: Rectangle {
+                        radius: 8
+                        color: sidebarToggle.interactionHovered ? Theme.hover : Qt.alpha(Theme.accent, sidebarToggle.collapseHint * 0.16)
+                        border.color: Qt.alpha(Theme.accent, sidebarToggle.collapseHint * 0.55)
+                    }
+                    SequentialAnimation {
+                        id: collapseHintPulse; objectName: "sidebarCollapseHintPulse"; loops: 2
+                        NumberAnimation { target: sidebarToggle; property: "collapseHint"; from: 0; to: 1; duration: 180; easing.type: Easing.InOutSine }
+                        NumberAnimation { target: sidebarToggle; property: "collapseHint"; from: 1; to: 0; duration: 260; easing.type: Easing.InOutSine }
+                        onStopped: sidebarToggle.collapseHint = 0
+                    }
+                    onClicked: window.toggleSidebar()
+                }
                 Text { text: window.page === "chat" ? I18n.t("工作空间") : I18n.t("偏好设置"); color: Theme.muted; font.pixelSize: Theme.font(11); anchors.verticalCenter: parent.verticalCenter }
                 Text { text: "/"; color: Theme.line; font.pixelSize: Theme.font(12); anchors.verticalCenter: parent.verticalCenter }
                 Text { text: window.page === "chat" ? (window.sidebarSwitching ? window.pendingSidebarTitle : backend.sessionTitle) : [I18n.t("账号与供应商"), I18n.t("API 代理服务"), I18n.t("API 代理服务"), "Agent", "Agent", I18n.t("外观"), I18n.t("关于")][window.settingsTab]; color: Theme.ink; font.pixelSize: Theme.font(11); width: 225; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter }
@@ -272,7 +323,7 @@ ApplicationWindow {
                 Repeater { model: [{x:0.17,y:0.16,size:12},{x:0.82,y:0.30,size:17},{x:0.27,y:0.65,size:9},{x:0.73,y:0.73,size:11}]
                     Glyph { required property var modelData; x: parent.width * modelData.x; y: parent.height * modelData.y; width: modelData.size; height: modelData.size; name: "spark"; opacity: 0.28 }
                 }
-                Image { objectName: "yanamiWatermark"; anchors.fill: parent; source: "../icons/portraits/02.webp"; fillMode: Image.PreserveAspectCrop; horizontalAlignment: Image.AlignHCenter; verticalAlignment: Image.AlignVCenter; mipmap: true; opacity: 0.055 }
+                Image { objectName: "yanamiWatermark"; anchors.fill: parent; source: "../icons/portraits/02.png"; fillMode: Image.PreserveAspectCrop; horizontalAlignment: Image.AlignHCenter; verticalAlignment: Image.AlignVCenter; mipmap: true; opacity: 0.055 }
             }
             Item {
                 id: welcome; width: Math.min(parent.width - 70, 620); height: 270
@@ -327,7 +378,8 @@ ApplicationWindow {
                 x: chatWidth.conversationLeft; width: parent.width - chatWidth.conversationLeft - chatWidth.conversationRight
                 anchors.top: parent.top; anchors.topMargin: 20; anchors.bottom: composer.top; anchors.bottomMargin: 24
                 clip: true; spacing: 27; model: backend.messageModel
-                ScrollBar.vertical: ScrollBar { objectName: "conversationScrollBar"; policy: ScrollBar.AlwaysOff }
+                // A hidden attached ScrollBar still writes contentY when its
+                // size changes. Variable-height rows must have one scroll owner.
                 onAtYEndChanged: if (atYEnd && !restoring && !chatSelection.dragging) followTail = true
                 onFollowTailChanged: saveViewport()
                 onContentYChanged: saveViewport()

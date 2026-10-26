@@ -80,6 +80,9 @@ void AppAbout::readRelease(QUrl url, bool minimalChannel) {
       if (!*done) {
         *done = true; const auto value = QJsonDocument::fromJson(process->readAllStandardOutput().trimmed()).object();
         releaseResult(value["body"].toString().toUtf8(), value["code"].toInt(), minimalChannel);
+        if (value["state"] == "error" && m_release["state"] == "error") {
+          m_release["message"] = value["message"].toString(); emit changed();
+        }
       }
       process->deleteLater();
     });
@@ -92,11 +95,21 @@ void AppAbout::readRelease(QUrl url, bool minimalChannel) {
   request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                        QNetworkRequest::SameOriginRedirectPolicy);
   auto reply = network->get(request);
-  connect(reply, &QNetworkReply::finished, this, [this, reply, minimalChannel] {
+  auto certificateFailure = std::make_shared<bool>(false);
+  connect(reply, &QNetworkReply::sslErrors, this, [certificateFailure](const QList<QSslError> &errors) { *certificateFailure = !errors.isEmpty(); });
+  connect(reply, &QNetworkReply::finished, this, [this, reply, minimalChannel, url, certificateFailure] {
     const auto raw = reply->readAll();
     const auto code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     reply->deleteLater();
+    if (code == 0 && !m_updateProxy.isEmpty()) {
+      m_updateProxy.clear(); network->setProxy(QNetworkProxy(QNetworkProxy::NoProxy));
+      readRelease(url, minimalChannel); return;
+    }
     releaseResult(raw, code, minimalChannel);
+    if (*certificateFailure && m_release["state"] == "error") {
+      m_release["message"] = "无法验证更新服务器证书，请检查系统时间，并确认内网根证书已安装到系统受信任的根证书颁发机构。";
+      emit changed();
+    }
   });
 }
 void AppAbout::releaseResult(const QByteArray &raw, int code, bool minimalChannel) {
@@ -205,7 +218,7 @@ void AppAbout::consumeDownload(QProcess *process) {
     m_downloadBuffer.remove(0, end + 1);
     if (value.isEmpty()) continue;
     value["progress"] = qBound(0, qRound(value["progress"].toDouble() * 100), 100);
-    value["route"] = m_updateProxy.isEmpty() ? "直连" : "系统代理";
+    if (!value.contains("route")) value["route"] = m_updateProxy.isEmpty() ? "直连" : "系统代理";
     value["name"] = m_downloadAsset["name"];
     value["version"] = m_downloadVersion;
     if (value.contains("archive")) value["path"] = value["archive"];

@@ -15,6 +15,8 @@ public:
     setAttribute(QNetworkRequest::HttpStatusCodeAttribute, status);
     if (status >= 400)
       setError(QNetworkReply::ContentNotFoundError, "Fixture HTTP failure");
+    else if (status == 0)
+      setError(QNetworkReply::ConnectionRefusedError, "Fixture connection failure");
     open(QIODevice::ReadOnly | QIODevice::Unbuffered);
     QTimer::singleShot(0, this, [this] {
       if (isFinished())

@@ -115,7 +115,6 @@ Item {
             id: questionList
             objectName: "questionNavigationList"
             clip: true; model: root.questions; boundsBehavior: Flickable.StopAtBounds; snapMode: ListView.SnapToItem
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AlwaysOff }
             HoverHandler { id: panelHover; onHoveredChanged: root.scheduleClose() }
             delegate: ItemDelegate {
                 id: option

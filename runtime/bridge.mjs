@@ -166,7 +166,7 @@ async function bindSession(session) {
       waitForIdle: () => session.waitForIdle(),
       newSession: options => runtime.newSession(options),
       switchSession: (path, options) => runtime.switchSession(path, options),
-      fork: (id, options) => runtime.fork(id, options),
+      fork: (id, options) => forkSession(id, options),
       navigateTree: (id, options) => session.navigateTree(id, options),
       reload: () => reloadSession(session),
     },
@@ -304,6 +304,21 @@ function sessionInfo() {
   const file = manager.getSessionFile();
   return { id: manager.getSessionId(), file: file && existsSync(file) ? file : undefined,
     title: manager.getSessionName() || "新会话", workspace: manager.getCwd() };
+}
+
+async function forkSession(entryId, options) {
+  const manager = runtime.session.sessionManager;
+  const sourceTitle = manager.getSessionName() || textOf(runtime.session.messages.find(m => m.role === "user")?.content).slice(0, 28) || "新会话";
+  const title = sourceTitle.replace(/^(?:\(Fork\d+\)\s*)+/i, "");
+  const sessions = await Pi.SessionManager.listAll(config.sessionDir);
+  let number = 1;
+  for (const session of sessions) {
+    const match = /^\(Fork(\d+)\)\s+(.*)$/i.exec(session.name || "");
+    if (match && match[2] === title) number = Math.max(number, Number(match[1]) + 1);
+  }
+  const result = await runtime.fork(entryId, options);
+  if (!result.cancelled) runtime.session.setSessionName(`(Fork${number}) ${title}`);
+  return result;
 }
 
 async function state() {
@@ -460,7 +475,7 @@ async function execute(input) {
     }
     else if (input.type === "new") await runtime.newSession();
     else if (input.type === "open") await runtime.switchSession(input.path);
-    else if (input.type === "fork") await runtime.fork(input.entryId || runtime.session.sessionManager.getLeafId(), { position: "at" });
+    else if (input.type === "fork") await forkSession(input.entryId || runtime.session.sessionManager.getLeafId(), { position: "at" });
     else if (input.type === "navigate") await runtime.session.navigateTree(input.entryId, { summarize: false });
     else if (input.type === "compact") await runtime.session.compact();
     else if (input.type === "reload") await reloadSession(runtime.session);

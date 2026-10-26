@@ -1,5 +1,8 @@
 .pragma library
 var strings = {
+    "网页加载失败": "Could not load this page",
+    "网页组件加载失败，请重新安装最新版本。": "The browser component could not load. Please reinstall the latest version.",
+
     "系统代理": "System proxy",
     "直连": "Direct",
     "暂停下载": "Pause download",
