@@ -1,6 +1,8 @@
 #include "backend.hpp"
 #include <QClipboard>
 #include <QDesktopServices>
+#include "update_proxy.hpp"
+#include <QtConcurrent>
 
 AppAbout::AppAbout(Backend *backend, QNetworkAccessManager *transport)
     : QObject(backend), b(backend),
@@ -43,15 +45,21 @@ void AppAbout::copyInfo() {
   emit b->toast("已复制项目信息");
 }
 void AppAbout::checkUpdates() {
-  if (m_busy || m_download["state"] == "downloading")
+  if (m_busy || downloadActive())
     return;
   m_busy = true;
   if (m_release["state"] != "available")
     m_release = {{"state", "checking"},
                  {"message", "正在检查 GitHub 最新正式版本…"}};
   emit changed();
-  readRelease(QUrl(
-      "https://api.github.com/repos/umeiko/umeko-desktop-cpp/releases/latest"));
+  const QUrl url("https://api.github.com/repos/umeiko/umeko-desktop-cpp/releases/latest");
+  auto watcher = new QFutureWatcher<QString>(this);
+  connect(watcher, &QFutureWatcher<QString>::finished, this, [this, watcher, url] {
+    m_updateProxy = watcher->result(); watcher->deleteLater();
+    network->setProxy(qtUpdateProxy(m_updateProxy));
+    readRelease(url);
+  });
+  watcher->setFuture(QtConcurrent::run([url] { return updateProxy(url); }));
 }
 void AppAbout::startAutomaticChecks() {
   if (m_automatic.isActive())
@@ -60,6 +68,24 @@ void AppAbout::startAutomaticChecks() {
   QTimer::singleShot(5000, this, &AppAbout::checkUpdates);
 }
 void AppAbout::readRelease(QUrl url, bool minimalChannel) {
+  if (m_updateProxy.startsWith("https:")) {
+    auto process = new QProcess(this);
+    auto environment = U::environment(); environment.insert("UMEKO_UPDATE_PROXY", m_updateProxy);
+    process->setProcessEnvironment(environment); U::hideConsole(process);
+    auto done = std::make_shared<bool>(false);
+    connect(process, &QProcess::errorOccurred, this, [this,process,done,minimalChannel](QProcess::ProcessError error) {
+      if (error == QProcess::FailedToStart && !*done) { *done = true; releaseResult({},0,minimalChannel); process->deleteLater(); }
+    });
+    connect(process, &QProcess::finished, this, [this,process,done,minimalChannel](int,QProcess::ExitStatus) {
+      if (!*done) {
+        *done = true; const auto value = QJsonDocument::fromJson(process->readAllStandardOutput().trimmed()).object();
+        releaseResult(value["body"].toString().toUtf8(), value["code"].toInt(), minimalChannel);
+      }
+      process->deleteLater();
+    });
+    process->start(U::node(), {b->root + "/runtime/update-engine.mjs", "metadata", url.toString()});
+    return;
+  }
   QNetworkRequest request(url);
   request.setRawHeader("User-Agent", "Umeko-Desktop/" UMEKO_VERSION);
   request.setTransferTimeout(20000);
@@ -67,12 +93,15 @@ void AppAbout::readRelease(QUrl url, bool minimalChannel) {
                        QNetworkRequest::SameOriginRedirectPolicy);
   auto reply = network->get(request);
   connect(reply, &QNetworkReply::finished, this, [this, reply, minimalChannel] {
+    const auto raw = reply->readAll();
+    const auto code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    reply->deleteLater();
+    releaseResult(raw, code, minimalChannel);
+  });
+}
+void AppAbout::releaseResult(const QByteArray &raw, int code, bool minimalChannel) {
     m_busy = false;
     m_checked = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm");
-    int code =
-        reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    auto raw = reply->readAll();
-    reply->deleteLater();
     const auto previous = m_release;
     if (code == 404)
       m_release = {{"state", "none"},
@@ -162,112 +191,94 @@ void AppAbout::readRelease(QUrl url, bool minimalChannel) {
     if (m_release["state"] == "error" && previous["state"] == "available")
       m_release = previous;
     emit changed();
-  });
+
+}
+bool AppAbout::downloadActive() const {
+  return m_downloadProcess || m_download["state"] == "downloading" || m_download["state"] == "verifying";
+}
+void AppAbout::consumeDownload(QProcess *process) {
+  if (m_downloadProcess != process) return;
+  m_downloadBuffer += process->readAllStandardOutput();
+  while (m_downloadBuffer.contains('\n')) {
+    const auto end = m_downloadBuffer.indexOf('\n');
+    auto value = QJsonDocument::fromJson(m_downloadBuffer.left(end)).toVariant().toMap();
+    m_downloadBuffer.remove(0, end + 1);
+    if (value.isEmpty()) continue;
+    value["progress"] = qBound(0, qRound(value["progress"].toDouble() * 100), 100);
+    value["route"] = m_updateProxy.isEmpty() ? "直连" : "系统代理";
+    value["name"] = m_downloadAsset["name"];
+    value["version"] = m_downloadVersion;
+    if (value.contains("archive")) value["path"] = value["archive"];
+    m_download = value;
+    emit changed();
+  }
 }
 void AppAbout::downloadUpdate() {
-  if (m_busy || m_download["state"] == "downloading")
-    return;
+  if (m_busy || downloadActive()) return;
   const auto asset = m_release["asset"].toMap();
-  const auto version = m_release["version"].toString();
   const auto name = asset["name"].toString();
-  if (asset.isEmpty() ||
-      !QRegularExpression("^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
-           .match(name)
-           .hasMatch()) {
-    emit b->toast("该版本没有适合当前平台的更新包，请查看发布页");
-    return;
+  if (asset.isEmpty() || !QRegularExpression("^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$").match(name).hasMatch()) {
+    emit b->toast("该版本没有适合当前平台的更新包，请查看发布页"); return;
   }
-  auto directory =
-      m_downloadDirectory.isEmpty()
-          ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)
-          : m_downloadDirectory;
-  if (directory.isEmpty())
-    directory = QDir::homePath() + "/Downloads";
+  auto directory = m_downloadDirectory.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) : m_downloadDirectory;
+  if (directory.isEmpty()) directory = QDir::homePath() + "/Downloads";
   directory += "/Umeko";
-  if (!QDir().mkpath(directory)) {
-    m_download = {{"state", "error"},
-                  {"message", "无法保存更新包，请检查下载目录权限"}};
-    emit changed();
-    return;
+  const auto jobs = b->userDataDirectory() + "/updates/downloads";
+  if (!QDir().mkpath(directory) || !QDir().mkpath(jobs)) {
+    m_download = {{"state","error"},{"message","无法保存更新包，请检查下载目录权限"}}; emit changed(); return;
   }
-  QString path = directory + "/" + name;
-  int number = 1;
-  while (QFileInfo::exists(path) || QFileInfo(path).isSymLink())
-    path = directory + "/" + QFileInfo(name).completeBaseName() + "-" +
-           QString::number(number++) + "." + QFileInfo(name).suffix();
-  m_downloadFile = std::make_unique<QSaveFile>(path);
-  m_download = {{"state", "downloading"},
-                {"progress", 0},
-                {"name", name},
-                {"message", "正在下载更新包…"}};
-  if (!m_downloadFile->open(QIODevice::WriteOnly)) {
-    m_downloadFile.reset();
-    m_download = {{"state", "error"},
-                  {"message", "无法保存更新包，请检查下载目录权限"}};
-    emit changed();
-    return;
+  m_downloadAsset = asset; m_downloadVersion = m_release["version"].toString();
+  const auto file = jobs + "/" + asset["sha256"].toString() + ".json";
+  const QVariantMap job{{"repo","umeko-desktop-cpp"},{"version",m_downloadVersion},{"cache",directory},
+    {"asset",QVariantMap{{"name",name},{"url",asset["url"]},{"sha256",asset["sha256"]},{"bytes",asset["size"]}}}};
+  if (!U::writeJson(file, job)) {
+    m_download = {{"state","error"},{"message","无法保存下载任务"}}; emit changed(); return;
   }
-  m_downloadHash.reset();
-  m_received = 0;
-  m_downloadError.clear();
-  QNetworkRequest request(QUrl(asset["url"].toString()));
-  request.setRawHeader("User-Agent", "Umeko-Desktop/" UMEKO_VERSION);
-  request.setRawHeader("Accept-Encoding", "identity");
-  request.setTransferTimeout(30000);
-  request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                       QNetworkRequest::NoLessSafeRedirectPolicy);
-  auto reply = network->get(request);
-  m_downloadReply = reply;
-  reply->setReadBufferSize(1024 * 1024);
-  const auto consume = [this, reply, asset] {
-    const auto bytes = reply->readAll();
-    m_received += bytes.size();
-    if (m_received > asset["size"].toLongLong() ||
-        m_downloadFile->write(bytes) != bytes.size()) {
-      m_downloadError = "更新包大小或保存状态异常，请重新下载";
-      reply->abort();
-      return;
+  m_downloadBuffer.clear();
+  m_download = {{"state","downloading"},{"progress",m_download.value("progress",0)},{"name",name},{"message","正在连接下载服务器…"}};
+  auto process = new QProcess(this); m_downloadProcess = process;
+  U::hideConsole(process);
+  connect(process,&QProcess::readyReadStandardOutput,this,[this,process]{consumeDownload(process);});
+  connect(process,&QProcess::readyReadStandardError,this,[process]{process->readAllStandardError();});
+  connect(process,&QProcess::errorOccurred,this,[this,process](QProcess::ProcessError error){
+    if(error != QProcess::FailedToStart || m_downloadProcess != process) return;
+    m_downloadProcess.clear(); m_download = {{"state","error"},{"message","更新下载引擎无法启动，请检查内嵌 Node.js"}};
+    process->deleteLater(); emit changed();
+  });
+  connect(process,&QProcess::finished,this,[this,process](int,QProcess::ExitStatus){
+    consumeDownload(process);
+    if(m_downloadProcess == process) {
+      m_downloadProcess.clear();
+      if(m_download["state"] != "ready" && m_download["state"] != "paused" && m_download["state"] != "error") {
+        m_download["state"]="paused"; m_download["message"]="下载已暂停，进度已保存";
+      }
+      emit changed(); emit b->toast(m_download["message"].toString());
     }
-    m_downloadHash.addData(bytes);
-    const int progress = int(m_received * 100 / asset["size"].toLongLong());
-    if (m_download["progress"].toInt() != progress) {
-      m_download["progress"] = progress;
-      emit changed();
-    }
-  };
-  connect(reply, &QIODevice::readyRead, this, consume);
-  connect(reply, &QNetworkReply::finished, this,
-          [this, reply, asset, path, consume, version] {
-            if (reply->bytesAvailable() && m_downloadError.isEmpty())
-              consume();
-            const bool valid = m_downloadError.isEmpty() &&
-                               reply->error() == QNetworkReply::NoError &&
-                               reply->url().scheme() == "https" &&
-                               m_received == asset["size"].toLongLong() &&
-                               m_downloadHash.result().toHex() ==
-                                   asset["sha256"].toByteArray();
-            const bool saved = valid && m_downloadFile->commit();
-            m_downloadFile.reset();
-            m_downloadReply.clear();
-            reply->deleteLater();
-            m_download =
-                saved ? QVariantMap{{"state", "ready"},
-                                    {"path", path},
-                                    {"sha256", asset["sha256"]},
-                                    {"version", version},
-                                    {"name", asset["name"]},
-                                    {"progress", 100},
-                                    {"message", "SHA-256 校验通过，可以安装。"}}
-                      : QVariantMap{
-                            {"state", m_downloadError == "cancelled" ? "cancelled" : "error"},
-                            {"message", m_downloadError == "cancelled" ? "下载已取消" : "更新包下载或校验失败，请重新下载"}};
-            emit changed();
-            emit b->toast(m_download["message"].toString());
-          });
+    process->deleteLater();
+  });
+  auto watcher = new QFutureWatcher<QString>(this);
+  connect(watcher, &QFutureWatcher<QString>::finished, this, [this,watcher,process,file] {
+    const auto address = watcher->result(); watcher->deleteLater();
+    if (m_downloadProcess != process) return;
+    m_updateProxy = address;
+    auto environment = U::environment(); environment.insert("UMEKO_UPDATE_PROXY", address);
+    process->setProcessEnvironment(environment);
+    process->start(U::node(), {b->root + "/runtime/update-engine.mjs", "download", file});
+  });
+  watcher->setFuture(QtConcurrent::run([url=QUrl(asset["url"].toString())] { return updateProxy(url); }));
   emit changed();
 }
 void AppAbout::showDownloadedUpdate() {
   if (m_download["state"] == "ready")
     QDesktopServices::openUrl(QUrl::fromLocalFile(
         QFileInfo(m_download["path"].toString()).absolutePath()));
+}
+
+AppAbout::~AppAbout() { closeDownload(); }
+void AppAbout::closeDownload() {
+  if (!m_downloadProcess) return;
+  auto process = m_downloadProcess.data();
+  if (process->state() == QProcess::NotRunning) { m_downloadProcess.clear(); return; }
+  process->write("pause\n");
+  if (!process->waitForFinished(1500)) { process->kill(); process->waitForFinished(1000); }
 }

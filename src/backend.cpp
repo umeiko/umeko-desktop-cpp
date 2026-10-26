@@ -1094,6 +1094,7 @@ void Backend::close() {
   if (closing)
     return;
   closing = true;
+  if (about) about->closeDownload();
   appearanceSave.stop();
   previewLoader->cancel();
   streaming.stop();

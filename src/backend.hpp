@@ -108,6 +108,8 @@ class AppAbout : public QObject {
 public:
   explicit AppAbout(Backend *backend,
                     QNetworkAccessManager *transport = nullptr);
+  ~AppAbout() override;
+  void closeDownload();
   QVariantMap info() const { return m_info; }
   bool busy() const { return m_busy; }
   QVariantMap release() const { return m_release; }
@@ -135,13 +137,16 @@ private:
   QString m_checked;
   QNetworkAccessManager *network;
   QTimer m_automatic;
-  QPointer<QNetworkReply> m_downloadReply;
-  std::unique_ptr<QSaveFile> m_downloadFile;
-  QCryptographicHash m_downloadHash{QCryptographicHash::Sha256};
-  qint64 m_received = 0;
-  QString m_downloadError;
+  QPointer<QProcess> m_downloadProcess;
+  QByteArray m_downloadBuffer;
+  QVariantMap m_downloadAsset;
+  QString m_downloadVersion;
+  QString m_updateProxy;
+  bool downloadActive() const;
+  void consumeDownload(QProcess *process);
   QString m_downloadDirectory;
   void readRelease(QUrl url, bool minimalChannel = false);
+  void releaseResult(const QByteArray &raw, int code, bool minimalChannel);
   QVariantMap m_installation, updateJob;
   QString updateJobFile;
   void runUpdate();

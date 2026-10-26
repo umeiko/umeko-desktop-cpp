@@ -1205,13 +1205,15 @@ Item {
     };
     network.add(metadata(false));
     about->checkUpdates();
-    QTRY_VERIFY_WITH_TIMEOUT(!about->busy(), 2000);
+    QTRY_VERIFY_WITH_TIMEOUT(!about->busy(), 10000);
     QCOMPARE(about->release()["state"].toString(), QString("available"));
     QVERIFY(find("sidebarUpdateButton")->isVisible());
-    network.add(payload);
+    const auto partial = directory.filePath("updates/Umeko/.umeko-downloads/" + U::sha(payload) + "/full.part");
+    QDir().mkpath(QFileInfo(partial).absolutePath());
+    QFile part(partial); QVERIFY(part.open(QIODevice::WriteOnly)); part.write(payload); part.close();
     click("sidebarUpdateButton");
     QTRY_COMPARE_WITH_TIMEOUT(about->download()["state"].toString(),
-                              QString("ready"), 2000);
+                              QString("ready"), 10000);
     QFile downloaded(about->download()["path"].toString());
     QVERIFY(downloaded.open(QIODevice::ReadOnly));
     QCOMPARE(downloaded.readAll(), payload);
@@ -1226,22 +1228,58 @@ Item {
     click("cancelAppInstallButton");
     QTRY_VERIFY(!find("confirmAppInstallButton") || !find("confirmAppInstallButton")->isVisible());
     QCOMPARE(about->download()["state"].toString(), QString("ready"));
-    network.add(QByteArray(payload.size(), 'z'));
+    QVERIFY(downloaded.remove());
+    QTRY_VERIFY(!about->m_downloadProcess);
+    QDir().mkpath(QFileInfo(partial).absolutePath());
+    QVERIFY(part.open(QIODevice::WriteOnly)); part.write(QByteArray(payload.size(), 'z')); part.close();
     about->downloadUpdate();
     QTRY_COMPARE_WITH_TIMEOUT(about->download()["state"].toString(),
-                              QString("error"), 2000);
+                              QString("error"), 10000);
+    QVERIFY(about->download()["message"].toString().contains("SHA-256"));
+    QTRY_VERIFY(!about->m_downloadProcess);
     QCOMPARE(QDir(directory.filePath("updates/Umeko"))
                  .entryList(QDir::Files | QDir::Hidden)
                  .size(),
-             1);
+             0);
     about->m_minimal = true;
     network.add(metadata(false));
     network.add(metadata(true));
     about->checkUpdates();
-    QTRY_VERIFY_WITH_TIMEOUT(!about->busy(), 2000);
+    QTRY_VERIFY_WITH_TIMEOUT(!about->busy(), 10000);
     QVERIFY(about->release()["asset"].toMap()["name"].toString().contains(
         "-minimal-"));
     QVERIFY(network.urls.last().path().endsWith("/v99.0.0-minimal"));
+  }
+  void updateDownloadProgressUi() {
+    auto about = qobject_cast<AppAbout *>(backend->appAbout());
+    const auto oldRelease = about->m_release, oldDownload = about->m_download;
+    const auto oldPage = window->property("page"), oldTab = window->property("settingsTab");
+    auto restore = qScopeGuard([&] {
+      about->m_release = oldRelease; about->m_download = oldDownload; emit about->changed();
+      window->setProperty("page",oldPage); window->setProperty("settingsTab",oldTab);
+    });
+    window->setProperty("page","settings"); window->setProperty("settingsTab",6);
+    about->m_release = {{"state","available"},{"asset",QVariantMap{{"name","fixture.zip"}}}};
+    about->m_download = {{"state","downloading"},{"message","正在下载更新包…"},{"progress",35},
+      {"received",35*1024*1024},{"total",100*1024*1024},{"speed",2*1024*1024},{"eta",33},{"route","系统代理"},{"resumable",true}};
+    emit about->changed(); QTest::qWait(100);
+    QVERIFY(find("appDownloadDetails")->property("text").toString().contains("2.0 MB/s"));
+    QVERIFY(find("appDownloadDetails")->property("text").toString().contains("系统代理"));
+    QVERIFY(!find("downloadAppUpdateButton")->isEnabled());
+    QCOMPARE(find("cancelAppDownloadButton")->property("text").toString(),QString("暂停下载"));
+    const auto snapshot = qEnvironmentVariable("UMEKO_UPDATE_UI_SNAPSHOT");
+    if (!snapshot.isEmpty()) {
+      auto flick = find("settingsScroll")->property("contentItem").value<QObject *>();
+      QVERIFY(flick); flick->setProperty("contentY",qMax(0.0,flick->property("contentHeight").toDouble()-flick->property("height").toDouble()));
+      QTest::qWait(900); QVERIFY(window->grabWindow().save(snapshot));
+    }
+    about->m_download["state"]="verifying"; emit about->changed(); QTest::qWait(20);
+    QVERIFY(find("appDownloadProgress")->property("indeterminate").toBool());
+    QVERIFY(!find("checkAppUpdatesButton")->isEnabled());
+    about->m_download["state"]="paused"; emit about->changed(); QTest::qWait(20);
+    QVERIFY(find("downloadAppUpdateButton")->isEnabled());
+    QCOMPARE(find("downloadAppUpdateButton")->property("text").toString(),QString("继续下载"));
+    QVERIFY(!find("cancelAppDownloadButton")->isVisible());
   }
   void taskCompletionEventsAreNotDuplicatedOrSentForCancellation() {
     const auto metadata = backend->store.data["sessionMeta"];

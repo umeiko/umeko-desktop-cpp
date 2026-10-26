@@ -1,9 +1,15 @@
 #include "backend.hpp"
 
 void AppAbout::cancelUpdate() {
-  if (m_downloadReply && m_download["state"] == "downloading") {
-    m_downloadError = "cancelled";
-    m_downloadReply->abort();
+  if (m_downloadProcess && downloadActive()) {
+    if (m_downloadProcess->state() == QProcess::NotRunning) {
+      m_downloadProcess->deleteLater(); m_downloadProcess.clear();
+      m_download["state"] = "paused"; m_download["message"] = "下载已暂停，进度已保存";
+      emit changed(); return;
+    }
+    m_downloadProcess->write("pause\n");
+    const QPointer<QProcess> process = m_downloadProcess;
+    QTimer::singleShot(3000, this, [process] { if(process && process->state()!=QProcess::NotRunning) process->kill(); });
   }
 }
 void AppAbout::installUpdate() {
