@@ -75,6 +75,8 @@ class NativeUiTests : public QObject {
     // and moved its bottom-anchored composer. Click its settled geometry.
     QTest::qWait(150);
     QVERIFY(item->isVisible() && item->width() > 0 && item->height() > 0);
+    movePointer(point(item));
+    QTest::qWait(40);
     QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, point(item));
     QTest::qWait(100);
   }
@@ -1154,6 +1156,27 @@ Item {
     movePointer(QPoint(40, 40));
     QTRY_COMPARE_WITH_TIMEOUT(actions->property("opacity").toDouble(), 0.0,
                               1000);
+  }
+  void hoverHintsPassThroughClicks() {
+    QQmlComponent component(engine.get(), QUrl::fromLocalFile(root + "/tests/fixtures/tooltip-click.qml"));
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    auto fixture = qobject_cast<QQuickItem *>(component.create(engine->rootContext()));
+    QVERIFY(fixture);
+    const auto release = qScopeGuard([&] { fixture->setParentItem(nullptr); fixture->deleteLater(); QTest::qWait(200); });
+    fixture->setParentItem(window->contentItem()); fixture->setZ(500);
+    QTest::qWait(750);
+    auto button = fixture->findChild<QQuickItem *>("tooltipClickTarget");
+    auto hint = fixture->findChild<QQuickItem *>("overlappingHoverTip");
+    QVERIFY(button && hint && hint->isVisible());
+    auto content = hint->property("contentItem").value<QQuickItem *>();
+    QVERIFY(content);
+    const auto center = content->mapToItem(fixture, content->boundingRect().center());
+    button->setPosition(center - QPointF(button->width() / 2, button->height() / 2));
+    QTest::qWait(50);
+    const auto position = point(button);
+    QVERIFY(content->contains(content->mapFromScene(position)));
+    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, position);
+    QTRY_COMPARE_WITH_TIMEOUT(fixture->property("clicks").toInt(), 1, 1000);
   }
   void umekoDesktopControl() {
     configureAPI();
