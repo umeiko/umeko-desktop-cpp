@@ -3,13 +3,42 @@
   <h1>Umeko-Desktop</h1>
   <p>A lighter native desktop home for Pi Coding Agent.</p>
   <p>
-    <a href="https://github.com/umeiko/umeko-desktop-cpp/releases/latest">Download</a> ·
+    <a href="#downloads">Download</a> ·
     <a href="#features">Features</a> ·
     <a href="#provider-packages">Provider SDK</a> ·
     <a href="docs/BUILDING.md">Build from source</a> ·
     <a href="https://github.com/umeiko/umeko-desktop">Python edition</a>
   </p>
   <a href="https://github.com/umeiko/umeko-desktop-cpp/actions/workflows/build.yml"><img src="https://github.com/umeiko/umeko-desktop-cpp/actions/workflows/build.yml/badge.svg" alt="Native builds" /></a>
+<a id="downloads"></a>
+
+<!-- umeko-downloads:standard:start -->
+
+**Download v0.5.0 · 点击下载**
+
+[![Windows x64 ZIP](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/windows.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.0/UmekoCpp-v0.5.0-windows-x64.zip)
+[![macOS Apple Silicon DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-arm64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.0/UmekoCpp-v0.5.0-macos-arm64.dmg)
+[![macOS Intel DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-x64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.0/UmekoCpp-v0.5.0-macos-x64.dmg)
+[![Linux x64 TAR.GZ](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/linux.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.0/UmekoCpp-v0.5.0-linux-x64.tar.gz)
+
+<!-- umeko-downloads:standard:end -->
+
+<details>
+<summary>Minimal edition / 精简版 · 使用本机 Python 3.10+</summary>
+
+<!-- umeko-downloads:minimal:start -->
+
+**Download v0.5.0-minimal · Minimal / 精简版 · 点击下载**
+
+[![Windows x64 ZIP](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/windows.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.0-minimal/UmekoCpp-v0.5.0-minimal-windows-x64.zip)
+[![macOS Apple Silicon DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-arm64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.0-minimal/UmekoCpp-v0.5.0-minimal-macos-arm64.dmg)
+[![macOS Intel DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-x64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.0-minimal/UmekoCpp-v0.5.0-minimal-macos-x64.dmg)
+[![Linux x64 TAR.GZ](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/linux.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.0-minimal/UmekoCpp-v0.5.0-minimal-linux-x64.tar.gz)
+
+<!-- umeko-downloads:minimal:end -->
+
+</details>
+
 </div>
 
 Umeko-Desktop brings the Python edition's chat, tools, provider plugins and playful Yanami interface to a C++20 / Qt Quick desktop application. The interface and Pi bridge are shared with [Umeko Desktop](https://github.com/umeiko/umeko-desktop); the desktop controller is native C++.
@@ -30,7 +59,7 @@ Providers and imported plugins stay in your home directory across upgrades. Conf
 
 Pi web extensions can access the network. Configure company npm mirrors, an optional `.npmrc` and CA file under **Settings → Agent → Pi**; see [npm and extension networking](docs/npm-and-network.md).
 
-1. Download the archive for your operating system from [Releases](https://github.com/umeiko/umeko-desktop-cpp/releases).
+1. Use the [download buttons above](#downloads) to get the package for your operating system directly.
 2. Extract the whole archive. Node.js and npm are included; no separate installation is needed.
 3. Open `UmekoCpp.exe` on Windows, `UmekoCpp.app` on macOS, or `./UmekoCpp` on Linux.
 4. Open **Settings → Accounts & Providers**, add an OpenAI-compatible or Anthropic-compatible provider, and choose a model.
