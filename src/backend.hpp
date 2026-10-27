@@ -352,7 +352,7 @@ public:
   Q_INVOKABLE void deleteSession(QString id);
   Q_INVOKABLE void toggleProject(QString id);
   Q_INVOKABLE void dropProjects(QString urls);
-  Q_INVOKABLE void addAttachments(QString urls);
+  Q_INVOKABLE bool addAttachments(QString urls);
   Q_INVOKABLE bool pasteAttachments();
   Q_INVOKABLE void removeAttachment(QString id);
   Q_INVOKABLE void newSession();

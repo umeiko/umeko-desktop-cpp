@@ -1063,6 +1063,90 @@ Item {
     QCOMPARE(backend->attachments().size(), 1);
     QVERIFY(!find("webPane")->property("opened").toBool());
   }
+  void clipboardPasteFormats() {
+    window->setProperty("page", "chat");
+    backend->newSession();
+    const auto clearAttachments = [this] {
+      for (const auto &value : backend->attachments())
+        backend->removeAttachment(value.toMap()["id"].toString());
+    };
+    const auto cleanup = qScopeGuard(clearAttachments);
+    clearAttachments();
+    auto prompt = find("promptInput");
+    QVERIFY(prompt);
+    const QString code = QString::fromUtf8("def hello():\n\treturn \"中文𠮷 <tag>\"\n");
+    const auto filePath = directory.filePath("copied file.txt");
+    { QFile file(filePath); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("synthetic fixture"); }
+    const auto url = QUrl::fromLocalFile(filePath);
+    QImage image(8, 8, QImage::Format_RGB32);
+    image.fill(0x668877);
+    const auto paste = [this, prompt](QMimeData *mime) {
+      prompt->setProperty("text", "");
+      QGuiApplication::clipboard()->setMimeData(mime);
+      prompt->forceActiveFocus();
+      QTest::keyClick(window, Qt::Key_V, Qt::ControlModifier);
+      QTest::qWait(40);
+    };
+    for (int format = 0; format < 6; ++format) {
+      auto mime = new QMimeData;
+      mime->setText(code);
+      if (format == 1) {
+        mime->setHtml("<pre><span style='color:red'>IDE code</span></pre>");
+        mime->setData("text/rtf", "{\\rtf1\\ansi synthetic fixture}");
+        mime->setData("application/x-java-jvm-local-objectref", "fixture");
+      } else if (format == 2) {
+        mime->setData("text/uri-list", QByteArray());
+        QVERIFY(mime->hasUrls() && mime->urls().isEmpty());
+      } else if (format == 3) {
+        mime->setUrls({QUrl("https://example.invalid/source.py")});
+      } else if (format == 4) {
+        mime->setUrls({url});
+      } else if (format == 5) {
+        mime->setImageData(image);
+      }
+      paste(mime);
+      QCOMPARE(prompt->property("text").toString(), code);
+      QVERIFY(backend->attachments().isEmpty());
+    }
+    for (int format = 0; format < 3; ++format) {
+      auto mime = new QMimeData;
+      mime->setUrls({url});
+      if (format == 1) mime->setText(url.toString());
+      if (format == 2) mime->setText(QDir::toNativeSeparators(filePath));
+      paste(mime);
+      QCOMPARE(prompt->property("text").toString(), QString());
+      QCOMPARE(backend->attachments().size(), 1);
+      QCOMPARE(backend->attachments().first().toMap()["path"].toString(), U::cleanPath(filePath));
+    }
+    clearAttachments();
+    auto screenshot = new QMimeData;
+    screenshot->setImageData(image);
+    paste(screenshot);
+    QCOMPARE(prompt->property("text").toString(), QString());
+    QCOMPARE(backend->attachments().size(), 1);
+    QCOMPARE(backend->attachments().first().toMap()["kind"].toString(), QString("image"));
+    clearAttachments();
+    for (const auto &urls : QList<QList<QUrl>>{
+             {}, {QUrl("https://example.invalid/source.py")},
+             {QUrl::fromLocalFile(directory.filePath("missing.txt"))}}) {
+      auto mime = new QMimeData;
+      mime->setUrls(urls);
+      QGuiApplication::clipboard()->setMimeData(mime);
+      QVERIFY(!backend->pasteAttachments());
+      QVERIFY(backend->attachments().isEmpty());
+    }
+    for (int i = 0; i < 20; ++i) {
+      const auto path = directory.filePath(QString("occupied-%1.txt").arg(i));
+      { QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("fixture"); }
+      QVERIFY(backend->addAttachments(QString::fromUtf8(QJsonDocument(QJsonArray{QUrl::fromLocalFile(path).toString()}).toJson())));
+    }
+    auto mime = new QMimeData;
+    mime->setUrls({url});
+    QGuiApplication::clipboard()->setMimeData(mime);
+    QVERIFY(!backend->pasteAttachments());
+    QCOMPARE(backend->attachments().size(), 20);
+    prompt->setProperty("text", "");
+  }
   void wordAndParagraphSelection() {
     configureAPI();
     backend->newSession();

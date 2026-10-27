@@ -569,7 +569,8 @@ void Backend::dropProjects(QString raw) {
     if (QFileInfo(U::localPath(v.toString())).isDir())
       setWorkspace(v.toString());
 }
-void Backend::addAttachments(QString raw) {
+bool Backend::addAttachments(QString raw) {
+  bool accepted = false;
   for (auto v : QJsonDocument::fromJson(raw.toUtf8()).array()) {
     auto path = U::cleanPath(v.toString());
     QFileInfo file(path);
@@ -579,8 +580,10 @@ void Backend::addAttachments(QString raw) {
     for (auto item : view->attachments)
       if (item.toMap()["path"] == path)
         present = true;
-    if (present)
+    if (present) {
+      accepted = true;
       continue;
+    }
     if (view->attachments.size() >= 20) {
       emit toast("最多添加 20 个附件");
       break;
@@ -606,19 +609,41 @@ void Backend::addAttachments(QString raw) {
       }
     }
     view->attachments << item;
+    accepted = true;
   }
   emit attachmentsChanged();
+  return accepted;
 }
 bool Backend::pasteAttachments() {
   auto mime = QGuiApplication::clipboard()->mimeData();
-  if (mime->hasUrls()) {
-    QVariantList urls;
-    for (auto u : mime->urls())
-      urls << u.toString();
-    addAttachments(QString::fromUtf8(
-        QJsonDocument::fromVariant(urls).toJson(QJsonDocument::Compact)));
-    return true;
+  if (!mime)
+    return false;
+  QVariantList urls;
+  QStringList uriText, pathText, nativePathText;
+  for (const auto &url : mime->urls()) {
+    if (!url.isLocalFile())
+      continue;
+    urls << url.toString();
+    uriText << url.toString();
+    pathText << url.toLocalFile();
+    nativePathText << QDir::toNativeSeparators(url.toLocalFile());
   }
+  // Code may carry URI/image metadata. Preserve file-manager/file-card copies
+  // whose text is just the same file list; otherwise let TextArea paste text.
+  const auto clipboardText = mime->text();
+  auto text = clipboardText;
+  text.replace("\r\n", "\n");
+  while (text.endsWith('\n'))
+    text.chop(1);
+  if (!clipboardText.isEmpty() &&
+      (urls.isEmpty() || (text != uriText.join('\n') &&
+                          text != pathText.join('\n') &&
+                          text != nativePathText.join('\n'))))
+    return false;
+  if (!urls.isEmpty() &&
+      addAttachments(QString::fromUtf8(
+          QJsonDocument::fromVariant(urls).toJson(QJsonDocument::Compact))))
+    return true;
   if (mime->hasImage()) {
     auto image = QGuiApplication::clipboard()->image();
     if (image.isNull() || image.width() * qint64(image.height()) > 40000000)
@@ -627,10 +652,9 @@ bool Backend::pasteAttachments() {
                 U::uuid().left(12) + ".png";
     QDir().mkpath(QFileInfo(path).absolutePath());
     if (image.save(path)) {
-      addAttachments(QString::fromUtf8(
+      return addAttachments(QString::fromUtf8(
           QJsonDocument(QJsonArray{QUrl::fromLocalFile(path).toString()})
               .toJson(QJsonDocument::Compact)));
-      return true;
     }
   }
   return false;
