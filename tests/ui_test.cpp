@@ -1725,6 +1725,11 @@ Item {
     QVERIFY(!find("conversationScrollBar"));
     movePointer(point(nav));
     QTRY_VERIFY_WITH_TIMEOUT(nav->property("expanded").toBool(), 1000);
+    auto panel = window->findChild<QObject *>("questionNavigatorPanel");
+    QVERIFY(panel);
+    // reveal() schedules its initial scroll with Qt.callLater. Wait for the
+    // popup's enter transition so that scroll cannot undo our selection below.
+    QTRY_VERIFY_WITH_TIMEOUT(panel->property("opened").toBool(), 2000);
     auto listing = find("questionNavigationList");
     QVERIFY(listing);
     const auto selectFirstQuestion = [&] {
@@ -1732,6 +1737,9 @@ Item {
       QTest::qWait(150);
       auto first = find("questionNavigationItem_0");
       QVERIFY(first);
+      QTRY_VERIFY_WITH_TIMEOUT(
+          listing->boundingRect().contains(
+              first->mapToItem(listing, first->boundingRect().center())), 2000);
       // Cocoa also observes the native cursor. Move into the popup before
       // clicking so its leave timer cannot close it under a synthetic click.
       movePointer(point(first));
