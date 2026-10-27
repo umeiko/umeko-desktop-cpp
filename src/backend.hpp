@@ -397,6 +397,7 @@ public:
   void loadNativeIndex();
   void close();
   void injectDemo();
+  Q_INVOKABLE QVariantMap umekoRequest(QVariantMap request, QString callerKey = {}, bool queue = true);
   void gatewayWrite(QVariantMap payload);
   void configureGateway();
   void repairSelection();
@@ -446,6 +447,13 @@ private:
   bool archived = false, chatVisible = true, closing = false,
        kernelUpdating = false, publicRunning = false;
   QString release, kernelMessage = "就绪", latestKernel, privateToken;
+  QVariantMap controlOperations, controlJobs;
+  QStringList controlJobOrder;
+  QTimer controlTimer;
+  void initUmekoControl();
+  QVariantList umekoSessions() const;
+  bool umekoBlocked(QVariantMap spec, QVariantMap args, std::shared_ptr<Session> caller) const;
+  QVariantMap queueUmeko(QString operation, QVariantMap args, QString caller);
   QProcess *gateway = nullptr;
   QByteArray gatewayBuffer;
   int gatewayPort = 0;

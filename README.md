@@ -16,6 +16,8 @@ Umeko-Desktop brings the Python edition's chat, tools, provider plugins and play
 
 **Standard releases include CPython 3.12.15 for Provider plugins.** The `-minimal` releases omit Python and use your own Python 3.10+ interpreter. Neither edition includes PySide. Both bundle Node.js 22.23.3 and npm for Pi, the real upstream coding engine with its tools, extensions, Skills, MCP and native sessions.
 
+The Agent manages the running desktop through **`config_umeko`**: providers, plugins, themes, settings, projects, chats and updates. Native controllers apply changes and refresh the UI; busy-task changes return queued jobs. `/help` returns the bundled [Umeko documentation directory](runtime/umeko-docs/README.md), with separate guides loaded on demand. Umeko's provider and theme configuration is distinct from upstream Pi's terminal settings.
+
 <img src="docs/screenshots/chat.png" width="100%" alt="Actual native application: chat, reasoning, grouped tool history and highlighted code" />
 
 Pi can deliver images and compact file cards directly with [`submit_to_chatbox`](docs/chatbox-media.md). Click a file to open it; use its corner arrow or right-click menu to reveal or copy it. Queued messages sit above the composer with editing and deletion; steering interrupts the active run and submits a normal message immediately. Hover a message for its timestamp and copy action. Double-click selects a word; triple-click selects a paragraph. Pi settings have searchable, nested sections and click-activated inline scrolling. Model selection, sidebar highlights and compact context menus use continuous PID motion.

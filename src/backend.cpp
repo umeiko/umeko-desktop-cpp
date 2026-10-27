@@ -32,9 +32,11 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
                       manifest["engine"] == "full-coding-agent";
     // The adapters belong to this desktop build, even when Pi itself was
     // upgraded separately. Keep web/queue fixes with the application update.
-    for (const auto &name :
-         {"bridge.mjs", "resources.mjs", "provider-policy.mjs", "chatbox.mjs",
-          "network-retry.mjs", "pi-commands.mjs", "webview-component.mjs", "webview-component.json"}) {
+    QStringList adapters{"bridge.mjs", "resources.mjs", "provider-policy.mjs", "chatbox.mjs",
+          "network-retry.mjs", "pi-commands.mjs", "umeko-control.mjs", "umeko-operations.json", "webview-component.mjs", "webview-component.json"};
+    QDirIterator docs(root + "/runtime/umeko-docs", QDir::Files, QDirIterator::Subdirectories);
+    while (docs.hasNext()) adapters << QDir(root + "/runtime").relativeFilePath(docs.next());
+    for (const auto &name : adapters) {
       if (!compatible)
         break;
       QFile source(root + "/runtime/" + name);
@@ -47,6 +49,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
       if (current.open(QIODevice::ReadOnly) && current.readAll() == bytes)
         continue;
       current.close();
+      QDir().mkpath(QFileInfo(candidate + "/" + name).absolutePath());
       QSaveFile destination(candidate + "/" + name);
       compatible = destination.open(QIODevice::WriteOnly) &&
                    destination.write(bytes) == bytes.size() &&
@@ -86,6 +89,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
   repairSelection();
   store.save();
   gatewayStart();
+  initUmekoControl();
 }
 Backend::~Backend() { close(); }
 QVariantMap Backend::config() const {
@@ -660,7 +664,7 @@ void Backend::selectModel(QString id, QString model) {
 }
 bool Backend::saveProvider(QString id, QString name, QString api, QString url,
                            QString key, QString raw) {
-  if (modelsBusy(id)) {
+  if (!id.isEmpty() && modelsBusy(id)) {
     emit toast("该供应商仍有任务运行");
     return false;
   }

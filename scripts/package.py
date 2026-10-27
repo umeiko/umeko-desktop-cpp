@@ -70,9 +70,12 @@ def main():
         candidates=sorted((Path(installation)/'VC/Redist/MSVC').glob('*/x64/Microsoft.VC143.CRT'))
         if not candidates: raise RuntimeError('App-local MSVC redistributable was not found')
         for dll in candidates[-1].glob('*.dll'):copy(dll,prefix/dll.name)
-    for relative in ['runtime/gateway.mjs','runtime/transport.mjs','runtime/openai-responses.mjs','runtime/bridge.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/chatbox.mjs','runtime/update-engine.mjs','runtime/network-retry.mjs','runtime/pi-commands.mjs','runtime/webview-component.mjs','runtime/webview-component.json','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime']:
+    for relative in ['runtime/gateway.mjs','runtime/transport.mjs','runtime/openai-responses.mjs','runtime/bridge.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/chatbox.mjs','runtime/update-engine.mjs','runtime/network-retry.mjs','runtime/pi-commands.mjs','runtime/umeko-control.mjs','runtime/umeko-operations.json','runtime/umeko-docs','runtime/webview-component.mjs','runtime/webview-component.json','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime']:
         copy(ROOT/relative,resources/relative)
     copy(ROOT/'build/provider-resources',resources/'provider-resources')
+    for document in (ROOT/'runtime/umeko-docs').glob('*.md'):
+        if (resources/'runtime/releases/coding-1.3.0/umeko-docs'/document.name).read_bytes() != document.read_bytes():
+            raise RuntimeError('Packaged Umeko document differs: ' + document.name)
     python_distribution=install_python(target,resources/'runtime/python') if bundle_python else None
     node_distribution=install_node(target,resources/'runtime/node')
     for name in ['THIRD_PARTY_NOTICES.md','README.md','licenses']:

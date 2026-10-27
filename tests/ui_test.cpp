@@ -21,6 +21,8 @@ class NativeUiTests : public QObject {
   QTcpServer upstream;
   QVariantList requests;
   bool nativeTool = false, slow = false;
+  bool desktopTool = false;
+  int desktopCalls = 0;
   bool holdReplies = false;
   bool upstreamError = false;
   bool limitResponse = false;
@@ -241,7 +243,12 @@ private slots:
           }
           QVariantMap message;
           QString finish = limitResponse ? "length" : "stop";
-          if (mediaTool && mediaCalls++ == 0) {
+          if (desktopTool && desktopCalls++ == 0) {
+            QVariantMap function{{"name", "config_umeko"}, {"arguments", "{\"operation\":\"appearance.fontScale\",\"arguments\":{\"scale\":1.1}}"}};
+            message = {{"role", "assistant"}, {"content", QVariant()},
+                       {"tool_calls", QVariantList{QVariantMap{{"id", "desktop-control"}, {"type", "function"}, {"function", function}}}}};
+            finish = "tool_calls";
+          } else if (mediaTool && mediaCalls++ == 0) {
             QVariantList items{
                 QVariantMap{{"path", mediaImage},
                             {"title", "Preview image"},
@@ -1010,6 +1017,7 @@ Item {
     backend->newSession();
     const auto previous = qgetenv("UMEKO_WEB_PREVIEW_URL");
     const auto restore = qScopeGuard([&] {
+      desktopTool = false;
       if (previous.isNull()) qunsetenv("UMEKO_WEB_PREVIEW_URL");
       else qputenv("UMEKO_WEB_PREVIEW_URL", previous);
       QDesktopServices::unsetUrlHandler("https");
@@ -1146,6 +1154,102 @@ Item {
     movePointer(QPoint(40, 40));
     QTRY_COMPARE_WITH_TIMEOUT(actions->property("opacity").toDouble(), 0.0,
                               1000);
+  }
+  void umekoDesktopControl() {
+    configureAPI();
+    const auto savedAgent = backend->store.data["agent"];
+    const auto savedTheme = backend->store.data["theme"].toString();
+    const auto restore = qScopeGuard([&] {
+      releaseReplies();
+      backend->setFontScale(1);
+      backend->setLanguage("zh");
+      backend->setTheme(savedTheme);
+      backend->store.data["agent"] = savedAgent;
+      backend->store.save();
+    });
+    auto call = [&](QString operation, QVariantMap args = {}, QString caller = {}) {
+      return backend->umekoRequest({{"operation", operation}, {"arguments", args}}, caller);
+    };
+    const auto report = [](QVariant value) { return QString::fromUtf8(QJsonDocument::fromVariant(value).toJson(QJsonDocument::Compact)); };
+    auto catalog = call("operations.list")["operations"].toMap();
+    QVERIFY(catalog.size() > 50);
+    for (auto it = catalog.cbegin(); it != catalog.cend(); ++it) {
+      const auto spec = it.value().toMap();
+      const auto name = spec["target"].toString();
+      QObject *target = name == "plugins" ? backend->providerPlugins() : name == "management" ? backend->piManagement() : name == "about" ? backend->appAbout() : backend.get();
+      bool found = false;
+      for (int i = 0; i < target->metaObject()->methodCount(); ++i) {
+        const auto method = target->metaObject()->method(i);
+        if (method.name() == spec["method"].toString().toUtf8() && method.parameterCount() == spec["args"].toList().size()) found = true;
+      }
+      QVERIFY2(found, qPrintable(it.key()));
+    }
+    QVERIFY(QFileInfo::exists(call("help")["entry"].toString()));
+    QVERIFY(call("settings.get")["config"].toMap()["agent"].toMap()["maxTokens"].toInt() > 0);
+    QVERIFY(call("appearance.fontScale", {{"scale", 1.25}})["ok"].toBool());
+    QCOMPARE(backend->fontScale(), 1.25);
+    QVERIFY(call("appearance.language", {{"language", "en"}})["ok"].toBool());
+    QCOMPARE(backend->language(), QString("en"));
+    QVERIFY(!call("appearance.fontScale", {{"scale", true}})["ok"].toBool());
+    QVERIFY(!call("appearance.language", {{"language", "xx"}})["ok"].toBool());
+    QVERIFY(!call("__getattribute__")["ok"].toBool());
+    QVERIFY(!call("sessions.delete", {{"id", "missing"}})["ok"].toBool());
+    const auto file = directory.filePath("control-theme.json");
+    QVERIFY(U::writeJson(file, QVariantMap{{"format", "umeko-theme"}, {"version", 1}, {"id", "control"}, {"name", "Control"}, {"base", "dark"}, {"colors", QVariantMap{{"accent", "#9CAFFF"}}}}));
+    QVERIFY(call("themes.import", {{"path", file}})["ok"].toBool());
+    QCOMPARE(backend->config()["theme"].toString(), QString("custom:control"));
+    desktopTool = true; desktopCalls = 0;
+    backend->newSession();
+    backend->send("apply a desktop setting with the real Agent tool");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+    QCOMPARE(backend->fontScale(), 1.1);
+    QVERIFY(desktopCalls >= 2);
+    desktopTool = false;
+    backend->newSession();
+    const auto owner = backend->view;
+    holdReplies = true;
+    backend->send("desktop control fixture");
+    QTRY_VERIFY_WITH_TIMEOUT(!heldReplies.isEmpty(), 15000);
+    auto added = call("providers.save", {{"name", "Control API"}, {"api", "openai"}, {"baseUrl", "https://api.example.com/v1"}, {"key", "fixture-control-key"},
+                                       {"models", QVariantList{QVariantMap{{"upstream", "control-model"}, {"alias", "control-model"}}}}}, owner->key);
+    QVERIFY2(added["ok"].toBool(), qPrintable(report(added)));
+    const auto provider = added["createdProviderIds"].toStringList().value(0);
+    QVERIFY(!provider.isEmpty());
+    QVERIFY(!report(call("providers.list")).contains("fixture-control-key"));
+    const auto ticket = call("agent.save", {{"config", QVariantMap{{"instructions", "CONTROL_AFTER_IDLE"}}}}, owner->key);
+    QCOMPARE(ticket["status"].toString(), QString("queued"));
+    auto model = call("models.select", {{"provider", provider}, {"model", "control-model"}}, owner->key);
+    QCOMPARE(model["status"].toString(), QString("queued"));
+    backend->newSession();
+    const auto viewer = backend->view;
+    QVERIFY(call("sessions.reasoning", {{"value", "high"}}, owner->key)["ok"].toBool());
+    QCOMPARE(owner->reasoningEffort, QString("high"));
+    QCOMPARE(viewer->reasoningEffort, QString("off"));
+    releaseReplies();
+    QTRY_VERIFY_WITH_TIMEOUT(!owner->busy(), 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->controlTimer.isActive(), 5000);
+    const auto jobs = call("jobs.get")["jobs"].toList();
+    QCOMPARE(jobs.size(), 2);
+    for (auto value : jobs) QVERIFY2(value.toMap()["status"] == "completed", qPrintable(report(value)));
+    QCOMPARE(backend->store.data["agent"].toMap()["instructions"].toString(), QString("CONTROL_AFTER_IDLE"));
+    QCOMPARE(owner->provider, provider);
+    QCOMPARE(backend->view, viewer);
+    const auto exported = directory.filePath("control-export.jsonl");
+    QVERIFY(call("sessions.export", {{"id", owner->id}, {"path", exported}})["ok"].toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(exported), 10000);
+    QVERIFY(call("sessions.fork", {{"id", owner->id}})["ok"].toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->activeSession().isEmpty() && backend->activeSession() != owner->id, 15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+    const auto fork = backend->activeSession();
+    QVERIFY(call("sessions.delete", {{"id", fork}})["ok"].toBool());
+    QVERIFY(!call("sessions.get", {{"id", fork}})["ok"].toBool());
+    const auto archive = directory.filePath("control-provider.zip");
+    QVERIFY(package(archive, false, false, "example-control"));
+    const auto imported = call("plugins.import", {{"path", archive}});
+    QVERIFY2(imported["ok"].toBool(), qPrintable(report(imported)));
+    QVERIFY(call("plugins.uninstall", {{"plugin", "example-control"}, {"version", "0.1.0"}})["ok"].toBool());
+    QVERIFY(call("providers.remove", {{"id", provider}})["ok"].toBool());
+    QVERIFY(call("themes.remove", {{"id", "custom:control"}})["ok"].toBool());
   }
   void applicationUpdates() {
     auto about = qobject_cast<AppAbout *>(backend->appAbout());

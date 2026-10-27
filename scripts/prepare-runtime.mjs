@@ -27,7 +27,8 @@ if (!retrySource.includes(adaptedRetry)) {
   if (retrySource.split(originalRetry).length !== 2) throw new Error('Pi retry classifier changed; update the diagnostics adapter');
   await writeFile(retryPath, retrySource.replace(originalRetry, adaptedRetry));
 }
-for (const name of ['bridge.mjs', 'resources.mjs', 'provider-policy.mjs', 'chatbox.mjs', 'network-retry.mjs', 'pi-commands.mjs', 'webview-component.mjs', 'webview-component.json']) await cp(join(root, 'runtime', name), join(output, name));
+for (const name of ['bridge.mjs', 'resources.mjs', 'provider-policy.mjs', 'chatbox.mjs', 'network-retry.mjs', 'pi-commands.mjs', 'umeko-control.mjs', 'umeko-operations.json', 'webview-component.mjs', 'webview-component.json']) await cp(join(root, 'runtime', name), join(output, name));
+await cp(join(root, 'runtime/umeko-docs'), join(output, 'umeko-docs'), {recursive:true});
 const factoryBin=join(root,'runtime/releases/coding-1.3.0/bin');
 if(resolve(output)!==resolve(join(root,'runtime/releases/coding-1.3.0'))) {
   try { await access(factoryBin); await cp(factoryBin,join(output,'bin'),{recursive:true,dereference:true}); }

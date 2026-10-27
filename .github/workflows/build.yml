@@ -64,7 +64,7 @@ jobs:
           node scripts/prepare-runtime.mjs
           python scripts/fetch-search-tools.py
           python scripts/build-provider-resources.py
-          node --test tests/update-engine.test.mjs tests/update-download.test.mjs tests/update-network.test.mjs tests/webview.test.mjs tests/pi-commands.test.mjs tests/pi-commands-integration.test.mjs
+          node --test tests/update-engine.test.mjs tests/update-download.test.mjs tests/update-network.test.mjs tests/webview.test.mjs tests/pi-commands.test.mjs tests/pi-commands-integration.test.mjs tests/umeko-control.test.mjs tests/native-history.test.mjs
           node --test tests/gateway.test.mjs tests/openai-responses.test.mjs tests/network_retry_test.mjs
           python -m unittest discover -s tests -p test_release_retention.py
           python -m unittest discover -s tests -p test_webview_package.py

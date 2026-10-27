@@ -662,6 +662,10 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     s->approval = payload;
     if (visible)
       emit approvalChanged();
+  } else if (type == "umeko_request") {
+    writePi(s, {{"type", "umeko_response"}, {"id", payload["id"]},
+                {"result", umekoRequest({{"operation", payload["operation"]}, {"arguments", payload.value("arguments", QVariantMap{})}}, s->key)}});
+    return;
   } else if (type == "resources") {
     s->resources = payload["resources"].toMap();
     if (visible)

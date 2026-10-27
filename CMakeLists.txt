@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(UmekoCpp VERSION 0.4.4 LANGUAGES C CXX)
+project(UmekoCpp VERSION 0.5.0 LANGUAGES C CXX)
 if(APPLE)
   # The notification library also links into targets declared in this scope.
   enable_language(OBJCXX)
@@ -41,7 +41,7 @@ FetchContent_Declare(qtkeychain GIT_REPOSITORY https://github.com/frankosterfeld
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(miniz GIT_REPOSITORY https://github.com/richgel999/miniz.git GIT_TAG 293d4db1b7d0ffee9756d035b9ac6f7431ef8492)
 FetchContent_MakeAvailable(qtkeychain miniz)
-set(APP_SOURCES src/document_preview.cpp src/webview_support.cpp src/common.cpp src/store.cpp src/chatmodel.cpp src/syntaxhighlighter.cpp src/backend.cpp src/sessions.cpp src/session_preview.cpp src/providers.cpp src/management.cpp src/about.cpp src/themes.cpp src/preferences.cpp src/common_providers.cpp src/update.cpp src/about_install.cpp)
+set(APP_SOURCES src/umeko_control.cpp src/document_preview.cpp src/webview_support.cpp src/common.cpp src/store.cpp src/chatmodel.cpp src/syntaxhighlighter.cpp src/backend.cpp src/sessions.cpp src/session_preview.cpp src/providers.cpp src/management.cpp src/about.cpp src/themes.cpp src/preferences.cpp src/common_providers.cpp src/update.cpp src/about_install.cpp)
 set(UMEKO_NOTIFY_SHARED OFF CACHE BOOL "" FORCE)
 add_subdirectory(native/notifications)
 qt_add_executable(UmekoCpp src/main.cpp src/tray.cpp src/notifications.cpp ${APP_SOURCES})
