@@ -1,5 +1,15 @@
 .pragma library
 var strings = {
+  "请求与返回详情": "Request and response details",
+  "查看请求与返回": "View request and response",
+  "请求": "Request",
+  "服务器返回": "Response",
+  "请求正文": "Request body",
+  "服务器返回正文": "Response body",
+  "未记录请求内容": "Request content was not recorded",
+  "未收到服务器响应": "No response received from the server",
+  "服务器未返回响应正文": "The server returned no response body",
+  "本地异常": "Local exception",
     "网页加载失败": "Could not load this page",
     "网页组件加载失败，请重新安装最新版本。": "The browser component could not load. Please reinstall the latest version.",
 

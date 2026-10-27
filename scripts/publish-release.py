@@ -69,6 +69,18 @@ assert len(files)==18
 files=sorted(publish.iterdir(),key=lambda p:p.stat().st_size)
 releases=api('releases')
 release=next((r for r in releases if r['tag_name']==TAG),None)
+if release and not release['draft'] and os.environ.get('REPLACE_EXISTING_RELEASE')=='true':
+    from replace_release_assets import replace_published_release
+    runtime=('Minimal edition: Python is external. Provider plugins require Python 3.10+; the app detects the system interpreter automatically.' if minimal else 'Standard edition: includes standalone CPython 3.12.15 for Provider plugins. No external Python installation is required.')
+    notes = release_notes((Path(__file__).resolve().parents[1]/'docs/releases'/('v'+version+'.md')).read_text(encoding='utf-8'), REPO, TAG, [f.name for f in files]) + '\n\n'+runtime+'\n\n'
+    notes += 'Verified CI: https://github.com/'+REPO+'/actions/runs/'+RUN+'\n\n'
+    notes += ''.join(f'- {p}: {n/1048576:.2f} MiB\n' for p,n in sizes)
+    published = replace_published_release(REPO,TAG,commit,files,notes,gh,api,authorized=True)
+    refresh_readmes(REPO,TAG,published['assets'],api,gh)
+    print('Replaced same-version release:',published['html_url'],flush=True)
+    with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as out:
+        out.write('Replaced ['+TAG+']('+published['html_url']+') from verified build '+RUN+'. All 19 server-side asset digests verified.\n')
+    raise SystemExit(0)
 if release is None:
     notes=base/'notes.md'
     runtime=('Minimal edition: Python is external. Provider plugins require Python 3.10+; the app detects the system interpreter automatically.' if minimal else 'Standard edition: includes standalone CPython 3.12.15 for Provider plugins. No external Python installation is required.')

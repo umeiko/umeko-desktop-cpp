@@ -59,8 +59,12 @@ class NativeUiTests : public QObject {
   }
   void movePointer(QPoint position) {
 #ifdef Q_OS_MACOS
-    QCursor::setPos(window->mapToGlobal(position));
-    QTest::qWait(80);
+    // Cocoa needs the real cursor, while offscreen tests must stay in their
+    // synthetic window coordinates (the runner's screen geometry can differ).
+    if (QGuiApplication::platformName() != "offscreen") {
+      QCursor::setPos(window->mapToGlobal(position));
+      QTest::qWait(80);
+    }
 #endif
     // QWindow QtTest moves do not synthesize the preceding enter event,
     // including on the offscreen platform used by Windows/Linux CI.
@@ -1871,6 +1875,7 @@ Item {
     QTest::qWait(850);
   }
   void appearanceAndRequestDetails() {
+    configureAPI();
     window->setProperty("page", "settings");
     window->setProperty("settingsTab", 0);
     QTest::qWait(250);
@@ -1918,6 +1923,14 @@ Item {
     QVERIFY(find("requestDetails_1"));
     click("requestDetails_1");
     QVERIFY(find("requestDetailsText")->isVisible());
+    QVERIFY(find("requestDetailsText")->property("text").toString().contains("request failure fixture"));
+    click("requestDetailsResponseTab");
+    const auto responseText = find("requestDetailsText")->property("text").toString();
+    QVERIFY(responseText.contains("400"));
+    QVERIFY(responseText.contains("complete upstream error details"));
+    QVERIFY(!responseText.contains("request failure fixture"));
+    click("requestDetailsRequestTab");
+    QVERIFY(find("requestDetailsText")->property("text").toString().contains("request failure fixture"));
     click("copyRequestDetails");
     auto report =
         QJsonDocument::fromJson(QGuiApplication::clipboard()->text().toUtf8())
