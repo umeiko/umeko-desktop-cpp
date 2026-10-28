@@ -8,11 +8,13 @@ import shutil
 import subprocess
 import time
 from release_downloads import release_notes, refresh_readmes
+from release_policy import require_supported_edition
 
 REPO=os.environ['GITHUB_REPOSITORY']
 RUN=os.environ['RELEASE_BUILD_RUN']
 TAG=os.environ['RELEASE_TAG']
 assert re.fullmatch(r'\d+',RUN) and re.fullmatch(r'v\d+\.\d+\.\d+(?:-minimal)?',TAG)
+require_supported_edition(TAG)
 minimal=TAG.endswith('-minimal')
 version=TAG.removeprefix('v').removesuffix('-minimal')
 assert REPO=='umeiko/umeko-desktop-cpp'

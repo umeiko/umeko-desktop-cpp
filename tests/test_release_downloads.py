@@ -55,6 +55,12 @@ class ReleaseDownloadsTests(unittest.TestCase):
                                   lambda _: {'content': base64.b64encode(block.encode()).decode()}, lambda *args: calls.append(args))
         self.assertFalse(calls)
 
+    def test_retired_cpp_minimal_does_not_restore_readme_downloads(self):
+        def unexpected(*_):
+            self.fail('Retired README downloads must not be fetched or rewritten')
+        downloads.refresh_readmes('umeiko/umeko-desktop-cpp', 'v0.5.1-minimal',
+                                  assets('UmekoCpp-v0.5.1-minimal'), unexpected, unexpected)
+
     def test_refresh_uses_current_sha_and_preserves_remote_edits(self):
         old = 'Current introduction\n<!-- umeko-downloads:standard:start -->old<!-- umeko-downloads:standard:end -->\nCustom footer'
         calls = []

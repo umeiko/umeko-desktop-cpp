@@ -51,6 +51,10 @@ def release_notes(text, repo, tag, assets):
 
 def refresh_readmes(repo, tag, assets, api, gh):
     """Update only marked blocks on main after all release assets are verified."""
+    if repo == 'umeiko/umeko-desktop-cpp' and tag.endswith('-minimal'):
+        # Archived editions remain downloadable from their release pages, but
+        # must not restore a retired README section during same-tag repairs.
+        return
     section = 'minimal' if tag.endswith('-minimal') else 'standard'
     block = download_buttons(repo, tag, assets, section)
     paths = ('README.md',) if repo.endswith('-cpp') else ('README.md', 'README.zh-CN.md')

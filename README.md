@@ -23,27 +23,11 @@
 
 <!-- umeko-downloads:standard:end -->
 
-<details>
-<summary>Minimal edition / 精简版 · 使用本机 Python 3.10+</summary>
-
-<!-- umeko-downloads:minimal:start -->
-
-**Download v0.5.1-minimal · Minimal / 精简版 · 点击下载**
-
-[![Windows x64 ZIP](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/windows.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.1-minimal/UmekoCpp-v0.5.1-minimal-windows-x64.zip)
-[![macOS Apple Silicon DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-arm64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.1-minimal/UmekoCpp-v0.5.1-minimal-macos-arm64.dmg)
-[![macOS Intel DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-x64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.1-minimal/UmekoCpp-v0.5.1-minimal-macos-x64.dmg)
-[![Linux x64 TAR.GZ](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/linux.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.1-minimal/UmekoCpp-v0.5.1-minimal-linux-x64.tar.gz)
-
-<!-- umeko-downloads:minimal:end -->
-
-</details>
-
 </div>
 
 Umeko-Desktop brings the Python edition's chat, tools, provider plugins and playful Yanami interface to a C++20 / Qt Quick desktop application. The interface and Pi bridge are shared with [Umeko Desktop](https://github.com/umeiko/umeko-desktop); the desktop controller is native C++.
 
-**Standard releases include CPython 3.12.15 for Provider plugins.** The `-minimal` releases omit Python and use your own Python 3.10+ interpreter. Neither edition includes PySide. Both bundle Node.js 22.23.3 and npm for Pi, the real upstream coding engine with its tools, extensions, Skills, MCP and native sessions.
+**Releases include CPython 3.12.15 for Provider plugins, plus Node.js 22.23.3 and npm for Pi.** No separate Python or Node.js installation is required. The C++ client runs the real upstream coding engine with its tools, extensions, Skills, MCP and native sessions, without PySide.
 
 The Agent manages the running desktop through **`config_umeko`**: providers, plugins, themes, settings, projects, chats and updates. Native controllers apply changes and refresh the UI; busy-task changes return queued jobs. `/help` returns the bundled [Umeko documentation directory](runtime/umeko-docs/README.md), with separate guides loaded on demand. Umeko's provider and theme configuration is distinct from upstream Pi's terminal settings.
 
@@ -64,7 +48,7 @@ Pi web extensions can access the network. Configure company npm mirrors, an opti
 3. Open `UmekoCpp.exe` on Windows, `UmekoCpp.app` on macOS, or `./UmekoCpp` on Linux.
 4. Open **Settings → Accounts & Providers**, add an OpenAI-compatible or Anthropic-compatible provider, and choose a model.
 
-Standard releases bundle Python. Minimal editions, when available, use a `-minimal` tag for a smaller download. Minimal releases are marked as prereleases so the update checker continues to recommend the standard edition. **Settings → About** shows the actual compiler and version used for your platform.
+Release packages bundle Python, Node.js and npm. **Settings → About** shows the actual compiler and version used for your platform.
 
 | Platform | Release | Requirements |
 | --- | --- | --- |
@@ -98,7 +82,7 @@ Drag files anywhere in the chat to attach them and focus the input. Image previe
 
 Existing `umeko-provider-sdk` **API v1 ZIPs** can be imported unchanged. The core has no built-in enterprise login flow or private endpoints.
 
-Open **Settings → Accounts & Providers → +** to import a ZIP, drag it into the import dialog, or export the SDK and developer Skill. Standard builds use the bundled Python automatically; minimal builds find your system Python 3.10+ on their own. There is nothing to configure.
+Open **Settings → Accounts & Providers → +** to import a ZIP, drag it into the import dialog, or export the SDK and developer Skill. The app uses bundled Python automatically. Provider developers can optionally select a separate Python environment:
 
 ```text
 Windows: C:\path\to\venv\Scripts\python.exe
@@ -143,9 +127,9 @@ Profiles live in `~/.umeko/desktop-cpp`, separate from the Python edition at `~/
 
 ## 中文说明
 
-这是 [Umeko Desktop](https://github.com/umeiko/umeko-desktop) 的 C++ 姊妹版。保留原版聊天、Pi 扩展、工具记录、API 代理，以及八奈见主题、彩蛋和动画；桌面控制层迁移到 C++。正式版内置 Python 解释器；minimal 版使用用户配置的外部 Python。
+这是 [Umeko Desktop](https://github.com/umeiko/umeko-desktop) 的 C++ 姊妹版。保留原版聊天、Pi 扩展、工具记录、API 代理，以及八奈见主题、彩蛋和动画；桌面控制层迁移到 C++，发行包内置 Python、Node.js 与 npm。
 
-两个版本均内置 Node.js 与 npm，无需另外安装。正式版内置 CPython 3.12.15；`-minimal` 精简版使用本机 Python 3.10+。自定义供应商继续使用原来的 SDK v1 ZIP，正式版自动使用内置解释器，minimal 版自动查找本机 Python 3.10+，无需任何配置。插件依赖随插件放入 `vendor/`，或安装到本机环境。
+内置 CPython 3.12.15 和 Node.js 22.23.3，无需另外安装运行环境。自定义供应商继续使用原来的 SDK v1 ZIP，客户端自动使用内置解释器。插件依赖可随插件放入 `vendor/`，开发者也可以选择独立的 Python 环境。
 
 下载后完整解压运行。Windows、macOS ARM / Intel 和 Linux 均由独立原生 CI 构建。详细构建步骤见 [BUILDING.md](docs/BUILDING.md)。
 
