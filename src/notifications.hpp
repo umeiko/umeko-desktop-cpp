@@ -15,7 +15,7 @@ public:
   TaskNotifications(QWindow *window, QSystemTrayIcon *tray, QObject *parent = nullptr);
   void setLanguage(QString language) { english = language == "en"; }
 public slots:
-  void taskFinished(QString session, QString title, bool success);
+  void taskFinished(QString session, QString title, bool success, bool longRunning = false);
   void close();
 signals:
   void activated(QString session);

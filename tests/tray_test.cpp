@@ -56,7 +56,14 @@ private slots:
     QCOMPARE(opened[0][0].toString(),QString("B")); QCOMPARE(opened[1][0].toString(),QString("A"));
     notifications.setLanguage("en"); notifications.taskFinished("C","Failed task",false);
     QVERIFY(notifications.titles.last().contains("needs attention"));
-    notifications.close(); notifications.taskFinished("exit","Ignore",true); QCOMPARE(notifications.ids.size(),3);
+    window.showNormal(); QTRY_VERIFY(window.isVisible() && window.visibility() != QWindow::Minimized);
+    notifications.taskFinished("visible-short","Short task",true,false); QCOMPARE(notifications.ids.size(),3);
+    notifications.taskFinished("visible-long","Long task",true,true); QCOMPARE(notifications.ids.size(),4);
+    notifyEvent("clicked",notifications.ids.last().toStdString());
+    QTRY_COMPARE(opened.size(),3); QCOMPARE(opened.last()[0].toString(),QString("visible-long"));
+    notifications.taskFinished("visible-error","Long failed task",false,true); QCOMPARE(notifications.ids.size(),5);
+    QVERIFY(notifications.titles.last().contains("needs attention"));
+    notifications.close(); notifications.taskFinished("exit","Ignore",true,true); QCOMPARE(notifications.ids.size(),5);
   }
   void closeKeepsBackgroundWorkAndRestores() {
     QQuickWindow window;
@@ -71,7 +78,7 @@ private slots:
     QVERIFY(!window.isVisible());
     QCOMPARE(quit.count(),0);
     QCOMPARE(notifications.count(),1);
-    QVERIFY(notifications.first().first().toString().contains("Agent"));
+    QCOMPARE(notifications.first().first().toString(),QString("我在这里继续执行任务！需要完全退出你可以右键点击任务栏中的图标~"));
     QTRY_VERIFY(ticks > 2);
     auto icon = tray.findChild<QSystemTrayIcon*>("umekoTrayIcon");
     QVERIFY(icon && !icon->icon().isNull());

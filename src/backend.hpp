@@ -4,6 +4,8 @@
 #include "webview_support.hpp"
 #include "document_preview.hpp"
 #include <QtQuick>
+#include <chrono>
+#include <optional>
 
 class Backend;
 class Providers : public QObject {
@@ -154,6 +156,7 @@ private:
 };
 
 struct Session {
+  std::optional<std::chrono::steady_clock::time_point> promptStarted;
   QString key = U::uuid(), id, file, workspace, model, provider,
           title = "新会话", draft, phase = "idle", action, status, greeting;
   QVariantList messages, attachments, queue, tree;
@@ -419,7 +422,7 @@ signals:
   void toast(QString message);
   void webRequested(QString url, QString title);
   void documentRequested(QString path, QString title, QString kind);
-  void taskFinished(QString session, QString title, bool success);
+  void taskFinished(QString session, QString title, bool success, bool longRunning);
   void approvalChanged();
   void attachmentsChanged();
   void contextUsageChanged();

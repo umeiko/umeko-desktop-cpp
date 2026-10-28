@@ -60,13 +60,13 @@ void TrayController::minimizeToTray() {
   if (trayAvailable() && !tray.icon().isNull()) {
     tray.show();
     window->hide();
-    const QString message = english ? "Minimized to the system tray. Agents keep running. Right-click the Yanami icon to quit." : "已最小化到系统托盘。Agent 继续运行，右键八奈见头像可退出。";
+    const QString message = english ? "I'll keep working here! To quit completely, right-click the icon in the system tray~" : "我在这里继续执行任务！需要完全退出你可以右键点击任务栏中的图标~";
     emit notificationRequested(message);
     tray.showMessage("Umeko", message, tray.icon(), 4000);
   } else {
     // Keep the app reachable on desktops without a notification area.
     window->showMinimized();
-    emit notificationRequested(english ? "System tray unavailable. Minimized to the taskbar; agents keep running." : "系统托盘不可用，已最小化到任务栏。Agent 继续运行。");
+    emit notificationRequested(english ? "The system tray is unavailable, so I'm minimized to the taskbar. I'll keep working here." : "系统托盘不可用，已最小化到任务栏。我会在这里继续执行任务。");
   }
 }
 void TrayController::restore() {

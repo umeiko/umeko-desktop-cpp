@@ -157,6 +157,6 @@ Custom color themes use portable JSON files. Import, update or delete them under
 
 Common providers: **账号与供应商 → 添加常见供应商** offers Claude Code, Codex, Kimi Code, DeepSeek, GLM Coding Plan (including Z.ai) and MiniMax subscriptions (M Plan). GLM and MiniMax offer a site dropdown inside the Key form with just China and International; China is selected by default. Enter an API Key and optional account alias; endpoints and models are preconfigured. Multiple accounts receive distinct names and model mappings. See [Common provider accounts](docs/common-providers.md).
 
-Background task completion uses [native desktop notifications](docs/notifications.md) while the window is minimized or in the tray. Click a notification to return to its conversation; permissions and sound follow system settings.
+Background task completion uses [native desktop notifications](docs/notifications.md) while the window is minimized or in the tray. Tasks lasting more than three minutes also notify while the window is visible. Click a notification to return to its conversation; permissions and sound follow system settings.
 
 macOS releases include a [drag-to-Applications DMG](docs/macos-dmg.md) for Apple Silicon and Intel, alongside the ZIP used by automatic updates. API proxy aliases use [provider submenus and automatic Base URLs](docs/api-proxy-menus.md).

@@ -256,6 +256,8 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   if (s->stale || (s->process && !s->ready))
     retire(s);
   s->action = action;
+  s->promptStarted.reset();
+  if (action == "prompt") s->promptStarted = std::chrono::steady_clock::now();
   s->failed = false;
   s->cancelled = false;
   s->phase =
@@ -274,6 +276,7 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   auto bridge = release + "/bridge.mjs";
   if (!QFileInfo(bridge).isFile() || U::node().isEmpty()) {
     s->phase = "idle";
+    s->promptStarted.reset();
     emit toast("Pi 内核或 Node.js 不可用，请检查安装");
     return false;
   }
@@ -732,6 +735,9 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     if (visible)
       emit retryChanged();
     bool was = s->busy();
+    const bool longRunning = s->promptStarted &&
+        std::chrono::steady_clock::now() - *s->promptStarted > std::chrono::minutes(3);
+    s->promptStarted.reset();
     if (!s->queue.isEmpty()) {
       QStringList texts;
       for (auto row : s->queue)
@@ -759,7 +765,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     }
     if (was && s->action == "prompt" && !s->cancelled && !s->id.isEmpty()) {
       setMetadata(s->id, {{"unread", !(visible && chatVisible)}});
-      emit taskFinished(s->id, s->title, type == "done" && !s->failed);
+      emit taskFinished(s->id, s->title, type == "done" && !s->failed, longRunning);
     }
     if (visible)
       emit approvalChanged();

@@ -1512,11 +1512,32 @@ Item {
     auto task = std::make_shared<Session>(); task->id = "notification-fixture"; task->title = "Local task";
     task->action = "prompt"; task->phase = "running"; task->ready = true;
     backend->event(task, {{"type","done"}}); backend->event(task, {{"type","done"}});
-    QCOMPARE(finished.count(),1); QVERIFY(finished.first()[2].toBool());
+    QCOMPARE(finished.count(),1); QVERIFY(finished.first()[2].toBool()); QVERIFY(!finished.first()[3].toBool());
     task->phase = "running"; task->cancelled = true; backend->event(task, {{"type","done"}}); QCOMPARE(finished.count(),1);
     task->cancelled = false; task->failed = true; task->phase = "running"; backend->event(task, {{"type","done"}});
     QCOMPARE(finished.count(),2); QVERIFY(!finished.last()[2].toBool());
     task->action = "reload"; task->phase = "working"; backend->event(task, {{"type","done"}}); QCOMPARE(finished.count(),2);
+  }
+  void longTaskNotificationsUseTheOwningPromptClock() {
+    const auto metadata = backend->store.data["sessionMeta"];
+    auto restore = qScopeGuard([&] {backend->store.data["sessionMeta"] = metadata; backend->store.save();});
+    QSignalSpy finished(backend.get(), &Backend::taskFinished);
+    auto task = std::make_shared<Session>(); task->id = "long-notification-fixture"; task->title = "Background task";
+    task->action = "prompt"; task->phase = "running"; task->ready = true;
+    task->promptStarted = std::chrono::steady_clock::now() - std::chrono::seconds(181);
+    backend->event(task, {{"type","done"}});
+    QCOMPARE(finished.count(),1); QCOMPARE(finished.first()[0].toString(),task->id);
+    QVERIFY(finished.first()[2].toBool()); QVERIFY(finished.first()[3].toBool()); QVERIFY(!task->promptStarted);
+    backend->event(task, {{"type","done"}}); QCOMPARE(finished.count(),1);
+    task->phase = "running"; task->promptStarted = std::chrono::steady_clock::now() - std::chrono::seconds(179);
+    backend->event(task, {{"type","done"}}); QCOMPARE(finished.count(),2); QVERIFY(!finished.last()[3].toBool());
+    task->phase = "running"; task->failed = true; task->promptStarted = std::chrono::steady_clock::now() - std::chrono::seconds(181);
+    backend->event(task, {{"type","done"}}); QCOMPARE(finished.count(),3); QVERIFY(!finished.last()[2].toBool()); QVERIFY(finished.last()[3].toBool());
+    task->phase = "running"; task->cancelled = true; task->promptStarted = std::chrono::steady_clock::now() - std::chrono::seconds(181);
+    backend->event(task, {{"type","done"}}); QCOMPARE(finished.count(),3); QVERIFY(!task->promptStarted);
+    task->phase = "working"; task->action = "reload"; task->cancelled = false;
+    task->promptStarted = std::chrono::steady_clock::now() - std::chrono::seconds(181);
+    backend->event(task, {{"type","done"}}); QCOMPARE(finished.count(),3); QVERIFY(!task->promptStarted);
   }
   void commonProviderAccounts() {
     const auto original = backend->store.data;

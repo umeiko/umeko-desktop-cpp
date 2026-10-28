@@ -31,9 +31,9 @@ bool TaskNotifications::eventFilter(QObject *watched, QEvent *event) {
   return false;
 }
 void TaskNotifications::close() { closing = true; timer.stop(); pending.clear(); recent.clear(); dbusIds.clear(); }
-void TaskNotifications::taskFinished(QString session, QString title, bool success) {
+void TaskNotifications::taskFinished(QString session, QString title, bool success, bool longRunning) {
   if (closing || !window || session.isEmpty()) return;
-  if (window->isVisible() && window->visibility() != QWindow::Minimized) return;
+  if (window->isVisible() && window->visibility() != QWindow::Minimized && !longRunning) return;
   const auto heading = QString("Umeko · ") + (english ? (success ? "Task complete" : "Task needs attention") : (success ? "任务完成" : "任务未完成"));
   auto label = title.simplified().left(160);
   if (label.isEmpty()) label = english ? "Conversation" : "会话";
