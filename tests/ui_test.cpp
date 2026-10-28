@@ -1611,9 +1611,11 @@ Item {
     QTRY_VERIFY(find("editProvider_" + added.last()));
     QVERIFY(inside(find("editProvider_" + added.last()), find("commonProvidersSection")));
     click("editProvider_" + added.last());
-    QTRY_VERIFY(inside(find("providerEditor"), find("commonProvidersSection")));
+    QTRY_VERIFY(window->findChild<QObject*>("providerEditorPopup")->property("visible").toBool());
+    QVERIFY(!inside(find("providerEditor"), find("commonProvidersSection")));
     QCOMPARE(find("providerName")->property("text").toString(), QString("Kimi(Work)"));
-    click("editProvider_" + added.last());
+    click("closeProviderEditorButton");
+    QTRY_VERIFY(!find("settingsPage")->property("editingProvider").toBool());
     QVERIFY(backend->addCommonProvider("kimi", "fixture-native-key-2", ""));
     account = backend->store.data["providers"].toList().last().toMap(); added << account["id"].toString();
     QCOMPARE(account["name"].toString(), QString("Kimi(2)"));
@@ -1903,6 +1905,25 @@ Item {
     QTest::keyClick(window, Qt::Key_Escape);
     QTest::qWait(850);
   }
+  void composerModifierEnterKeepsDraftAndPlainEnterSends() {
+    configureAPI(); window->setProperty("page", "chat"); QTest::qWait(200);
+    auto prompt = find("promptInput"); QVERIFY(prompt); prompt->forceActiveFocus();
+    const auto count = requests.size();
+    prompt->setProperty("text", "first"); prompt->setProperty("cursorPosition", 5);
+    for (const auto key : {Qt::Key_Return, Qt::Key_Enter}) {
+      const auto before = prompt->property("text").toString();
+      QTest::keyClick(window,key,Qt::AltModifier); QTest::qWait(30);
+      QCOMPARE(prompt->property("text").toString(),before + "\n"); QCOMPARE(requests.size(),count);
+    }
+    QTest::keyClick(window,Qt::Key_Return,Qt::ShiftModifier); QTest::qWait(30);
+    QCOMPARE(prompt->property("text").toString(),QString("first\n\n\n"));
+    QMetaObject::invokeMethod(prompt,"select",Q_ARG(int,0),Q_ARG(int,5));
+    QTest::keyClick(window,Qt::Key_Return,Qt::AltModifier); QTest::qWait(30);
+    QCOMPARE(prompt->property("text").toString(),QString("\n\n\n\n")); QCOMPARE(requests.size(),count);
+    prompt->setProperty("text","Plain Enter sends"); QTest::keyClick(window,Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(requests.size()>count,15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
+  }
   void appearanceAndRequestDetails() {
     configureAPI();
     window->setProperty("page", "settings");
@@ -1912,9 +1933,9 @@ Item {
     click("editProvider_" + editorId);
     QVERIFY(find("settingsPage")->property("editingProvider").toBool());
     QCOMPARE(find("editProvider_" + editorId)->property("glyph").toString(),
-             QString("chevron-up"));
-    click("editProvider_" + editorId);
-    QVERIFY(!find("settingsPage")->property("editingProvider").toBool());
+             QString("edit"));
+    click("closeProviderEditorButton");
+    QTRY_VERIFY(!find("settingsPage")->property("editingProvider").toBool());
     click("providerProxy_" + editorId);
     QCOMPARE(find("providerNetworkTitle")->property("text").toString(),
              QString("网络设置"));
