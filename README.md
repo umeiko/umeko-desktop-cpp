@@ -28,12 +28,12 @@
 
 <!-- umeko-downloads:minimal:start -->
 
-**Download v0.5.0-minimal · Minimal / 精简版 · 点击下载**
+**Download v0.5.1-minimal · Minimal / 精简版 · 点击下载**
 
-[![Windows x64 ZIP](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/windows.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.0-minimal/UmekoCpp-v0.5.0-minimal-windows-x64.zip)
-[![macOS Apple Silicon DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-arm64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.0-minimal/UmekoCpp-v0.5.0-minimal-macos-arm64.dmg)
-[![macOS Intel DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-x64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.0-minimal/UmekoCpp-v0.5.0-minimal-macos-x64.dmg)
-[![Linux x64 TAR.GZ](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/linux.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.0-minimal/UmekoCpp-v0.5.0-minimal-linux-x64.tar.gz)
+[![Windows x64 ZIP](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/windows.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.1-minimal/UmekoCpp-v0.5.1-minimal-windows-x64.zip)
+[![macOS Apple Silicon DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-arm64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.1-minimal/UmekoCpp-v0.5.1-minimal-macos-arm64.dmg)
+[![macOS Intel DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-x64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.1-minimal/UmekoCpp-v0.5.1-minimal-macos-x64.dmg)
+[![Linux x64 TAR.GZ](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/linux.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.1-minimal/UmekoCpp-v0.5.1-minimal-linux-x64.tar.gz)
 
 <!-- umeko-downloads:minimal:end -->
 
