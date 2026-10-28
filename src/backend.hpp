@@ -25,6 +25,7 @@ public:
   Q_INVOKABLE bool addAccount(QString plugin, QString version);
   Q_INVOKABLE bool uninstall(QString plugin, QString version);
   Q_INVOKABLE void login(QString id, QString raw);
+  Q_INVOKABLE void cancelLogin(QString id);
   Q_INVOKABLE void refreshModels(QString id);
   Q_INVOKABLE QString configJson(QString id) const;
   Q_INVOKABLE bool saveConfig(QString id, QString raw);
@@ -41,6 +42,7 @@ signals:
 private:
   Backend *b;
   QSet<QString> busy;
+  QSet<QString> logins;
   QVariantMap m_importError;
   QHash<QString, QString> statuses;
   QHash<QString, QProcess *> workers;

@@ -46,6 +46,24 @@ class WorkerTests(unittest.TestCase):
         result,events=self.worker('models')
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertEqual(events[-1]['data']['models'][0]['id'],'bundled')
+
+    def test_login_progress_redacts_credentials_before_truncation(self):
+        self.implementation("from umeko_provider_sdk import Provider\nclass Custom(Provider):\n def authenticate(self,credentials):\n  self.context.report_status('Confirm '+credentials['password']+' '+self.context.secrets.get('token'))\n  return {'label':'Signed in'}\n def list_models(self,refresh=False): return []\ndef create_provider(context): return Custom(context)\n")
+        password='synthetic-long-password-'+'x'*400
+        result,events=self.worker('login',{'credentials':{'password':password}}, {'token':'synthetic-secret-token'})
+        self.assertEqual(result.returncode,0,result.stderr)
+        statuses=[event['message'] for event in events if event['type']=='auth_status']
+        self.assertEqual(len(statuses),1)
+        self.assertIn('Confirm',statuses[0])
+        self.assertNotIn('synthetic-long-password',statuses[0])
+        self.assertNotIn('synthetic-secret-token',statuses[0])
+        self.assertEqual(events[-1]['type'],'result')
+
+    def test_auth_progress_does_not_escape_from_model_discovery(self):
+        self.implementation("from umeko_provider_sdk import Provider\nclass Custom(Provider):\n def list_models(self,refresh=False):\n  self.context.report_status('Not a login operation')\n  return []\ndef create_provider(context): return Custom(context)\n")
+        result,events=self.worker('models')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertFalse(any(event['type']=='auth_status' for event in events))
     def test_safe_errors_and_debug_stdout(self):
         self.implementation("from umeko_provider_sdk import Provider,ProviderError\nclass Custom(Provider):\n def list_models(self,refresh=False):\n  print('provider diagnostic')\n  raise ProviderError('failed with '+self.context.secrets.get('token'))\ndef create_provider(context): return Custom(context)\n")
         result,events=self.worker('models',secrets={'token':'synthetic-secret-token'})

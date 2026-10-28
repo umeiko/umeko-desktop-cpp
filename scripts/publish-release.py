@@ -60,7 +60,7 @@ for metadata in incoming.rglob('UmekoCpp-*.json'):
         for file in [disk,check]: shutil.copy2(file,publish/file.name)
         sizes.append((target+' (DMG)',image['bytes']))
 assert seen==platforms
-for name in ['umeko-provider-sdk-0.2.1.zip','develop-umeko-provider.zip']:
+for name in ['umeko-provider-sdk-0.2.2.zip','develop-umeko-provider.zip']:
     matches=list(incoming.rglob(name));assert len(matches)==1
     shutil.copy2(matches[0],publish/name)
 files=sorted(publish.iterdir(),key=lambda p:p.name.casefold())

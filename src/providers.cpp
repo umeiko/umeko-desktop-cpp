@@ -169,6 +169,7 @@ QVariantList Providers::rows() const {
         {"name", p["name"]},
         {"version", p["pluginVersion"]},
         {"fields", fields},
+        {"loggingIn", logins.contains(p["id"].toString())},
         {"models", p["models"]},
         {"busy", busy.contains(p["id"].toString())},
         {"status",
@@ -508,14 +509,16 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
   auto pendingSecrets = std::make_shared<QByteArray>();
   auto timeout = new QTimer(process);
   timeout->setSingleShot(true);
-  timeout->setInterval(method == "events" ? 300000 : 60000);
+  // Interactive sign-in includes human confirmation. Keep other operations'
+  // existing limits and use an absolute bound for the whole login operation.
+  timeout->setInterval(method == "login" ? 600000 : method == "events" ? 300000 : 60000);
   auto complete = [=, this](QVariantMap result) {
     if (*finished)
       return;
     *finished = true;
     workers.remove(request);
     timeout->stop();
-    if (!pendingSecrets->isEmpty() &&
+    if (!process->property("authCancelled").toBool() && !pendingSecrets->isEmpty() &&
         *pendingSecrets != b->store.secret("account:" + id) &&
         !b->store.setSecret("account:" + id, *pendingSecrets))
       result = {{"error", "无法保护供应商凭据，请检查系统密钥环"}};
@@ -591,7 +594,12 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
       buffer->remove(0, i + 1);
       auto event = QJsonDocument::fromJson(raw).object().toVariantMap();
       auto type = event["type"].toString();
-      if (type == "secrets") {
+      if (*finished)
+        return;
+      if (type == "auth_status" && method == "login" && !process->property("authCancelled").toBool()) {
+        statuses[id] = event["message"].toString().left(300);
+        emit changed();
+      } else if (type == "secrets") {
         *pendingSecrets = QJsonDocument::fromVariant(event["data"])
                               .toJson(QJsonDocument::Compact);
       } else if (type == "event") {
@@ -614,7 +622,7 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
   connect(process, &QProcess::finished, this, [=](int, QProcess::ExitStatus) {
     if (!*finished)
       complete(
-          {{"error", "供应商进程退出，请检查 Python 版本、依赖与插件配置"}});
+          {{"error", process->property("authCancelled").toBool() ? "登录已取消" : "供应商进程退出，请检查 Python 版本、依赖与插件配置"}});
   });
   connect(process, &QProcess::errorOccurred, this,
           [=](QProcess::ProcessError error) {
@@ -666,11 +674,13 @@ void Providers::login(QString id, QString raw) {
       publicValues[key] = value;
   }
   busy.insert(id);
+  logins.insert(id);
   statuses[id] = "正在登录并发现模型…";
   emit changed();
   invoke(id, "login", {{"credentials", credentials}},
          [this, id, publicValues, flags](QVariantMap result) {
            busy.remove(id);
+           logins.remove(id);
            if (result.contains("error")) {
              statuses[id] = result["error"].toString();
              emit b->toast(statuses[id]);
@@ -689,7 +699,17 @@ void Providers::login(QString id, QString raw) {
            b->store.data["providers"] = providers;
            applyModels(id, result["models"].toList(),
                        result["label"].toString());
-         });
+         }, {}, "login:" + id);
+}
+void Providers::cancelLogin(QString id) {
+  if (!logins.contains(id))
+    return;
+  if (auto process = workers.value("login:" + id)) {
+    process->setProperty("authCancelled", true);
+    statuses[id] = "正在取消登录…";
+    emit changed();
+    cancel("login:" + id);
+  }
 }
 void Providers::refreshModels(QString id) {
   if (b->modelsBusy(id) || busy.contains(id)) {
@@ -916,12 +936,12 @@ bool Providers::uninstall(QString plugin, QString version) {
 }
 QString Providers::resourceFile(QString kind) const {
   return QUrl::fromLocalFile(QDir::homePath() + "/" +
-                             (kind == "sdk" ? "umeko-provider-sdk-0.2.1.zip"
+                             (kind == "sdk" ? "umeko-provider-sdk-0.2.2.zip"
                                             : "develop-umeko-provider.zip"))
       .toString();
 }
 bool Providers::exportResource(QString kind, QString url) {
-  auto name = kind == "sdk" ? "umeko-provider-sdk-0.2.1.zip"
+  auto name = kind == "sdk" ? "umeko-provider-sdk-0.2.2.zip"
                             : "develop-umeko-provider.zip";
   QFile source(b->root + "/provider-resources/" + name);
   if (!source.exists())

@@ -70,7 +70,21 @@ def main():
         # Plugin debug output is not part of the wire protocol and is never shown in UI.
         with contextlib.redirect_stdout(sys.stderr), network_scope(request.get("proxy"), records if request.get("method") == "events" else None):
             implementation = importlib.import_module(namespace + "." + entry[:-3].replace("/", "."))
-            provider = getattr(implementation, factory)(ProviderContext(config, Path(request["state_dir"]), MemorySecrets(), cancelled))
+            def report_status(message):
+                if request.get("method") == "login" and not cancelled.is_set():
+                    # Status is public UI text. Providers must never submit
+                    # credentials, authentication URLs, or raw server bodies.
+                    known = []
+                    def collect(value):
+                        if isinstance(value, dict):
+                            for child in value.values(): collect(child)
+                        elif isinstance(value, (list, tuple)):
+                            for child in value: collect(child)
+                        elif isinstance(value, str): known.append(value)
+                    for value in sensitive: collect(value)
+                    send("auth_status", message=redact_data(str(message), known)[:300])
+            provider = getattr(implementation, factory)(ProviderContext(config, Path(request["state_dir"]), MemorySecrets(), cancelled,
+                report_status=report_status))
             if not isinstance(provider, Provider):
                 raise ProviderError("供应商实现必须继承 umeko_provider_sdk.Provider")
             method, params = request["method"], request.get("params") or {}

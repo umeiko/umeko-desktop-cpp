@@ -6,9 +6,9 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event
-from typing import Any, Protocol
+from typing import Any, Protocol, Callable
 
-SDK_VERSION = "0.2.1"
+SDK_VERSION = "0.2.2"
 API_VERSION = 1
 
 
@@ -38,6 +38,7 @@ class ProviderContext:
     state_dir: Path
     secrets: Secrets
     cancelled: Event = field(default_factory=Event)
+    report_status: Callable[[str], None] | None = None
 
 
 class Provider:

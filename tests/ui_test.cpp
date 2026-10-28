@@ -91,7 +91,7 @@ class NativeUiTests : public QObject {
   }
   bool package(QString path, bool malicious = false, bool updated = false,
                QString plugin = "example-echo", QString version = "0.1.0",
-               QString prefix = {}) {
+               QString prefix = {}, QByteArray implementation = {}) {
     mz_zip_archive zip{};
     if (!mz_zip_writer_init_file(&zip, path.toUtf8().constData(), 0))
       return false;
@@ -127,6 +127,8 @@ class NativeUiTests : public QObject {
         if (updated && name == "scripts/provider.py")
           raw.replace("self.context.config[\"prefix\"] + content",
                       "\"Reinstalled: \" + content");
+        if (!implementation.isEmpty() && name == "scripts/provider.py")
+          raw = implementation;
         ok &= mz_zip_writer_add_mem(&zip, (prefix.toUtf8() + name).constData(),
                                     raw.constData(), raw.size(),
                                     MZ_DEFAULT_COMPRESSION);
@@ -2055,6 +2057,37 @@ Item {
     QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 30000);
     QVERIFY2(lastText().contains("Echo: provider compatibility fixture"),
              qPrintable(lastText()));
+  }
+  void interactiveProviderLogin() {
+    auto manager = qobject_cast<Providers *>(backend->providerPlugins());
+    const auto archive = directory.filePath("interactive-login.zip");
+    const QByteArray code = R"PY(from umeko_provider_sdk import Provider,ProviderError
+class Interactive(Provider):
+ def authenticate(self, credentials):
+  self.context.secrets.set('session',{'token':'synthetic-pending-token'})
+  self.context.report_status('Waiting for browser confirmation')
+  while not self.context.cancelled.wait(.05): pass
+  raise ProviderError('Login cancelled')
+ def list_models(self, refresh=False): return []
+def create_provider(context): return Interactive(context)
+)PY";
+    QVERIFY(package(archive, false, false, "example-interactive", "0.1.0", {}, code));
+    QVERIFY(manager->importZip(QUrl::fromLocalFile(archive).toString()));
+    const auto id = manager->rows().last().toMap()["id"].toString();
+    manager->login(id, "{\"username\":\"fixture-user\"}");
+    QTRY_COMPARE_WITH_TIMEOUT(manager->rows().last().toMap()["status"].toString(), QString("Waiting for browser confirmation"), 15000);
+    QVERIFY(manager->rows().last().toMap()["loggingIn"].toBool());
+    bool bounded = false;
+    for (auto process : manager->findChildren<QProcess *>())
+      for (auto timer : process->findChildren<QTimer *>())
+        bounded |= timer->interval() == 600000 && timer->isActive();
+    QVERIFY(bounded);
+    manager->cancelLogin(id);
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->rows().last().toMap()["busy"].toBool(), 5000);
+    QCOMPARE(manager->rows().last().toMap()["status"].toString(), QString("登录已取消"));
+    QVERIFY(backend->store.secret("account:" + id).isEmpty());
+    QVERIFY(!manager->rows().last().toMap()["loggingIn"].toBool());
+    QVERIFY(manager->uninstall("example-interactive", "0.1.0"));
   }
   void providerPackageReinstallation() {
     auto manager = qobject_cast<Providers *>(backend->providerPlugins());

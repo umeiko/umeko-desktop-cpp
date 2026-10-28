@@ -146,7 +146,7 @@ QVariantMap Backend::umekoRequest(QVariantMap request, QString callerKey, bool q
     if (operation == "plugins.resource") {
       const auto kind = args["kind"].toString();
       require(kind == "sdk" || kind == "develop", "kind must be sdk or develop");
-      const auto name = kind == "sdk" ? "umeko-provider-sdk-0.2.1.zip" : "develop-umeko-provider.zip";
+      const auto name = kind == "sdk" ? "umeko-provider-sdk-0.2.2.zip" : "develop-umeko-provider.zip";
       for (const auto &folder : {root + "/provider-resources/", root + "/build/provider-resources/"})
         if (QFileInfo::exists(folder + name)) return finish({{"path", folder + name}});
       require(false, "Bundled provider development resource is missing");
