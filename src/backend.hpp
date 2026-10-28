@@ -24,9 +24,9 @@ public:
   Q_INVOKABLE bool importZip(QString url);
   Q_INVOKABLE bool addAccount(QString plugin, QString version);
   Q_INVOKABLE bool uninstall(QString plugin, QString version);
-  Q_INVOKABLE void login(QString id, QString raw);
+  Q_INVOKABLE bool login(QString id, QString raw);
   Q_INVOKABLE void cancelLogin(QString id);
-  Q_INVOKABLE void refreshModels(QString id);
+  Q_INVOKABLE bool refreshModels(QString id);
   Q_INVOKABLE QString configJson(QString id) const;
   Q_INVOKABLE bool saveConfig(QString id, QString raw);
   Q_INVOKABLE bool saveModels(QString id, QString raw);
@@ -52,7 +52,7 @@ private:
               std::function<void(QVariantMap)> done,
               std::function<void(QVariantMap)> event = {},
               QString requestKey = {});
-  void applyModels(QString id, QVariantList models, QString label = {});
+  bool applyModels(QString id, QVariantList models, QString label = {});
 };
 
 class PiManagement : public QObject {
@@ -224,6 +224,7 @@ class Backend : public QObject {
   Q_PROPERTY(bool running READ running NOTIFY chatChanged)
   Q_PROPERTY(bool loading READ loading NOTIFY chatChanged)
   Q_PROPERTY(bool kernelBusy READ kernelBusy NOTIFY changed)
+  Q_PROPERTY(QString lastSendError READ lastSendError NOTIFY changed)
   Q_PROPERTY(QString kernelStatus READ kernelStatus NOTIFY changed)
   Q_PROPERTY(QString kernelVersion READ kernelVersion NOTIFY changed)
   Q_PROPERTY(QString latestVersion READ latestVersion NOTIFY changed)
@@ -377,7 +378,7 @@ public:
   Q_INVOKABLE bool saveProvider(QString id, QString name, QString api,
                                 QString url, QString key, QString models);
   Q_INVOKABLE void removeProvider(QString id);
-  Q_INVOKABLE void saveMappings(QString raw);
+  Q_INVOKABLE bool saveMappings(QString raw);
   Q_INVOKABLE void saveAgent(QString raw);
   Q_INVOKABLE void openPiFolder(QString kind);
   Q_INVOKABLE void openPiGithub();
@@ -404,7 +405,8 @@ public:
   void loadNativeIndex();
   void close();
   void injectDemo();
-  Q_INVOKABLE QVariantMap umekoRequest(QVariantMap request, QString callerKey = {}, bool queue = true);
+  Q_INVOKABLE QVariantMap umekoRequest(QVariantMap request, QString callerKey = {}, bool queue = true, QString jobId = {});
+  QString lastSendError() const { return sendError; }
   void gatewayWrite(QVariantMap payload);
   void configureGateway();
   void repairSelection();
@@ -456,6 +458,13 @@ private:
   QString release, kernelMessage = "就绪", latestKernel, privateToken;
   QVariantMap controlOperations, controlJobs;
   QStringList controlJobOrder;
+  QString controlDispatch, sendError;
+  QHash<QString, QString> controlWorkJobs, controlNativeWork, controlAboutWork;
+  QHash<QString, QSet<QString>> controlPending;
+  QString newControlJob(QString operation, QString status);
+  QString beginControlWork();
+  void endControlWork(QString token, QVariantMap result);
+  void finishControlJob(QString id, QVariantMap result);
   QTimer controlTimer;
   void initUmekoControl();
   QVariantList umekoSessions() const;

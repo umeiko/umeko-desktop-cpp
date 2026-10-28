@@ -1,5 +1,9 @@
 """Retain minor-version milestones and only the newest patch in each series."""
 import re
+try:
+    from .release_policy import LAST_MINIMAL_TAG
+except ImportError:
+    from release_policy import LAST_MINIMAL_TAG
 
 
 def obsolete_patches(releases, tag):
@@ -20,7 +24,8 @@ def prune_releases(repo, tag, api, gh):
     releases = api("releases?per_page=100")
     current = next(r for r in releases if r["tag_name"] == tag)
     assert not current["draft"] and len(current["assets"]) in (15, 19)
-    if repo.endswith("-cpp"):
+    version = lambda value: tuple(map(int, value.removeprefix('v').removesuffix('-minimal').split('.')))
+    if repo.endswith("-cpp") and version(tag) <= version(LAST_MINIMAL_TAG):
         standard = tag.removesuffix("-minimal")
         pair = [next((r for r in releases if r["tag_name"] == name), None) for name in (standard, standard + "-minimal")]
         if any(not r or r["draft"] or len(r["assets"]) not in (15, 19) or r["target_commitish"] != current["target_commitish"] for r in pair):

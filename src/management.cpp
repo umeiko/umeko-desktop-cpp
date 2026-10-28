@@ -79,6 +79,7 @@ void Backend::saveMcp(QString scope, QString raw) {
     emit toast("请提供包含 mcpServers 对象的 JSON，并先打开项目目录");
     return;
   }
+  const auto work = beginControlWork();
   auto s = view;
   s->operation = true;
   emit chatChanged();
@@ -87,21 +88,24 @@ void Backend::saveMcp(QString scope, QString raw) {
   U::run(
       this, U::node(), {release + "/bridge.mjs", "--check-mcp"},
       QJsonDocument::fromVariant(input).toJson(QJsonDocument::Compact),
-      [this, s, path, doc](bool ok, QByteArray raw, QString error) {
+      [this, s, path, doc, work](bool ok, QByteArray raw, QString error) {
         s->operation = false;
         auto result = QJsonDocument::fromJson(raw).object();
         if (!ok || !result["ok"].toBool()) {
           emit toast(result.value("error").toString(error));
           emit chatChanged();
+          endControlWork(work, {{"ok", false}, {"error", result.value("error").toString(error)}});
           return;
         }
-        if (!U::writeJson(path, doc.toVariant()))
+        const bool saved = U::writeJson(path, doc.toVariant());
+        if (!saved)
           emit toast("MCP 配置保存失败");
         else {
           invalidate();
           emit toast("MCP 配置已保存，下次加载生效");
         }
         emit chatChanged();
+        endControlWork(work, saved ? QVariantMap{{"ok", true}, {"path", path}} : QVariantMap{{"ok", false}, {"error", "MCP 配置保存失败"}});
       },
       30000);
 }
@@ -164,13 +168,14 @@ void Backend::checkKernel() {
     emit toast("未找到 npm，请安装带 npm 的 Node.js");
     return;
   }
+  const auto work = beginControlWork();
   kernelUpdating = true;
   kernelMessage = "正在检查 Pi 最新版本…";
   emit changed();
   U::run(
       this, U::node(),
       {npm, "view", "@earendil-works/pi-coding-agent", "version"}, {},
-      [this](bool ok, QByteArray raw, QString) {
+      [this, work](bool ok, QByteArray raw, QString error) {
         kernelUpdating = false;
         auto version = QString::fromUtf8(raw).trimmed();
         if (ok && QRegularExpression("^\\d+\\.\\d+\\.\\d+$")
@@ -182,6 +187,8 @@ void Backend::checkKernel() {
         } else
           kernelMessage = "检查失败，请检查 npm 软件源与网络";
         emit changed();
+        const bool passed = ok && QRegularExpression("^\\d+\\.\\d+\\.\\d+$").match(version).hasMatch();
+        endControlWork(work, passed ? QVariantMap{{"ok", true}, {"value", version}} : QVariantMap{{"ok", false}, {"error", error.isEmpty() ? kernelMessage : error}});
       },
       45000, view->workspace.isEmpty() ? store.directory : view->workspace,
       store.data["agent"].toMap());
@@ -198,6 +205,7 @@ void Backend::updateKernel() {
   auto npm = npmCli();
   if (npm.isEmpty())
     return;
+  const auto work = beginControlWork();
   auto staging = store.directory + "/kernels/staging-" + U::uuid();
   QDir().mkpath(staging);
   kernelUpdating = true;
@@ -208,10 +216,11 @@ void Backend::updateKernel() {
       {npm, "install", "--prefix", staging, "--ignore-scripts", "--no-audit",
        "--no-fund", "@earendil-works/pi-coding-agent@" + latestKernel},
       {},
-      [this, staging](bool ok, QByteArray, QString error) {
+      [this, staging, work](bool ok, QByteArray, QString error) {
         if (!ok) {
           kernelUpdating = false;
           kernelMessage = "Pi 安装失败：" + error;
+          endControlWork(work, {{"ok", false}, {"error", kernelMessage}});
           emit changed();
           return;
         }
@@ -222,16 +231,17 @@ void Backend::updateKernel() {
             {root + "/scripts/prepare-runtime.mjs", "--source", staging,
              "--output", target},
             {},
-            [this, target](bool projected, QByteArray, QString error) {
+            [this, target, work](bool projected, QByteArray, QString error) {
               if (!projected) {
                 kernelUpdating = false;
                 kernelMessage = "Pi 适配失败：" + error;
+                endControlWork(work, {{"ok", false}, {"error", kernelMessage}});
                 emit changed();
                 return;
               }
               U::run(
                   this, U::node(), {target + "/bridge.mjs", "--self-test"}, {},
-                  [this, target](bool passed, QByteArray raw, QString) {
+                  [this, target, work](bool passed, QByteArray raw, QString) {
                     kernelUpdating = false;
                     if (passed && raw.contains("\"ok\":true")) {
                       U::writeJson(store.directory + "/kernels/active.json",
@@ -246,6 +256,7 @@ void Backend::updateKernel() {
                       kernelMessage =
                           "新 Pi 版本未通过兼容性验证，已保留当前内核";
                     emit changed();
+                    endControlWork(work, release == target ? QVariantMap{{"ok", true}, {"value", kernelMessage}} : QVariantMap{{"ok", false}, {"error", kernelMessage}});
                   },
                   60000);
             },
@@ -301,6 +312,7 @@ void PiManagement::testNpmConfig() {
     emit changed();
     return;
   }
+  const auto work = b->beginControlWork();
   auto config = npmConfig();
   auto cwd =
       b->view->workspace.isEmpty() ? b->store.directory : b->view->workspace;
@@ -309,11 +321,12 @@ void PiManagement::testNpmConfig() {
   emit changed();
   U::run(
       this, U::node(), {cli, "config", "get", "registry"}, {},
-      [this, cli, config, cwd](bool ok, QByteArray raw, QString) {
+      [this, cli, config, cwd, work](bool ok, QByteArray raw, QString) {
         if (!ok) {
           m_busy = false;
           m_npmStatus = "无法读取 npm 配置，请检查 .npmrc";
           emit changed();
+          b->endControlWork(work, {{"ok", false}, {"error", m_npmStatus}});
           return;
         }
         QUrl registry(QString::fromUtf8(raw).trimmed());
@@ -328,13 +341,14 @@ void PiManagement::testNpmConfig() {
         U::run(
             this, U::node(),
             {cli, "ping", "--fetch-retries=0", "--fetch-timeout=10000"}, {},
-            [this, label](bool passed, QByteArray, QString) {
+            [this, label, work](bool passed, QByteArray, QString) {
               m_busy = false;
               m_npmStatus =
                   label + " · " +
                   (passed ? "连接正常"
                           : "连接失败，请检查网络、登录信息和 CA 证书");
               emit changed();
+              b->endControlWork(work, passed ? QVariantMap{{"ok", true}, {"value", m_npmStatus}} : QVariantMap{{"ok", false}, {"error", m_npmStatus}});
             },
             15000, cwd, config);
       },
@@ -350,6 +364,7 @@ PiManagement::PiManagement(Backend *backend) : QObject(backend), b(backend) {
 void PiManagement::resource(QVariantMap action, bool reload) {
   if (m_busy || b->kernelUpdating)
     return;
+  const auto work = b->beginControlWork();
   m_busy = true;
   m_status = "正在读取 Pi 扩展…";
   emit changed();
@@ -362,7 +377,7 @@ void PiManagement::resource(QVariantMap action, bool reload) {
   U::run(
       this, U::node(), {b->release + "/resources.mjs"},
       QJsonDocument::fromVariant(action).toJson(QJsonDocument::Compact),
-      [this, reload](bool ok, QByteArray raw, QString error) {
+      [this, reload, work](bool ok, QByteArray raw, QString error) {
         m_busy = false;
         auto result = QJsonDocument::fromJson(raw).object();
         if (ok && result["ok"].toBool()) {
@@ -377,6 +392,8 @@ void PiManagement::resource(QVariantMap action, bool reload) {
                   : error);
         emit changed();
         emit b->changed();
+        const bool passed = ok && result["ok"].toBool();
+        b->endControlWork(work, passed ? QVariantMap{{"ok", true}, {"extensions", m_extensions}} : QVariantMap{{"ok", false}, {"error", m_status}});
       },
       45000);
 }
@@ -429,6 +446,7 @@ void PiManagement::installExtension(QString text, bool local) {
   auto cwd = b->view->workspace.isEmpty() ? b->store.directory + "/workspace"
                                           : b->view->workspace;
   QDir().mkpath(cwd);
+  const auto work = b->beginControlWork();
   m_busy = true;
   m_installState = "installing";
   m_installMessage = "正在通过内嵌 Pi 安装扩展…";
@@ -450,7 +468,7 @@ void PiManagement::installExtension(QString text, bool local) {
   if (local)
     args << "--local";
   auto settled = std::make_shared<bool>(false);
-  auto finish = [this, p, timer, settled](bool ok) {
+  auto finish = [this, p, timer, settled, work](bool ok) {
     if (*settled)
       return;
     *settled = true;
@@ -466,6 +484,7 @@ void PiManagement::installExtension(QString text, bool local) {
       b->invalidate();
       scan();
     }
+    b->endControlWork(work, ok ? QVariantMap{{"ok", true}, {"value", m_installMessage}} : QVariantMap{{"ok", false}, {"error", m_installMessage}});
     p->deleteLater();
   };
   connect(p, &QProcess::started, p, [p] { p->closeWriteChannel(); });
@@ -501,17 +520,19 @@ void PiManagement::addMcp(QString text, bool local) {
   const auto cwd = b->view->workspace.isEmpty() ? b->store.directory + "/workspace" : b->view->workspace;
   QDir().mkpath(cwd);
   const QVariantMap input{{"text", text}, {"local", local}, {"cwd", cwd}, {"agentDir", b->agentDir()}};
+  const auto work = b->beginControlWork();
   m_busy = true; m_installState = "installing"; m_installMessage = "正在添加 MCP 服务器…";
   emit changed();
   U::run(this, U::node(), {b->release + "/pi-commands.mjs", "--add-mcp"},
       QJsonDocument::fromVariant(input).toJson(QJsonDocument::Compact),
-      [this](bool ok, QByteArray raw, QString error) {
+      [this, work](bool ok, QByteArray raw, QString error) {
         const auto result = QJsonDocument::fromJson(raw).object();
         const bool passed = ok && result["ok"].toBool();
         m_busy = false; m_installState = passed ? "succeeded" : "failed";
         m_installMessage = passed ? result["message"].toString() : result.value("error").toString(error);
         if (passed) b->invalidate();
         emit changed(); emit b->changed();
+        b->endControlWork(work, passed ? QVariantMap{{"ok", true}, {"value", result.toVariantMap()}} : QVariantMap{{"ok", false}, {"error", m_installMessage}});
       }, 30000, cwd);
 }
 void PiManagement::setRecoveryMode(bool enabled) {
@@ -530,6 +551,7 @@ void PiManagement::restoreFactory() {
     emit b->toast("请等待所有任务结束后恢复 Pi 内核");
     return;
   }
+  const auto work = b->beginControlWork();
   m_busy = true;
   b->kernelUpdating = true;
   m_status = "正在备份配置并恢复内嵌 Pi…";
@@ -560,6 +582,7 @@ void PiManagement::restoreFactory() {
       m_busy = false;
       b->kernelUpdating = false;
       m_status = "恢复失败，原内核仍在使用";
+      b->endControlWork(work, {{"ok", false}, {"error", error}});
       emit changed();
       emit b->changed();
       return;
@@ -587,6 +610,7 @@ void PiManagement::restoreFactory() {
             m_status = "出厂内核验证未通过，未切换当前配置";
           emit changed();
           emit b->changed();
+          b->endControlWork(work, b->release == target ? QVariantMap{{"ok", true}, {"value", m_status}, {"backup", backup}} : QVariantMap{{"ok", false}, {"error", m_status}});
           scan();
         },
         60000);

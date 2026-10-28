@@ -902,7 +902,105 @@ Item {
           cards += step.toMap()["items"].toList().size();
     QCOMPARE(cards, 2);
   }
+  void previewLayoutAndModelFocus() {
+    backend->newSession();
+    const auto previous = window->size();
+    auto pane = find("webPane");
+    const auto cleanup = qScopeGuard([&] { pane->setProperty("opened", false); window->resize(previous); });
+    backend->saveSidebarLayout(244, false);
+    window->resize(1060, 700);
+    pane->setProperty("mode", "document"); pane->setProperty("opened", true);
+    QTRY_VERIFY_WITH_TIMEOUT(!pane->property("moving").toBool(), 4000);
+    QTRY_VERIFY_WITH_TIMEOUT(find("chatPage")->width() >= 639, 4000);
+    QVERIFY(pane->width() >= 319);
+    QVERIFY(window->property("previewSidebarCollapsed").toBool());
+    QVERIFY(!backend->sidebarCollapsed());
+    auto surface = find("webSurfaceLoader");
+    QVERIFY(surface->x() >= 6);
+    QVERIFY(pane->width() - surface->x() - surface->width() >= 11);
+    pane->setProperty("opened", false);
+    QTRY_VERIFY_WITH_TIMEOUT(!pane->property("moving").toBool(), 4000);
+    QVERIFY(!window->property("previewSidebarCollapsed").toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(find("mainArea")->x() > 100, 4000);
+    window->resize(1320, 860);
+    click("modelSelector");
+    QTRY_VERIFY_WITH_TIMEOUT(find("modelSearch") && find("modelSearch")->hasActiveFocus(), 3000);
+    QTest::keyClick(window, Qt::Key_Escape);
+    QTRY_VERIFY_WITH_TIMEOUT(find("promptInput")->hasActiveFocus(), 400);
+    QTest::keyClick(window, Qt::Key_B);
+    QVERIFY(find("promptInput")->property("text").toString().endsWith('b', Qt::CaseInsensitive));
+    find("promptInput")->setProperty("text", "");
+  }
+  void managementJobsAndAliasCapabilities() {
+    backend->newSession(); configureAPI();
+    auto report = [](QVariant value) { return QString::fromUtf8(QJsonDocument::fromVariant(value).toJson(QJsonDocument::Compact)); };
+    auto call = [this](QString operation, QVariantMap args = {}) { return backend->umekoRequest({{"operation", operation}, {"arguments", args}}); };
+    auto job = [&](QString id) { return call("jobs.get", {{"id", id}})["jobs"].toList().first().toMap(); };
+    auto scan = call("extensions.scan");
+    QVERIFY2(scan["ok"].toBool(), qPrintable(report(scan)));
+    const auto scanId = scan["jobId"].toString(); QVERIFY(!scanId.isEmpty());
+    QCOMPARE(job(scanId)["status"].toString(), QString("running"));
+    QTRY_COMPARE_WITH_TIMEOUT(job(scanId)["status"].toString(), QString("done"), 15000);
+    QVERIFY(job(scanId)["result"].toMap().contains("extensions"));
+    auto bad = call("extensions.enable", {{"id", "missing-extension"}, {"enabled", true}});
+    const auto badId = bad["jobId"].toString(); QVERIFY(!badId.isEmpty());
+    QTRY_COMPARE_WITH_TIMEOUT(job(badId)["status"].toString(), QString("failed"), 15000);
+    QVERIFY(!job(badId)["result"].toMap()["error"].toString().isEmpty());
+    auto rejected = call("mcp.add", {{"text", ""}});
+    QVERIFY(!rejected["ok"].toBool());
+    QCOMPARE(job(rejected["jobId"].toString())["status"].toString(), QString("failed"));
+    auto refresh = call("agent.refresh");
+    const auto refreshId = refresh["jobId"].toString(); QVERIFY(!refreshId.isEmpty());
+    QTRY_COMPARE_WITH_TIMEOUT(job(refreshId)["status"].toString(), QString("done"), 15000);
+    QVERIFY(job(refreshId)["result"].toMap().contains("resources"));
+    backend->kernelUpdating = true; backend->send("busy probe");
+    QVERIFY(!backend->lastSendError().isEmpty());
+    QCOMPARE(call("status.get")["lastSendError"].toString(), backend->lastSendError());
+    backend->kernelUpdating = false;
+    const QVariantList models{QVariantMap{{"upstream", "shared"}, {"alias", "quick"}, {"vision", false}, {"visionAuto", false}, {"contextWindow", 32000}, {"contextWindowAuto", false}}, QVariantMap{{"upstream", "shared"}, {"alias", "visual"}, {"vision", true}, {"visionAuto", false}, {"contextWindow", 64000}, {"contextWindowAuto", false}}};
+    QVERIFY(backend->saveProvider({}, "Alias fixture", "openai", "https://api.example.com/v1", "fixture", report(models)));
+    const auto providerId = backend->config()["providers"].toList().last().toMap()["id"].toString();
+    const QVariantList minimal{QVariantMap{{"upstream", "shared"}, {"alias", "quick"}}, QVariantMap{{"upstream", "shared"}, {"alias", "visual"}}};
+    QVERIFY(backend->saveProvider(providerId, "Alias fixture", "openai", "https://api.example.com/v1", {}, report(minimal)));
+    auto saved = backend->provider(providerId)["models"].toList();
+    QCOMPARE(saved[0].toMap()["contextWindow"].toInt(), 32000); QCOMPARE(saved[1].toMap()["contextWindow"].toInt(), 64000);
+    QVERIFY(!saved[0].toMap()["vision"].toBool()); QVERIFY(saved[1].toMap()["vision"].toBool());
+    QVariantList mappings;
+    for (auto value : backend->config()["providers"].toList()) for (auto model : value.toMap()["models"].toList()) { auto m = model.toMap(); m["provider"] = value.toMap()["id"]; mappings << m; }
+    QVERIFY(backend->saveMappings(report(mappings)));
+    saved = backend->provider(providerId)["models"].toList();
+    QCOMPARE(saved[1].toMap()["contextWindow"].toInt(), 64000);
+    auto duplicate = mappings; auto row = duplicate.last().toMap(); row["alias"] = "quick"; duplicate.last() = row;
+    auto invalid = call("models.mappings", {{"models", duplicate}});
+    QVERIFY(!invalid["ok"].toBool()); QVERIFY(invalid["error"].toString().contains("别名"));
+    QCOMPARE(backend->provider(providerId)["models"].toList(), saved);
+    backend->removeProvider(providerId);
+    const auto previousAgent = backend->store.data["agent"];
+    auto agent = previousAgent.toMap();
+    agent["fields"] = QVariantList{QVariantMap{{"key", "username"}, {"secret", false}, {"value", "alice"}}, QVariantMap{{"key", "password"}, {"secret", true}, {"value", "private-fixture"}}};
+    backend->store.data["agent"] = agent;
+    const auto fields = call("settings.get")["config"].toMap()["agent"].toMap()["fields"].toList();
+    backend->store.data["agent"] = previousAgent;
+    QCOMPARE(fields[0].toMap()["key"].toString(), QString("username")); QCOMPARE(fields[0].toMap()["value"].toString(), QString("alice"));
+    QCOMPARE(fields[1].toMap()["key"].toString(), QString("password")); QCOMPARE(fields[1].toMap()["value"].toString(), QString("[redacted]"));
+    const auto archive = directory.filePath("job-provider.zip");
+    QVERIFY(package(archive, false, false, "example-job"));
+    auto imported = call("plugins.import", {{"path", archive}});
+    QVERIFY(imported["ok"].toBool());
+    const auto account = imported["createdProviderIds"].toStringList().first();
+    auto login = call("plugins.login", {{"id", account}, {"fields", QVariantMap{{"username", "fixture"}, {"password", "fixture-password"}}}});
+    QVERIFY2(login["ok"].toBool(), qPrintable(report(login)));
+    QTRY_COMPARE_WITH_TIMEOUT(job(login["jobId"].toString())["status"].toString(), QString("done"), 15000);
+    QVERIFY(!backend->provider(account)["models"].toList().isEmpty());
+    auto modelsJob = call("plugins.refreshModels", {{"id", account}});
+    QTRY_COMPARE_WITH_TIMEOUT(job(modelsJob["jobId"].toString())["status"].toString(), QString("done"), 15000);
+    QVERIFY(!call("plugins.uninstall", {{"plugin", account}, {"version", "0.1.0"}})["ok"].toBool());
+    QVERIFY(call("plugins.uninstall", {{"plugin", "example-job"}, {"version", "0.1.0"}})["ok"].toBool());
+  }
   void documentDeliveryAndResize() {
+    const auto previousSize = window->size();
+    const auto restoreSize = qScopeGuard([&] { window->resize(previousSize); });
+    window->resize(1560, 900);
     backend->newSession();
     const auto previousUrl = qgetenv("UMEKO_WEB_PREVIEW_URL"), previousDocument = qgetenv("UMEKO_DOCUMENT_PREVIEW_PATH");
     const auto cleanup = qScopeGuard([&] {
@@ -1341,9 +1439,11 @@ Item {
     releaseReplies();
     QTRY_VERIFY_WITH_TIMEOUT(!owner->busy(), 15000);
     QTRY_VERIFY_WITH_TIMEOUT(!backend->controlTimer.isActive(), 5000);
-    const auto jobs = call("jobs.get")["jobs"].toList();
-    QCOMPARE(jobs.size(), 2);
-    for (auto value : jobs) QVERIFY2(value.toMap()["status"] == "completed", qPrintable(report(value)));
+    for (const auto &id : {ticket["jobId"].toString(), model["jobId"].toString()}) {
+      const auto jobs = call("jobs.get", {{"id", id}})["jobs"].toList();
+      QCOMPARE(jobs.size(), 1);
+      QVERIFY2(jobs.first().toMap()["status"] == "done", qPrintable(report(jobs.first())));
+    }
     QCOMPARE(backend->store.data["agent"].toMap()["instructions"].toString(), QString("CONTROL_AFTER_IDLE"));
     QCOMPARE(owner->provider, provider);
     QCOMPARE(backend->view, viewer);

@@ -7,6 +7,12 @@ def release(tag, identifier=1, **changes):
 
 
 class ReleaseRetentionTests(unittest.TestCase):
+    def test_standard_release_after_minimal_retirement_needs_no_pair(self):
+        rows = [release('v0.5.0', 1), release('v0.5.1', 2), release('v0.5.1-minimal', 3), release('v0.5.2', 4)]
+        calls = []
+        self.assertEqual(prune_releases('umeiko/umeko-desktop-cpp', 'v0.5.2', lambda _: rows, lambda *args: calls.append(args)), ['v0.5.1', 'v0.5.1-minimal'])
+        self.assertEqual(len(calls), 2)
+
     def test_new_dmg_releases_have_nineteen_assets(self):
         old = release("v0.3.1", 2)
         current = release("v0.3.8", 3); current['assets'] = [{}] * 19

@@ -686,6 +686,23 @@ void Backend::selectModel(QString id, QString model) {
   }
   emit toast("请选择已配置的模型");
 }
+static QVariantList modelMappings(QVariantList input, QVariantList previous, QSet<QString> &aliases) {
+  QVariantList models;
+  for (auto value : input) {
+    if (value.metaType().id() != QMetaType::QVariantMap) throw std::runtime_error("模型映射必须是对象");
+    auto m = value.toMap();
+    const auto upstream = m["upstream"].toString().trimmed();
+    auto alias = m["alias"].toString().trimmed();
+    QVariantMap old;
+    for (auto row : previous) if (row.toMap()["alias"] == alias && !alias.isEmpty()) { old = row.toMap(); break; }
+    if (old.isEmpty()) for (auto row : previous) if (row.toMap()["upstream"] == upstream) { old = row.toMap(); break; }
+    if (alias.isEmpty()) alias = old.value("alias", upstream).toString();
+    if (upstream.isEmpty() || alias.isEmpty() || aliases.contains(alias) || alias.contains(QRegularExpression("\\s"))) throw std::runtime_error("模型 ID 不能为空；别名不能重复或包含空白");
+    aliases.insert(alias); m["upstream"] = upstream; m["alias"] = alias;
+    models << U::normalizeModel(m, old);
+  }
+  return models;
+}
 bool Backend::saveProvider(QString id, QString name, QString api, QString url,
                            QString key, QString raw) {
   if (!id.isEmpty() && modelsBusy(id)) {
@@ -711,23 +728,8 @@ bool Backend::saveProvider(QString id, QString name, QString api, QString url,
       if (pv.toMap()["id"] != id)
         for (auto m : pv.toMap()["models"].toList())
           aliases.insert(m.toMap()["alias"].toString());
-    QVariantList models;
     auto old = provider(id);
-    for (auto value : doc.array()) {
-      auto m = value.toObject().toVariantMap();
-      m["alias"] = m["alias"].toString().trimmed();
-      m["upstream"] = m["upstream"].toString().trimmed();
-      auto alias = m["alias"].toString();
-      if (alias.isEmpty() || m["upstream"].toString().isEmpty() ||
-          aliases.contains(alias) || alias.contains(QRegularExpression("\\s")))
-        throw std::runtime_error("模型名称不能为空，别名不能重复或含空白");
-      aliases.insert(alias);
-      QVariantMap previous;
-      for (auto v : old["models"].toList())
-        if (v.toMap()["upstream"] == m["upstream"])
-          previous = v.toMap();
-      models << U::normalizeModel(m, previous);
-    }
+    const auto models = modelMappings(doc.array().toVariantList(), old["models"].toList(), aliases);
     if (id.isEmpty())
       id = U::uuid();
     bool hasKey = old.value("hasKey", false).toBool();
@@ -782,35 +784,24 @@ void Backend::removeProvider(QString id) {
   invalidate();
   notify();
 }
-void Backend::saveMappings(QString raw) {
+bool Backend::saveMappings(QString raw) {
   if (modelsBusy()) {
     emit toast("请等待任务结束后修改模型映射");
-    return;
+    return false;
   }
   try {
     QSet<QString> aliases;
-    auto input = QJsonDocument::fromJson(raw.toUtf8()).array().toVariantList();
+    const auto document = QJsonDocument::fromJson(raw.toUtf8());
+    if (!document.isArray()) throw std::runtime_error("模型映射必须是数组");
+    auto input = document.array().toVariantList();
     auto rows = store.data["providers"].toList();
     for (auto &v : rows) {
       auto p = v.toMap();
-      QVariantList models;
       QSet<QString> oldIds;
-      for (auto old : p["models"].toList())
-        oldIds.insert(old.toMap()["upstream"].toString());
-      for (auto iv : input) {
-        auto m = iv.toMap();
-        if (m["provider"] != p["id"])
-          continue;
-        auto alias = m["alias"].toString().trimmed(),
-             upstream = m["upstream"].toString().trimmed();
-        if (alias.isEmpty() || upstream.isEmpty() || aliases.contains(alias) ||
-            alias.contains(QRegularExpression("\\s")))
-          throw std::runtime_error("模型别名不能为空、含空白或重复");
-        aliases.insert(alias);
-        m["alias"] = alias;
-        m["upstream"] = upstream;
-        models << U::normalizeModel(m);
-      }
+      for (auto old : p["models"].toList()) oldIds.insert(old.toMap()["upstream"].toString());
+      QVariantList selected;
+      for (auto row : input) if (row.toMap()["provider"] == p["id"]) selected << row;
+      const auto models = modelMappings(selected, p["models"].toList(), aliases);
       QSet<QString> ids;
       for (auto m : models)
         ids.insert(m.toMap()["upstream"].toString());
@@ -825,8 +816,10 @@ void Backend::saveMappings(QString raw) {
     invalidate();
     notify();
     emit toast("模型映射已保存");
+    return true;
   } catch (const std::exception &e) {
     emit toast(QString::fromUtf8(e.what()));
+    return false;
   }
 }
 QVariantList Backend::proxyKeys() const {

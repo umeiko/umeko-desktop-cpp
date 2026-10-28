@@ -201,6 +201,9 @@ void AppAbout::releaseResult(const QByteArray &raw, int code, bool minimalChanne
           m_download.clear();
       }
     }
+    const auto outcome = m_release;
+    const bool ok = outcome["state"] != "error";
+    b->endControlWork(b->controlAboutWork.take("updates.check"), ok ? QVariantMap{{"ok", true}, {"value", outcome}} : QVariantMap{{"ok", false}, {"error", outcome["message"]}});
     if (m_release["state"] == "error" && previous["state"] == "available")
       m_release = previous;
     emit changed();

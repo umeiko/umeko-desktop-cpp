@@ -96,6 +96,7 @@ void Backend::trimPool() {
   }
 }
 void Backend::retire(std::shared_ptr<Session> s) {
+  endControlWork(controlNativeWork.take(s->key), {{"ok", false}, {"error", "Pi operation was cancelled before completion"}});
   if (!s->process)
     return;
   auto p = s->process;
@@ -269,6 +270,7 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   values["model"] = s->model;
   values["reasoningEffort"] = s->reasoningEffort;
   if (s->process) {
+    controlNativeWork[s->key] = beginControlWork();
     writePi(s, values);
     emit chatChanged();
     return true;
@@ -349,6 +351,7 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
               p->deleteLater();
             }
           });
+  controlNativeWork[s->key] = beginControlWork();
   p->start();
   emit chatChanged();
   return true;
@@ -386,8 +389,13 @@ void Backend::removeQueued(QString id) {
 void Backend::sendText(QString text, bool steering) {
   auto s = view;
   text = text.trimmed();
+  sendError.clear();
+  if (kernelBusy()) {
+    sendError = "Pi 内核检查或更新正在进行；完成后即可再次发送消息。";
+    emit toast(sendError); emit changed(); return;
+  }
   if ((text.isEmpty() && s->attachments.isEmpty()) ||
-      (s->busy() && s->phase != "running") || kernelBusy())
+      (s->busy() && s->phase != "running"))
     return;
   auto id = s->phase == "running" ? s->provider
                                   : store.data["selectedProvider"].toString();
@@ -769,12 +777,18 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     }
     if (visible)
       emit approvalChanged();
+  if (type == "done" || type == "exit" || type == "error") {
+    const bool ok = type == "done" && !s->failed && !s->cancelled;
+    endControlWork(controlNativeWork.take(s->key), ok ? QVariantMap{{"ok", true}, {"action", s->action}, {"resources", s->resources}} : QVariantMap{{"ok", false}, {"error", payload.value("message", "Pi operation failed or exited before completion")}});
+  }
     if (s->stale || (type == "done" && !s->ready))
       retire(s);
     trimPool();
     saveSessions();
   } else
     return;
+
+  if (type == "error") endControlWork(controlNativeWork.take(s->key), {{"ok", false}, {"error", payload.value("message", "Pi operation failed")}});
   if (visible) {
     if (type == "delta" || type == "thinking_delta") {
       if (!streaming.isActive())
@@ -832,15 +846,17 @@ void Backend::operateSession(QString id, QVariantMap action) {
   }
   if (record)
     retire(record);
+  const auto work = beginControlWork();
   action["sessionFile"] = saved["file"];
   action["cwd"] = saved.value("workspace", store.directory);
   action["sessionDir"] = store.directory + "/pi/sessions";
   U::run(this, U::node(), {release + "/bridge.mjs", "--session-action"},
          QJsonDocument::fromVariant(action).toJson(QJsonDocument::Compact),
-         [this, id, record](bool ok, QByteArray raw, QString error) {
+         [this, id, record, work](bool ok, QByteArray raw, QString error) {
            auto result = QJsonDocument::fromJson(raw).object().toVariantMap();
            if (!ok || !result["ok"].toBool()) {
              emit toast(result.value("error", error).toString());
+             endControlWork(work, {{"ok", false}, {"error", result.value("error", error)}});
              return;
            }
            auto info = result["session"].toMap();
@@ -856,6 +872,7 @@ void Backend::operateSession(QString id, QVariantMap action) {
              sessionInfo(record, info);
            saveSessions();
            emit chatChanged();
+           endControlWork(work, {{"ok", true}, {"value", result}});
          });
 }
 void Backend::renameSession(QString id, QString title) {

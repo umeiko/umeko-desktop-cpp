@@ -636,10 +636,10 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
   timeout->start();
   process->start();
 }
-void Providers::login(QString id, QString raw) {
+bool Providers::login(QString id, QString raw) {
   if (b->modelsBusy(id) || busy.contains(id)) {
     emit b->toast("请等待供应商请求结束");
-    return;
+    return false;
   }
   auto p = b->provider(id), m = manifest(p);
   auto values = QJsonDocument::fromJson(raw.toUtf8()).object().toVariantMap();
@@ -665,7 +665,7 @@ void Providers::login(QString id, QString raw) {
       value = saved[key].toString();
     if (value.isEmpty() && f.value("required", true).toBool()) {
       emit b->toast("请填写" + f["label"].toString());
-      return;
+      return false;
     }
     credentials[key] = value;
     if (f["secret"].toBool() && !value.isEmpty())
@@ -673,18 +673,20 @@ void Providers::login(QString id, QString raw) {
     else if (!f["secret"].toBool())
       publicValues[key] = value;
   }
+  const auto work = b->beginControlWork();
   busy.insert(id);
   logins.insert(id);
   statuses[id] = "正在登录并发现模型…";
   emit changed();
   invoke(id, "login", {{"credentials", credentials}},
-         [this, id, publicValues, flags](QVariantMap result) {
+         [this, id, publicValues, flags, work](QVariantMap result) {
            busy.remove(id);
            logins.remove(id);
            if (result.contains("error")) {
              statuses[id] = result["error"].toString();
              emit b->toast(statuses[id]);
              emit changed();
+             b->endControlWork(work, {{"ok", false}, {"error", statuses[id]}});
              return;
            }
            auto providers = b->store.data["providers"].toList();
@@ -697,9 +699,10 @@ void Providers::login(QString id, QString raw) {
              }
            }
            b->store.data["providers"] = providers;
-           applyModels(id, result["models"].toList(),
-                       result["label"].toString());
+           const bool ok = applyModels(id, result["models"].toList(), result["label"].toString());
+           b->endControlWork(work, ok ? QVariantMap{{"ok", true}, {"value", result}} : QVariantMap{{"ok", false}, {"error", statuses[id]}});
          }, {}, "login:" + id);
+  return true;
 }
 void Providers::cancelLogin(QString id) {
   if (!logins.contains(id))
@@ -711,26 +714,30 @@ void Providers::cancelLogin(QString id) {
     cancel("login:" + id);
   }
 }
-void Providers::refreshModels(QString id) {
+bool Providers::refreshModels(QString id) {
   if (b->modelsBusy(id) || busy.contains(id)) {
     emit b->toast("请等待供应商请求结束");
-    return;
+    return false;
   }
+  const auto work = b->beginControlWork();
   busy.insert(id);
   statuses[id] = "正在刷新模型…";
   emit changed();
-  invoke(id, "models", {}, [this, id](QVariantMap result) {
+  invoke(id, "models", {}, [this, id, work](QVariantMap result) {
     busy.remove(id);
     if (result.contains("error")) {
       statuses[id] = result["error"].toString();
       emit b->toast(statuses[id]);
       emit changed();
+      b->endControlWork(work, {{"ok", false}, {"error", statuses[id]}});
       return;
     }
-    applyModels(id, result["models"].toList());
+    const bool ok = applyModels(id, result["models"].toList());
+    b->endControlWork(work, ok ? QVariantMap{{"ok", true}, {"value", result}} : QVariantMap{{"ok", false}, {"error", statuses[id]}});
   });
+  return true;
 }
-void Providers::applyModels(QString id, QVariantList rows, QString label) {
+bool Providers::applyModels(QString id, QVariantList rows, QString label) {
   try {
     if (rows.size() > 2000)
       throw std::runtime_error("供应商模型过多");
@@ -793,10 +800,12 @@ void Providers::applyModels(QString id, QVariantList rows, QString label) {
     b->notify();
     emit changed();
     emit b->toast("可用模型已更新");
+    return true;
   } catch (const std::exception &e) {
     statuses[id] = QString::fromUtf8(e.what());
     emit changed();
     emit b->toast(statuses[id]);
+    return false;
   }
 }
 bool Providers::saveModels(QString id, QString raw) {

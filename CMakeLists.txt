@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(UmekoCpp VERSION 0.5.1 LANGUAGES C CXX)
+project(UmekoCpp VERSION 0.5.2 LANGUAGES C CXX)
 if(APPLE)
   # The notification library also links into targets declared in this scope.
   enable_language(OBJCXX)
