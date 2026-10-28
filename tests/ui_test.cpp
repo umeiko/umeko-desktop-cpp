@@ -929,6 +929,10 @@ Item {
     QTRY_VERIFY_WITH_TIMEOUT(find("promptInput")->hasActiveFocus(), 400);
     QTest::keyClick(window, Qt::Key_B);
     QVERIFY(find("promptInput")->property("text").toString().endsWith('b', Qt::CaseInsensitive));
+    QTest::qWait(1100);
+    QVERIFY(find("promptInput")->hasActiveFocus());
+    QTest::keyClick(window, Qt::Key_C);
+    QVERIFY(find("promptInput")->property("text").toString().endsWith("bc", Qt::CaseInsensitive));
     find("promptInput")->setProperty("text", "");
   }
   void managementJobsAndAliasCapabilities() {
