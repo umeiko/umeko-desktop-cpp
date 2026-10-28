@@ -14,12 +14,12 @@
 
 <!-- umeko-downloads:standard:start -->
 
-**Download v0.5.1 · 点击下载**
+**Download v0.5.2 · 点击下载**
 
-[![Windows x64 ZIP](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/windows.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.1/UmekoCpp-v0.5.1-windows-x64.zip)
-[![macOS Apple Silicon DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-arm64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.1/UmekoCpp-v0.5.1-macos-arm64.dmg)
-[![macOS Intel DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-x64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.1/UmekoCpp-v0.5.1-macos-x64.dmg)
-[![Linux x64 TAR.GZ](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/linux.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.1/UmekoCpp-v0.5.1-linux-x64.tar.gz)
+[![Windows x64 ZIP](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/windows.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.2/UmekoCpp-v0.5.2-windows-x64.zip)
+[![macOS Apple Silicon DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-arm64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.2/UmekoCpp-v0.5.2-macos-arm64.dmg)
+[![macOS Intel DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-x64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.2/UmekoCpp-v0.5.2-macos-x64.dmg)
+[![Linux x64 TAR.GZ](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/linux.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.2/UmekoCpp-v0.5.2-linux-x64.tar.gz)
 
 <!-- umeko-downloads:standard:end -->
 
