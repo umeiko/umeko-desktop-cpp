@@ -1,6 +1,7 @@
 #include "backend.hpp"
 #include <cmath>
 #include <stdexcept>
+#include <QSslCertificate>
 bool Backend::setReasoningEffort(QString value) {
   if (!QStringList{"off", "low", "high", "max"}.contains(value))
     return false;
@@ -39,6 +40,13 @@ void Backend::setFontScale(double scale) {
   appearanceSave.start();
 }
 bool Backend::setProviderProxy(QString id, QString mode, QString address) {
+  return setProviderNetwork(id, mode, address, provider(id)["proxy"].toMap()["caFile"].toString());
+}
+bool Backend::setProviderCertificate(QString id, QString caFile) {
+  const auto proxy = provider(id)["proxy"].toMap();
+  return setProviderNetwork(id, proxy.value("mode", "system").toString(), proxy["url"].toString(), caFile);
+}
+bool Backend::setProviderNetwork(QString id, QString mode, QString address, QString caFile) {
   try {
     if (!QStringList{"system", "direct", "custom"}.contains(mode) ||
         provider(id).isEmpty())
@@ -60,11 +68,21 @@ bool Backend::setProviderProxy(QString id, QString mode, QString address) {
       address = url.toString();
     } else
       address.clear();
+    caFile = caFile.trimmed();
+    if (!caFile.isEmpty()) {
+      caFile = U::cleanPath(caFile);
+      QFile file(caFile);
+      if (!file.open(QIODevice::ReadOnly) || file.size() > 4 * 1024 * 1024 ||
+          QSslCertificate::fromData(file.readAll(), QSsl::Pem).isEmpty())
+        throw std::runtime_error("CA 证书文件不存在、不可读或不是有效的 PEM 证书（最大 4 MiB）");
+    }
+    QVariantMap network{{"mode", mode}, {"url", address}};
+    if (!caFile.isEmpty()) network["caFile"] = caFile;
     auto rows = store.data["providers"].toList();
     for (auto &value : rows) {
       auto record = value.toMap();
       if (record["id"] == id) {
-        record["proxy"] = QVariantMap{{"mode", mode}, {"url", address}};
+        record["proxy"] = network;
         value = record;
       }
     }

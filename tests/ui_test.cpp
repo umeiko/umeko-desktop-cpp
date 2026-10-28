@@ -1924,6 +1924,44 @@ Item {
     QTRY_VERIFY_WITH_TIMEOUT(requests.size()>count,15000);
     QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
   }
+  void providerCertificateSettings() {
+    configureAPI();
+    const auto id = backend->config()["selectedProvider"].toString();
+    const auto ca = U::cleanPath(root + "/tests/fixtures/update-tls/ca.pem");
+    auto network = [this, id] {
+      for (const auto &value : backend->config()["providers"].toList()) {
+        const auto provider = value.toMap();
+        if (provider["id"] == id) return provider["proxy"].toMap();
+      }
+      return QVariantMap{};
+    };
+    window->setProperty("page", "settings");
+    window->setProperty("settingsTab", 0);
+    QTest::qWait(250);
+    click("providerProxy_" + id);
+    QVERIFY(find("providerCaFile"));
+    find("providerCaFile")->setProperty("text", ca);
+    find("providerProxyMode")->setProperty("currentIndex", 1);
+    click("saveProviderProxy");
+    QCOMPARE(network()["mode"].toString(), QString("direct"));
+    QCOMPARE(network()["caFile"].toString(), ca);
+    QVERIFY(backend->setProviderProxy(id, "custom", "http://127.0.0.1:7890"));
+    QCOMPARE(network()["caFile"].toString(), ca);
+    const auto saved = network();
+    QVERIFY(!backend->setProviderNetwork(id, "system", "", root + "/missing-ca.pem"));
+    QCOMPARE(network(), saved);
+    click("providerProxy_" + id);
+    QCOMPARE(find("providerCaFile")->property("text").toString(), ca);
+    find("providerCaFile")->setProperty("text", root + "/missing-ca.pem");
+    click("saveProviderProxy");
+    QVERIFY(find("providerCaFile")->isVisible());
+    QCOMPARE(network(), saved);
+    find("providerCaFile")->setProperty("text", "");
+    click("saveProviderProxy");
+    QVERIFY(!network().contains("caFile"));
+    QVERIFY(backend->setProviderProxy(id, "direct", ""));
+    window->setProperty("page", "chat");
+  }
   void appearanceAndRequestDetails() {
     configureAPI();
     window->setProperty("page", "settings");

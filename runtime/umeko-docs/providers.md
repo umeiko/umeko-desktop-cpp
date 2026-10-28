@@ -29,6 +29,22 @@ Umeko 使用自己的供应商网关。不要指导用户执行 Pi `/login`、�
 
 每个供应商的网络模式通过 `providers.network` 设置，参数 `id`、`mode`、`address`。模式 `system` 跟随系统，`direct` 不走代理，`custom` 使用指定的 HTTP/HTTPS 代理地址。非 custom 时 `address` 留空。不要把它称为独立供应商类型。
 
+### 私有 CA 与证书校验失败
+
+模型 HTTPS 握手因信任链失败时，C++ 网关会补用系统信任库再连接一次；成功后该供应商的后续请求沿用补充的信任链。只在尚未收到 HTTP 响应时尝试，不重放已经开始的模型输出。证书过期、域名不匹配及补充信任后仍失败的请求直接报错，不进入网络流重试。系统证书库和默认公共根证书合并使用，始终保留证书与域名校验。
+
+如果 CA 尚未安装在系统中，可在供应商齿轮 →「网络设置」填写可信 PEM 根证书/中间证书文件路径，或调用：
+
+```json
+{"operation":"providers.certificate","arguments":{"id":"供应商ID","caFile":"C:/Users/example/.umeko/certs/company-ca.pem"}}
+```
+
+传 `caFile:""` 清除此供应商的额外 CA；修改代理模式会保留已配置的 CA。配置保存后下一次模型请求生效。它不会修改其他供应商的信任配置或系统证书库。只有用户明确指定的证书文件才会被导入，不会自动信任服务端发来的未知证书。
+
+高级用法：`UMEKO_MODEL_CA_FILE` 可为模型请求指定通用 PEM 证书文件；Node 进程也继承 `NODE_EXTRA_CA_CERTS`。设置环境变量后须完全重启应用。该配置与 npm 安装证书和客户端更新下载证书分别管理。
+
+错误详情包含底层 `cause.code`、证书信任来源与有限的握手尝试记录，不写入 CA 文件内容。代理 CONNECT 失败与证书错误是两回事：请根据实际网络选择 `system`、`direct` 或 `custom`；证书恢复不会自动绕过用户的代理设置。请勿通过关闭 TLS 校验来解决证书问题。
+
 `models.mappings` 的 `models` 是完整映射数组，行格式包含 `provider`、`upstream`、`alias`、`contextWindow`、`contextWindowAuto`、`vision`、`visionAuto`。这是替换操作，先读取所有供应商并保留其他映射；插件模型 ID 由刷新获取，不能在映射中凭空新增。
 
 `providers.remove` 删除一个供应商账号，参数 `id`。它不等同于卸载整个插件，参阅 [plugins.md](plugins.md)。

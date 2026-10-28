@@ -280,6 +280,8 @@ public:
   Q_INVOKABLE void setLanguage(QString language);
   Q_INVOKABLE void setFontScale(double scale);
   Q_INVOKABLE bool setProviderProxy(QString id, QString mode, QString address);
+  Q_INVOKABLE bool setProviderCertificate(QString id, QString caFile);
+  Q_INVOKABLE bool setProviderNetwork(QString id, QString mode, QString address, QString caFile);
   Q_INVOKABLE QString requestReport(QString id) const;
   QVariantList projectRows() const;
   int sidebarWidth() const {

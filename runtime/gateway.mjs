@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { once } from 'node:events';
 import { upstreamFailure } from './network-retry.mjs';
-import { dispatcher, failureReport, providerFetch } from './transport.mjs';
+import { fetchProvider, failureReport } from './transport.mjs';
 import { responsesRequest, responsesEvents } from './openai-responses.mjs';
 
 const MAX_BODY = 32 * 1024 * 1024;
@@ -223,13 +223,14 @@ export class Gateway {
     const payload = anthropic ? openaiToAnthropic(body.messages, body.tools, body.max_tokens, body.parameters) : responses ? responsesRequest(body.messages, body.tools, body.max_tokens, body.parameters) : { messages: body.messages, max_tokens: body.max_tokens, stream: true, stream_options: { include_usage: true }, ...(body.tools.length ? { tools: body.tools.map(t => ({ type: 'function', function: t })) } : {}), ...body.parameters };
     payload.model = model.upstream;
     const suffix = anthropic ? '/messages' : responses ? '/responses' : '/chat/completions';
-    const agent = dispatcher(provider);
     const record = { request: { url: base + suffix, method: 'POST', headers, body: payload },
       response: { status: null, headers: {}, body: '' } };
     http.push(record);
+    let agent;
     try {
-      const response = await providerFetch(base + suffix, { method: 'POST', headers, body: JSON.stringify(payload), redirect: 'error', dispatcher: agent,
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(300000)]) });
+      const fetched = await fetchProvider(provider, base + suffix, { method: 'POST', headers, body: JSON.stringify(payload), redirect: 'error',
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(300000)]) }, record);
+      const response = fetched.response; agent = fetched.agent;
       record.response.status = response.status;
       record.response.headers = Object.fromEntries(response.headers);
       const tracked = async function* () {
@@ -242,7 +243,7 @@ export class Gateway {
       if (response.headers.get('content-type')?.includes('event-stream')) events = parseSSE(tracked());
       else { const raw = await response.text(); record.response.body = raw; if (raw.length > MAX_BODY) throw new Error('Upstream response too large'); events = [JSON.parse(raw)]; }
       if (anthropic) yield* anthropicEvents(events); else if (responses) yield* responsesEvents(events); else for await (const event of events) yield event;
-    } finally { await agent.close(); }
+    } finally { await agent?.close(); }
   }
   async handle(req, res, isPrivate) {
     const json = (status, value) => { if (res.headersSent) return res.end(); res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
