@@ -91,7 +91,12 @@ def replace_published_release(repo, tag, commit, files, notes, gh, api, *, autho
     if reference['sha'] != commit:
         gh('api','--method','PATCH',f'repos/{repo}/git/refs/tags/{tag}', '-f','sha='+commit, '-F','force=true')
     payload = stage/'release-metadata.json'
-    payload.write_text(json.dumps({'target_commitish':commit, 'body':notes}), encoding='utf-8')
+    metadata = {'body': notes}
+    # Sending target_commitish can require elevated workflow permissions even
+    # when it is unchanged. A resumed replacement only needs to edit the body.
+    if release['target_commitish'] != commit:
+        metadata['target_commitish'] = commit
+    payload.write_text(json.dumps(metadata), encoding='utf-8')
     gh('api','--method','PATCH',f'repos/{repo}/releases/{release["id"]}', '--input',payload)
     for asset in old:
         assert asset['id'] not in canonical.values()

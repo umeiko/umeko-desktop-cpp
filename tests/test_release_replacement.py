@@ -70,6 +70,19 @@ class ReplacementTests(unittest.TestCase):
         self.assertEqual(self.data['assets'][:len(old)],old);self.assertEqual(self.sha,'a'*40)
         self.assertFalse([c for c in self.calls if c[:3]==('api','--method','DELETE')])
 
+    def test_prepared_target_does_not_need_workflow_scoped_updates(self):
+        self.sha='b'*40
+        self.data['target_commitish']=self.sha
+        def limited(*args):
+            if args[:3]==('api','--method','PATCH') and args[3].endswith('/releases/42'):
+                metadata=json.loads(Path(args[-1]).read_text())
+                self.assertNotIn('target_commitish',metadata)
+            return self.gh(*args)
+        result=replace_published_release('umeiko/umeko-desktop','v0.5.0',self.sha,self.files,
+                                         'same-version fix',limited,self.api,authorized=True)
+        self.assertEqual(result['target_commitish'],self.sha)
+        self.assertFalse([call for call in self.calls if len(call)>3 and '/git/refs/' in str(call[3])])
+
     def test_bad_digest_is_rejected_before_replacing_old_files(self):
         old=copy.deepcopy(self.data['assets']);self.corrupt=True
         with self.assertRaises(AssertionError):self.replace()
