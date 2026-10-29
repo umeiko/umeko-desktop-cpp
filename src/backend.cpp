@@ -76,6 +76,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
   previewLoader = new SessionPreview(this);
   documents = new DocumentPreview(this, &store);
   children = new Subagents(this);
+  desktopExtensions = new DesktopPlugins(this);
   appearanceSave.setSingleShot(true);
   appearanceSave.setInterval(250);
   connect(&appearanceSave, &QTimer::timeout, this, [this] { store.save(); });
@@ -1114,6 +1115,7 @@ void Backend::gatewayEvent(QVariantMap payload) {
   }
 }
 void Backend::close() {
+  desktopExtensions->close();
   if (documents) documents->cancel();
   if (closing)
     return;

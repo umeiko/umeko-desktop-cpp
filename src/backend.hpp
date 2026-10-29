@@ -4,6 +4,7 @@
 #include "webview_support.hpp"
 #include "document_preview.hpp"
 #include "subagents.hpp"
+#include "desktop_plugins.hpp"
 #include <QtQuick>
 #include <chrono>
 #include <optional>
@@ -258,6 +259,7 @@ class Backend : public QObject {
   Q_PROPERTY(bool webviewAvailable READ webviewAvailable CONSTANT)
   Q_PROPERTY(QObject *documentPreview READ documentPreview CONSTANT)
   Q_PROPERTY(QObject *subagents READ subagents CONSTANT)
+  Q_PROPERTY(QObject *desktopPlugins READ desktopPlugins CONSTANT)
   Q_PROPERTY(bool followTail READ followTail NOTIFY viewChanged)
   Q_PROPERTY(bool serverRunning READ serverRunning NOTIFY changed)
   Q_PROPERTY(QVariantList proxyKeys READ proxyKeys NOTIFY proxyKeysChanged)
@@ -272,6 +274,7 @@ public:
   Q_INVOKABLE QString normalizeWebUrl(QString raw) const;
   QObject *documentPreview() const { return documents; }
   QObject *subagents() const { return children; }
+  QObject *desktopPlugins() const { return desktopExtensions; }
   QVariantMap config() const;
   QVariantList customThemes() const;
   QVariantMap themeStyle() const;
@@ -467,6 +470,7 @@ private:
   friend class AppAbout;
   friend class SessionPreview;
   friend class Subagents;
+  friend class DesktopPlugins;
   ChatModel chat;
   Providers *providers;
   PiManagement *management;
@@ -474,6 +478,7 @@ private:
   SessionPreview *previewLoader;
   DocumentPreview *documents;
   Subagents *children;
+  DesktopPlugins *desktopExtensions;
   std::shared_ptr<Session> view;
   QHash<QString, std::shared_ptr<Session>> records, drafts;
   QList<QString> lru;

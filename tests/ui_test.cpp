@@ -3148,6 +3148,67 @@ def create_provider(context): return Interactive(context)
         "{\"npmRegistry\":\"https://user:secret@example.invalid/\"}"));
     QVERIFY(manager->saveNpmConfig("{}"));
   }
+  void desktopPluginPagesAndSessionBoundary() {
+    auto manager=qobject_cast<DesktopPlugins*>(backend->desktopPlugins());
+    QVERIFY(manager);QCOMPARE(manager->rows().size(),2);
+    QTemporaryDir workspace;QVERIFY(workspace.isValid());
+    QFile file(workspace.filePath("hello.md"));QVERIFY(file.open(QIODevice::WriteOnly));file.write("# Plugin fixture\n");file.close();
+    QVERIFY(QDir().mkpath(workspace.filePath("folder")));
+    backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());
+    window->resize(1560,1000);window->setProperty("settingsTab",7);window->setProperty("page","settings");QTest::qWait(200);
+    QVERIFY(find("desktopPluginsPage"));QVERIFY(find("desktopPluginsPage")->isVisible());
+    auto search=find("desktopPluginSearch");QVERIFY(search);search->setProperty("text","Git");QTest::qWait(100);
+    QCOMPARE(find("desktopPluginInstalledList")->property("count").toInt(),1);search->setProperty("text","");
+    const auto output=root+"/build/screenshots";QDir().mkpath(output);window->grabWindow().save(output+"/desktop-plugin-manager.png");
+    QVERIFY(manager->openPage("file-tree"));
+    QTRY_VERIFY_WITH_TIMEOUT(find("fileTreeEntries")&&find("fileTreeEntries")->property("count").toInt()>=2,10000);
+    QCOMPARE(find("webPane")->property("mode").toString(),"plugin");QTRY_VERIFY(!find("webPane")->property("moving").toBool());
+    window->grabWindow().save(output+"/desktop-plugin-tree.png");
+    click("fileTreeRow_hello.md");
+    QTRY_COMPARE(find("webPane")->property("mode").toString(),"document");QVERIFY(manager->page().isEmpty());
+    QVERIFY(manager->openPage("file-tree"));QTRY_VERIFY(find("fileTreeEntries"));
+    window->setProperty("page","settings");QTest::qWait(100);QVERIFY(manager->page().isEmpty());QVERIFY(!find("webPane")->property("opened").toBool());
+    manager->setSessionEnabled("file-tree",false);QVERIFY(!manager->openPage("file-tree"));manager->setSessionEnabled("file-tree",true);
+    window->setProperty("page","chat");QVERIFY(manager->openPage("file-tree"));QTest::qWait(150);backend->newSession();QTest::qWait(100);QVERIFY(manager->page().isEmpty());
+    QVERIFY(!manager->uninstall("file-tree"));
+    // A drive/filesystem root is a valid explicitly selected workspace.
+    const auto filesystemRoot=QStorageInfo(workspace.path()).rootPath();
+    backend->setWorkspace(QUrl::fromLocalFile(filesystemRoot).toString());
+    QSignalSpy documentEvents(backend.get(),&Backend::documentRequested);
+    QVERIFY(manager->openPage("file-tree"));
+    const auto relative=QDir(filesystemRoot).relativeFilePath(workspace.filePath("hello.md"));
+    QVERIFY(!manager->call("preview",QString::fromUtf8(QJsonDocument(QJsonObject{{"path",relative}}).toJson(QJsonDocument::Compact))).isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!documentEvents.isEmpty(),10000);
+    backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());
+
+    backend->setFontScale(2);window->setProperty("settingsTab",7);window->setProperty("page","settings");QTest::qWait(250);
+    QVERIFY(find("desktopPluginSearch")->isVisible());backend->setFontScale(1);window->setProperty("settingsTab",0);window->setProperty("page","chat");
+  }
+  void desktopPluginZipLifecycle() {
+    auto manager=qobject_cast<DesktopPlugins*>(backend->desktopPlugins());QVERIFY(manager);
+    QTemporaryDir workspace;QVERIFY(workspace.isValid());backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());
+    auto archive=directory.filePath("desktop-plugin.zip");auto marker=directory.filePath("plugin-activated.txt");
+    mz_zip_archive zip{};QVERIFY(mz_zip_writer_init_file(&zip,archive.toUtf8().constData(),0));
+    QDir source(root+"/umeko-plugins/file-tree");QDirIterator files(source.path(),QDir::Files,QDirIterator::Subdirectories);
+    while(files.hasNext()){
+      QFile file(files.next());auto name=source.relativeFilePath(file.fileName());if(name.contains("__pycache__"))continue;
+      QVERIFY(file.open(QIODevice::ReadOnly));auto raw=file.readAll();
+      if(name=="manifest.json"){auto m=QJsonDocument::fromJson(raw).object();m["id"]="zip-plugin-fixture";m["name"]="ZIP fixture";m["builtin"]=true;raw=QJsonDocument(m).toJson();}
+      if(name=="scripts/plugin.py") {auto quoted=QJsonDocument(QJsonArray{marker}).toJson(QJsonDocument::Compact);quoted=quoted.mid(1,quoted.size()-2);raw="from pathlib import Path\nPath("+quoted+").write_text('activated')\n"+raw;}
+      QVERIFY(mz_zip_writer_add_mem(&zip,name.toUtf8().constData(),raw.constData(),raw.size(),MZ_DEFAULT_COMPRESSION));
+    }
+    QVERIFY(mz_zip_writer_finalize_archive(&zip));mz_zip_writer_end(&zip);
+    auto providerManager=qobject_cast<Providers*>(backend->providerPlugins());
+    const auto providerCount=providerManager->rows().size();
+    QVERIFY(!providerManager->importZip(QUrl::fromLocalFile(archive).toString()));
+    QCOMPARE(providerManager->rows().size(),providerCount);
+    manager->importZip(QUrl::fromLocalFile(archive).toString());QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(),10000);
+    QVERIFY2(manager->details("zip-plugin-fixture").contains("id"),qPrintable(manager->status()));QVERIFY(!QFileInfo::exists(marker));QVERIFY(!manager->openPage("zip-plugin-fixture"));
+    manager->setSessionEnabled("zip-plugin-fixture",true);QVERIFY(manager->openPage("zip-plugin-fixture"));QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(marker),10000);manager->closePage();
+    manager->saveConfig("zip-plugin-fixture","{\"showHidden\":true,\"directoryLimit\":200}");QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(),10000);
+    auto config=QJsonDocument::fromJson(manager->details("zip-plugin-fixture")["configText"].toString().toUtf8()).object();QVERIFY(config["showHidden"].toBool());
+    QVERIFY(manager->uninstall("zip-plugin-fixture"));QVERIFY(manager->details("zip-plugin-fixture").isEmpty());QTest::qWait(300);
+  }
   void cleanup() {
     if (QTest::currentTestFailed() && window) {
       auto selection = find("chatSelection");

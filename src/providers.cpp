@@ -324,6 +324,8 @@ bool Providers::importZip(QString url) {
                  .object()
                  .toVariantMap();
     auto plugin = m["id"].toString(), version = m["version"].toString();
+    if (m["kind"] == "umeko-plugin")
+      throw std::runtime_error("这是 Umeko 插件，请在 Umeko 插件管理中导入");
     if (m["apiVersion"].toInt() != 1 ||
         !QRegularExpression("^[a-z][a-z0-9-]{0,63}$")
              .match(plugin)
