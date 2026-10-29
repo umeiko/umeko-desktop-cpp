@@ -65,6 +65,7 @@ class PiManagement : public QObject {
   Q_PROPERTY(QString installMessage READ installMessage NOTIFY changed)
   Q_PROPERTY(QVariantMap npmConfig READ npmConfig NOTIFY changed)
   Q_PROPERTY(QString npmStatus READ npmStatus NOTIFY changed)
+  Q_PROPERTY(QVariantMap extensionUpdate READ extensionUpdate NOTIFY changed)
 public:
   explicit PiManagement(Backend *backend);
   bool busy() const { return m_busy; }
@@ -75,6 +76,8 @@ public:
   QString installMessage() const { return m_installMessage; }
   QVariantMap npmConfig() const;
   QString npmStatus() const { return m_npmStatus; }
+  QVariantMap extensionUpdate() const { return m_extensionUpdate; }
+  Q_INVOKABLE void checkExtensionUpdate(QString id);
   Q_INVOKABLE bool saveNpmConfig(QString raw);
   Q_INVOKABLE void testNpmConfig();
   Q_INVOKABLE void scan();
@@ -94,6 +97,7 @@ private:
   Backend *b;
   bool m_busy = false;
   QVariantList m_extensions;
+  QVariantMap m_extensionUpdate;
   QString m_status, m_backup, m_installState = "idle", m_installMessage;
   void resource(QVariantMap action, bool invalidate = false);
 signals:

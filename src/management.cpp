@@ -365,8 +365,11 @@ void PiManagement::resource(QVariantMap action, bool reload) {
   if (m_busy || b->kernelUpdating)
     return;
   const auto work = b->beginControlWork();
+  const auto checkId = action["action"] == "check-update" ? action["id"].toString() : QString();
   m_busy = true;
-  m_status = "正在读取 Pi 扩展…";
+  m_status = checkId.isEmpty() ? "正在读取 Pi 扩展…" : "正在检查扩展更新…";
+  if (!checkId.isEmpty())
+    m_extensionUpdate = {{"id",checkId},{"status","checking"},{"message",m_status}};
   emit changed();
   auto cwd = b->view->workspace.isEmpty() ? b->store.directory + "/workspace"
                                           : b->view->workspace;
@@ -374,12 +377,28 @@ void PiManagement::resource(QVariantMap action, bool reload) {
   action["cwd"] = cwd;
   action["agentDir"] = b->agentDir();
   action["agent"] = b->store.data["agent"];
+  const auto context = QJsonDocument::fromVariant(QVariantList{b->release,cwd,b->store.data["agent"]}).toJson(QJsonDocument::Compact);
   U::run(
       this, U::node(), {b->release + "/resources.mjs"},
       QJsonDocument::fromVariant(action).toJson(QJsonDocument::Compact),
-      [this, reload, work](bool ok, QByteArray raw, QString error) {
+      [this, reload, work, checkId, context](bool ok, QByteArray raw, QString error) {
         m_busy = false;
         auto result = QJsonDocument::fromJson(raw).object();
+        const auto cwd = b->view->workspace.isEmpty() ? b->store.directory + "/workspace" : b->view->workspace;
+        const auto current = QJsonDocument::fromVariant(QVariantList{b->release,cwd,b->store.data["agent"]}).toJson(QJsonDocument::Compact);
+        if (context != current) {
+          m_extensions.clear(); m_extensionUpdate.clear(); emit changed();
+          b->endControlWork(work,{{"ok",false},{"error","Pi 配置已变更，请重新检查"}});
+          scan(); return;
+        }
+        if (!checkId.isEmpty()) {
+          m_extensionUpdate = ok && result["ok"].toBool() ? result["update"].toObject().toVariantMap()
+              : QVariantMap{{"id",checkId},{"status","error"},{"message",result["error"].toString("检查扩展更新失败，请检查软件源与网络")}};
+          m_status = m_extensionUpdate["message"].toString();
+          emit changed();
+          b->endControlWork(work,{{"ok",ok && result["ok"].toBool()},{"update",m_extensionUpdate}});
+          return;
+        }
         if (ok && result["ok"].toBool()) {
           m_extensions = result["extensions"].toArray().toVariantList();
           m_status = QString("已发现 %1 个扩展").arg(m_extensions.size());
@@ -395,9 +414,10 @@ void PiManagement::resource(QVariantMap action, bool reload) {
         const bool passed = ok && result["ok"].toBool();
         b->endControlWork(work, passed ? QVariantMap{{"ok", true}, {"extensions", m_extensions}} : QVariantMap{{"ok", false}, {"error", m_status}});
       },
-      45000);
+      45000, cwd, b->store.data["agent"].toMap());
 }
 void PiManagement::scan() { resource({{"action", "scan"}}); }
+void PiManagement::checkExtensionUpdate(QString id) { resource({{"action","check-update"},{"id",id}}); }
 void PiManagement::refresh() { resource({{"action", "scan"}}, true); }
 void PiManagement::setExtensionEnabled(QString id, bool enabled) {
   resource({{"action", "toggle"}, {"id", id}, {"enabled", enabled}}, true);

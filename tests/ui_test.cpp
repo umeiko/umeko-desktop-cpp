@@ -2333,6 +2333,88 @@ def create_provider(context): return Interactive(context)
                  fixture.first.first());
     }
   }
+  void toolCatalogViewportAndExtensionDetails() {
+    auto manager = qobject_cast<PiManagement *>(backend->piManagement());
+    QVERIFY(manager);
+    const auto original = backend->store.data;
+    QDesktopServices::setUrlHandler("https",this,"recordOpenedUrl");
+    const auto previousPage = window->property("page"), previousTab = window->property("settingsTab");
+    const auto restore = qScopeGuard([&] {
+      QDesktopServices::unsetUrlHandler("https");
+      if (find("closeExtensionDetailsButton")) QMetaObject::invokeMethod(find("closeExtensionDetailsButton"),"clicked");
+      backend->store.data = original;
+      window->setProperty("page",previousPage); window->setProperty("settingsTab",previousTab);
+      backend->invalidate(); backend->notify();
+    });
+    configureAPI();
+    window->setProperty("page","settings"); window->setProperty("settingsTab",3); QTest::qWait(150);
+    if (find("openPiSettingsButton")->isVisible()) click("openPiSettingsButton");
+    find("piFold_kernel")->setProperty("expanded",false);
+    find("piFold_extensions")->setProperty("expanded",true);
+    find("piFold_packages")->setProperty("expanded",true);
+    find("piFold_tools")->setProperty("expanded",true);
+    manager->scan();
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(),15000);
+    QString coreId;
+    for (const auto &value : manager->extensions()) {
+      const auto row = value.toMap(), info = row["info"].toMap();
+      if (row["path"] != "builtin:codemode") continue;
+      coreId = row["id"].toString();
+      QCOMPARE(info["origin"].toString(),QString("pi"));
+      QCOMPARE(info["version"].toString(),backend->kernelVersion());
+      QVERIFY(info["repository"].toString().startsWith("https://github.com/"));
+    }
+    QVERIFY(!coreId.isEmpty());
+    QMetaObject::invokeMethod(find("openToolCatalogButton"),"clicked");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
+    QMetaObject::invokeMethod(find("toolCategory_native"),"clicked");
+    auto list = find("toolCatalogList");
+    QTRY_VERIFY_WITH_TIMEOUT(list->property("count").toInt() > 0,15000);
+    QTRY_VERIFY(list->width() > 300 && list->height() > 100);
+    QTRY_VERIFY(find("toolEntry_read"));
+    auto read = find("toolEntry_read");
+    const auto position = read->mapToItem(list,QPointF(read->width()/2,read->height()/2));
+    QVERIFY(read->isVisible() && read->width() > 100 && read->height() > 20);
+    QVERIFY(position.y() >= 0 && position.y() <= list->height());
+    QMetaObject::invokeMethod(read,"clicked"); QTest::qWait(100);
+    window->grabWindow().save(root+"/build/screenshots/tool-catalog-visible.png");
+    QMetaObject::invokeMethod(find("backToPiButton"),"clicked");
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(),15000);
+    QMetaObject::invokeMethod(find("agentExtensionsDetails_"+coreId),"clicked");
+    QTRY_VERIFY(find("extensionDetailsName")->isVisible());
+    QTRY_VERIFY_WITH_TIMEOUT(find("extensionDetailsToolList")->property("count").toInt() >= 1,15000);
+    QTRY_VERIFY(find("extensionDetailsToolList")->height() > 100);
+    const int before = openedUrls.size();
+    QMetaObject::invokeMethod(find("extensionRepositoryButton"),"clicked");
+    QCOMPARE(openedUrls.size(),before+1);
+    QVERIFY(openedUrls.last().host() == "github.com");
+    QTcpServer registry;
+    QVERIFY(registry.listen(QHostAddress::LocalHost,0));
+    connect(&registry,&QTcpServer::newConnection,this,[&] {
+      while (registry.hasPendingConnections()) {
+        auto socket = registry.nextPendingConnection();
+        connect(socket,&QTcpSocket::disconnected,socket,&QObject::deleteLater);
+        connect(socket,&QTcpSocket::readyRead,this,[socket] {
+          auto raw = socket->property("request").toByteArray()+socket->readAll(); socket->setProperty("request",raw);
+          if (!raw.contains("\r\n\r\n")) return;
+          const QByteArray body = R"({"name":"@earendil-works/pi-coding-agent","dist-tags":{"latest":"99.0.0"},"versions":{"99.0.0":{"name":"@earendil-works/pi-coding-agent","version":"99.0.0"}}})";
+          socket->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "+QByteArray::number(body.size())+"\r\nConnection: close\r\n\r\n"+body);
+          socket->disconnectFromHost();
+        });
+      }
+    });
+    auto agent = backend->store.data["agent"].toMap();
+    agent["npmRegistry"] = QString("http://127.0.0.1:%1").arg(registry.serverPort());
+    backend->store.data["agent"] = agent;
+    QMetaObject::invokeMethod(find("checkExtensionUpdateButton"),"clicked");
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(),20000);
+    QCOMPARE(manager->extensionUpdate()["id"].toString(),coreId);
+    QCOMPARE(manager->extensionUpdate()["latest"].toString(),QString("99.0.0"));
+    QCOMPARE(manager->extensionUpdate()["status"].toString(),QString("available"));
+    QTRY_VERIFY(find("extensionUpdateResult")->property("text").toString().contains("99.0.0"));
+    QCOMPARE(backend->kernelVersion(),QString("1.3.0"));
+    window->grabWindow().save(root+"/build/screenshots/extension-details.png");
+  }
   void extensionAndMcpManagement() {
     auto manager = qobject_cast<PiManagement *>(backend->piManagement());
     QVERIFY(manager);
