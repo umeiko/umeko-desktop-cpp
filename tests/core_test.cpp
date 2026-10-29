@@ -2,11 +2,149 @@
 #include "common.hpp"
 #include "store.hpp"
 #include "document_preview.hpp"
+#include "webview_support.hpp"
 #include <QtTest>
 
 class CoreTests : public QObject {
   Q_OBJECT
 private slots:
+  void staticHtmlPreviewBoundary() {
+    configureWebView(QDir::currentPath());
+    QTemporaryDir temp;
+    QDir().mkpath(temp.filePath("public"));
+    QFile file(temp.filePath("public/index.html"));
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("<!doctype html><title>Native "
+               "preview</title><script>document.title='Ready'</script>");
+    file.close();
+    QFile secret(temp.filePath("outside.txt"));
+    QVERIFY(secret.open(QIODevice::WriteOnly));
+    secret.write("do not serve");
+    secret.close();
+    Store store(temp.filePath("profile"));
+    DocumentPreview preview(nullptr, &store);
+    preview.load(file.fileName(), "file");
+    QTRY_VERIFY(!preview.state()["busy"].toBool());
+    QCOMPARE(preview.state()["fileType"].toString(), QString("html"));
+    if (!webviewConfiguration()["available"].toBool()) {
+      QCOMPARE(preview.state()["mode"].toString(), QString("source"));
+      return;
+    }
+    const QUrl url(preview.state()["previewUrl"].toString());
+    QVERIFY(url.isValid());
+    QNetworkAccessManager network;
+    auto get = [&](QUrl target) {
+      auto reply = network.get(QNetworkRequest(target));
+      QEventLoop loop;
+      QObject::connect(reply, &QNetworkReply::finished, &loop,
+                       &QEventLoop::quit);
+      QTimer::singleShot(3000, &loop, &QEventLoop::quit);
+      loop.exec();
+      auto result = QPair{
+          reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(),
+          reply->readAll()};
+      reply->deleteLater();
+      return result;
+    };
+    auto response = get(url);
+    QCOMPARE(response.first, 200);
+    QVERIFY(response.second.contains("Native preview"));
+    QCOMPARE(get(url.resolved(QUrl("../outside.txt"))).first, 404);
+    auto hidden = url;
+    hidden.setPath(url.path().section('/', 0, -2) + "/.env");
+    QCOMPARE(get(hidden).first, 404);
+    preview.cancel();
+    QCOMPARE(get(url).first, 404);
+  }
+  void childProjectionAndDurableResume() {
+    QVariantList tools;
+    for (int i = 0; i < 7; ++i)
+      tools << QVariantMap{{"id", "child-" + QString::number(i)},
+                           {"name", "subagent"},
+                           {"subagent", QVariantMap{{"id", QString::number(i)},
+                                                    {"status", "running"}}}};
+    auto projected = ChatModel::project({QVariantMap{
+        {"role", "assistant"}, {"text", "Delegated"}, {"tools", tools}}});
+    QCOMPARE(projected.size(), 1);
+    const auto activity = projected.first().toMap()["activity"].toList();
+    QCOMPARE(activity.last().toMap()["kind"].toString(), QString("subagents"));
+    QCOMPARE(activity.last().toMap()["agents"].toList().size(), 7);
+    QTemporaryDir temp;
+    QFile file(temp.filePath("parent.jsonl"));
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    auto append = [&](QVariantMap row) {
+      file.write(
+          QJsonDocument::fromVariant(row).toJson(QJsonDocument::Compact) +
+          '\n');
+    };
+    append({{"type", "session"}, {"cwd", temp.path()}});
+    const QVariantMap call{{"type", "toolCall"},
+                           {"id", "launch"},
+                           {"name", "subagent"},
+                           {"arguments", QVariantMap{}}};
+    const QVariantMap message{{"role", "assistant"},
+                              {"content", QVariantList{call}}};
+    append({{"type", "message"}, {"id", "a"}, {"message", message}});
+    auto child = QVariantMap{
+        {"id", "child:one"},
+        {"name", "subagent"},
+        {"subagent", QVariantMap{{"id", "one"}, {"status", "running"}}}};
+    append({{"type", "custom"},
+            {"id", "b"},
+            {"parentId", "a"},
+            {"customType", "umeko-subagent"},
+            {"data", QVariantMap{{"version", 1},
+                                 {"tool", child},
+                                 {"toolCallId", "launch"},
+                                 {"ownerEntryId", "a"}}}});
+    append({{"type", "message"},
+            {"id", "c"},
+            {"parentId", "b"},
+            {"message", QVariantMap{{"role", "assistant"},
+                                    {"content", "Resuming the same child"}}}});
+    child["subagent"] = QVariantMap{{"id", "one"}, {"status", "completed"}};
+    append({{"type", "custom"},
+            {"id", "d"},
+            {"parentId", "c"},
+            {"customType", "umeko-subagent"},
+            {"data", QVariantMap{{"version", 1},
+                                 {"tool", child},
+                                 {"toolCallId", "resume"},
+                                 {"ownerEntryId", "c"}}}});
+    file.close();
+    auto rows = U::preview(file.fileName()).first;
+    QCOMPARE(rows.size(), 2);
+    auto original = rows.first().toMap()["tools"].toList();
+    QCOMPARE(original.size(), 1);
+    QCOMPARE(original.first().toMap()["subagent"].toMap()["status"].toString(),
+             QString("completed"));
+    QVERIFY(rows.last().toMap()["tools"].toList().isEmpty());
+  }
+  void documentPresentationModes() {
+    QTemporaryDir temp;
+    Store settings(temp.path());
+    QFile file(temp.filePath("report.md"));
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("# Report\n\n**Complete**");
+    file.close();
+    DocumentPreview preview(nullptr, &settings);
+    preview.load(file.fileName(), "file");
+    QTRY_VERIFY(!preview.state()["busy"].toBool());
+    QCOMPARE(preview.state()["fileType"].toString(), QString("markdown"));
+    QCOMPARE(preview.state()["mode"].toString(), QString("rendered"));
+    QVERIFY(!preview.state()["html"].toString().isEmpty());
+    preview.setMode("markdown", "source");
+    QCOMPARE(preview.state()["mode"].toString(), QString("source"));
+    preview.cancel();
+    preview.load(file.fileName(), "file");
+    QTRY_VERIFY(!preview.state()["busy"].toBool());
+    QCOMPARE(preview.state()["mode"].toString(), QString("source"));
+    QCOMPARE(settings.data["ui"]
+                 .toMap()["documentPreviewModes"]
+                 .toMap()["markdown"]
+                 .toString(),
+             QString("source"));
+  }
   void profileMigration() {
     QTemporaryDir temp;
     const auto old = temp.path() + "/old",

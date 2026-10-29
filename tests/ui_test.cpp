@@ -331,6 +331,151 @@ private slots:
       }
     });
   }
+  void subagentNativeConversations() {
+    const auto oldSize = window->size();
+    backend->newSession();
+    auto record = backend->view;
+    QProcess pipe;
+    pipe.setProgram(U::node());
+    pipe.setArguments(
+        {"-e", "require('node:readline').createInterface({input:process.stdin})"
+               ".on('line',line=>process.stdout.write(line+'\\n'))"});
+    pipe.start();
+    QVERIFY(pipe.waitForStarted());
+    record->process = &pipe;
+    record->ready = true;
+    record->phase = "running";
+    record->action = "prompt";
+    auto reset = qScopeGuard([&] {
+      backend->children->closeView();
+      record->process = nullptr;
+      record->phase = "idle";
+      record->subagentsActive = false;
+      pipe.kill();
+      pipe.waitForFinished(2000);
+      backend->newSession();
+      window->resize(oldSize);
+    });
+    window->setProperty("page", "chat");
+    window->resize(1700, 1050);
+    QVariantList tools;
+    for (int i = 0; i < 7; ++i) {
+      QVariantMap child{
+          {"id", "native-child-" + QString::number(i)},
+          {"status", "running"},
+          {"task", "A long multiline task\nthat must remain on one line"},
+          {"avatarSlot", i % 4}};
+      backend->children->merge(record, child);
+      tools << QVariantMap{{"id", "subagent:" + child["id"].toString()},
+                           {"name", "subagent"},
+                           {"subagent", child},
+                           {"state", "running"}};
+    }
+    record->messages = {QVariantMap{
+        {"role", "assistant"}, {"text", "Delegated work"}, {"tools", tools}}};
+    emit backend->chatChanged();
+    QTRY_VERIFY(find("subagentGroupCard"));
+    QVERIFY(!find("subagentCard_native-child-0"));
+    auto matrix = window->findChild<QObject *>("subagentMatrix");
+    QVERIFY(matrix);
+    click("subagentGroupCard");
+    QTRY_VERIFY(matrix->property("desiredOpen").toBool());
+    click("subagentGroupCard");
+    QTRY_VERIFY(!matrix->property("desiredOpen").toBool());
+    QCOMPARE(backend->children->activeCount(), 7);
+    QVERIFY(backend->children->agents()[0].toMap()["name"].toString().endsWith(
+        " · 1"));
+    backend->children->open("native-child-0");
+    backend->event(
+        record,
+        {{"type", "subagent_context"},
+         {"id", "native-child-0"},
+         {"messages",
+          QVariantList{
+              QVariantMap{{"role", "user"}, {"text", "Check this task"}},
+              QVariantMap{{"role", "assistant"}, {"text", "Working"}}}}});
+    QTRY_VERIFY(find("subagentPromptInput"));
+    QTRY_VERIFY(!find("webPane")->property("moving").toBool());
+    QTest::qWait(100);
+    auto prompt = find("subagentPromptInput");
+    prompt->setProperty("text", "queued child request");
+    prompt->forceActiveFocus();
+    pipe.readAllStandardOutput();
+    QTest::keyClick(window, Qt::Key_Return);
+    QTRY_VERIFY(pipe.bytesAvailable() > 0);
+    auto lines = pipe.readAllStandardOutput().trimmed().split('\n');
+    auto sent = QJsonDocument::fromJson(lines.last()).object().toVariantMap();
+    QCOMPARE(sent["id"].toString(), QString("native-child-0"));
+    QCOMPARE(sent["mode"].toString(), QString("followUp"));
+    backend->event(record, {{"type", "subagent_command"},
+                            {"requestId", sent["requestId"]},
+                            {"ok", true}});
+    QVariantMap queued{{"id", sent["messageId"]},
+                       {"text", sent["text"]},
+                       {"mode", "followUp"}};
+    backend->event(record, {{"type", "subagent_queue"},
+                            {"id", "native-child-0"},
+                            {"items", QVariantList{queued}}});
+    QTRY_VERIFY(find("subagentQueuedMessages")->height() > 0);
+    auto band = find("subagentQueuedMessages"),
+         composer = find("subagentComposer");
+    QVERIFY(qAbs(band->y() + band->height() - composer->y()) < 1);
+    prompt->setProperty("text", "priority child request");
+    prompt->forceActiveFocus();
+    QTest::keyClick(window, Qt::Key_S, Qt::ControlModifier);
+    QTRY_VERIFY(pipe.bytesAvailable() > 0);
+    sent = QJsonDocument::fromJson(
+               pipe.readAllStandardOutput().trimmed().split('\n').last())
+               .object()
+               .toVariantMap();
+    QCOMPARE(sent["mode"].toString(), QString("interrupt"));
+    QCOMPARE(sent["id"].toString(), QString("native-child-0"));
+    QVERIFY(record->queue.isEmpty());
+    backend->event(record, {{"type", "subagent_command"},
+                            {"requestId", sent["requestId"]},
+                            {"ok", true}});
+    const auto file = directory.filePath("child-attachment.txt");
+    QFile fixture(file);
+    QVERIFY(fixture.open(QIODevice::WriteOnly));
+    fixture.write("attachment");
+    fixture.close();
+    QVERIFY(backend->children->addAttachments(QString::fromUtf8(
+        QJsonDocument(QJsonArray{QUrl::fromLocalFile(file).toString()})
+            .toJson())));
+    backend->children->setDraft("private child draft");
+    backend->children->open("native-child-1");
+    QVERIFY(backend->children->context()["attachments"].toList().isEmpty());
+    QVERIFY(backend->children->queuedMessages().isEmpty());
+    backend->children->open("native-child-0");
+    QCOMPARE(backend->children->context()["draft"].toString(),
+             QString("private child draft"));
+    QCOMPARE(backend->children->context()["attachments"].toList().size(), 1);
+    backend->event(record, {{"type", "subagent_queue_returned"},
+                            {"id", "native-child-0"},
+                            {"items", QVariantList{queued}}});
+    QVERIFY(backend->children->context()["draft"].toString().contains(
+        "queued child request"));
+    backend->children->merge(
+        record, {{"id", "native-child-0"}, {"status", "completed"}});
+    backend->event(record,
+                   {{"type", "subagent_context"},
+                    {"id", "native-child-0"},
+                    {"messages", QVariantList{QVariantMap{{"role", "assistant"},
+                                                          {"text", "Done"}}}}});
+    QTRY_VERIFY(find("subagentReplyMascot_0"));
+    QCOMPARE(find("subagentReplyMascot_0")->width(), qreal(56));
+    click("subagentReplyMascot_0");
+    QVERIFY(!find("subagentReplyMascot_0")
+                 ->property("reaction")
+                 .toString()
+                 .isEmpty());
+    backend->children->processExit(record);
+    QCOMPARE(backend->children->activeCount(),0);
+    QVERIFY(backend->children->queuedMessages().isEmpty());
+    const auto out = root + "/build/screenshots";
+    QDir().mkpath(out);
+    window->grabWindow().save(out + "/subagent-native-queue.png");
+  }
   void welcomeAndEggs() {
     auto mascot = find("welcomeMascot");
     QVERIFY(mascot);

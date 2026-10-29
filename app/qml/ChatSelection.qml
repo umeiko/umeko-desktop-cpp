@@ -6,6 +6,7 @@ Item {
     id: root
     objectName: "chatSelection"
     property var view
+    property var dataSource: backend
     property var editors: []
     property var interactions: []
     readonly property var hoveredTarget: {
@@ -137,7 +138,7 @@ Item {
         if (!hasSelection) return ""
         const start = compare(anchor, cursor) < 0 ? anchor : cursor
         const end = compare(anchor, cursor) < 0 ? cursor : anchor
-        const rows = backend.displayMessages, pieces = []
+        const rows = dataSource.displayMessages, pieces = []
         for (let row = start.row; row <= end.row && row < rows.length; row++) {
             const message = rows[row], segments = message.role === "user" ? [] : [{block:-100000,text:"umeko",markdown:false}]
             const activity = message.activity || []
@@ -175,9 +176,9 @@ Item {
         }
         return pieces.join("\n\n").replace(/\u2029|\u2028/g, "\n")
     }
-    function copy() { if (hasSelection) backend.copy(selectedText()) }
+    function copy() { if (hasSelection) dataSource.copy(selectedText()) }
     function selectAll() {
-        const rows = backend.displayMessages
+        const rows = dataSource.displayMessages
         if (!rows.length) return
         anchor = {row:0,block:-100000,offset:0}
         cursor = {row:rows.length - 1,block:2147483647,offset:0}

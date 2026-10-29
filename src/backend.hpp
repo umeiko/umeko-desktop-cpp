@@ -3,6 +3,7 @@
 #include "store.hpp"
 #include "webview_support.hpp"
 #include "document_preview.hpp"
+#include "subagents.hpp"
 #include <QtQuick>
 #include <chrono>
 #include <optional>
@@ -166,6 +167,8 @@ struct Session {
   QString key = U::uuid(), id, file, workspace, model, provider,
           title = "新会话", draft, phase = "idle", action, status, greeting;
   QVariantList messages, attachments, queue, tree;
+  QVariantList subagents;
+  bool subagentsActive = false;
   QString reasoningEffort = "off";
   QVariantMap resources{
       {"tools", QVariantList{}},       {"allTools", QVariantList{}},
@@ -251,6 +254,7 @@ class Backend : public QObject {
   Q_PROPERTY(int scrollAnchor READ scrollAnchor NOTIFY viewChanged)
   Q_PROPERTY(bool webviewAvailable READ webviewAvailable CONSTANT)
   Q_PROPERTY(QObject *documentPreview READ documentPreview CONSTANT)
+  Q_PROPERTY(QObject *subagents READ subagents CONSTANT)
   Q_PROPERTY(bool followTail READ followTail NOTIFY viewChanged)
   Q_PROPERTY(bool serverRunning READ serverRunning NOTIFY changed)
   Q_PROPERTY(QVariantList proxyKeys READ proxyKeys NOTIFY proxyKeysChanged)
@@ -264,6 +268,7 @@ public:
   bool webviewAvailable() const { return webviewConfiguration()["available"].toBool(); }
   Q_INVOKABLE QString normalizeWebUrl(QString raw) const;
   QObject *documentPreview() const { return documents; }
+  QObject *subagents() const { return children; }
   QVariantMap config() const;
   QVariantList customThemes() const;
   QVariantMap themeStyle() const;
@@ -446,12 +451,14 @@ private:
   friend class PiManagement;
   friend class AppAbout;
   friend class SessionPreview;
+  friend class Subagents;
   ChatModel chat;
   Providers *providers;
   PiManagement *management;
   AppAbout *about;
   SessionPreview *previewLoader;
   DocumentPreview *documents;
+  Subagents *children;
   std::shared_ptr<Session> view;
   QHash<QString, std::shared_ptr<Session>> records, drafts;
   QList<QString> lru;

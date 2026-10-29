@@ -89,7 +89,7 @@ void Backend::trimPool() {
     if (active <= 8)
       break;
     auto s = records.value(key);
-    if (s && s != view && s->process && !s->busy()) {
+    if (s && s != view && s->process && !s->busy() && !s->subagentsActive) {
       retire(s);
       --active;
     }
@@ -116,7 +116,7 @@ void Backend::retire(std::shared_ptr<Session> s) {
 }
 void Backend::invalidate() {
   for (auto s : records) {
-    if (s->busy())
+    if (s->busy() || s->subagentsActive)
       s->stale = true;
     else {
       retire(s);
@@ -506,6 +506,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
   if (closing)
     return;
   auto type = payload["type"].toString();
+  if (type == "subagents" || type.startsWith("subagent_")) { children->handle(s, payload); return; }
   bool visible = s == view, transcript = false;
   if (type == "ready") {
     s->ready = true;
@@ -612,6 +613,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
       transcript = true;
     }
   } else if (type == "tool") {
+    if (!payload["subagent"].toMap().isEmpty()) children->merge(s,payload["subagent"].toMap());
     s->status = payload["name"].toString() + " · " +
                 (payload["state"] == "running" ? "运行中"
                  : payload["state"] == "error" ? "失败"
@@ -640,6 +642,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
                                         payload["args"].toMap(), s->workspace)
                           : tools[index].toMap();
     tool["state"] = payload["state"];
+    if (!payload["subagent"].toMap().isEmpty()) tool["subagent"] = payload["subagent"];
     if (!payload["media"].toList().isEmpty()) {
       tool["media"] = payload["media"];
       if (visible && payload["name"] == "submit_to_chatbox" && payload["state"] == "done")
@@ -706,6 +709,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
   } else if (type == "state") {
     sessionInfo(s, payload["session"].toMap());
     s->messages = payload["messages"].toList();
+    children->sync(s);
     s->tree = payload["tree"].toList();
     s->resources = payload["resources"].toMap();
     s->usage = payload["contextUsage"].toMap();
@@ -754,9 +758,11 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
       restoreQueued(s, texts);
     }
     s->phase = "idle";
+    children->processReady(s);
     s->status.clear();
     s->approval.clear();
     if (type == "exit") {
+      children->processExit(s);
       s->ready = false;
       if (was) {
         s->failed = true;
@@ -787,6 +793,8 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     saveSessions();
   } else
     return;
+
+  if (type == "ready") children->processReady(s);
 
   if (type == "error") endControlWork(controlNativeWork.take(s->key), {{"ok", false}, {"error", payload.value("message", "Pi operation failed")}});
   if (visible) {

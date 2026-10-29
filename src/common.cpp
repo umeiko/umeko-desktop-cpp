@@ -428,11 +428,16 @@ static QString textOf(QVariant content, QString type = "text",
   }
   return out.join('\n');
 }
-QPair<QVariantList, QVariantList> U::preview(const QString &file) {
+QPair<QVariantList, QVariantList> U::preview(const QString &file, qint64 limit) {
   QFile f(file);
   if (!f.open(QIODevice::ReadOnly))
     return {};
   QString cwd = QFileInfo(file).absolutePath();
+  if (limit > 0 && f.size() > limit) {
+    const auto header=QJsonDocument::fromJson(f.readLine()).object();
+    cwd=header.value("cwd").toString(cwd);
+    f.seek(f.size()-limit); f.readLine();
+  }
   QMap<QString, QVariantMap> entries;
   QString last;
   while (!f.atEnd()) {
@@ -525,6 +530,27 @@ QPair<QVariantList, QVariantList> U::preview(const QString &file) {
       row["tools"] = tools;
     rows << row;
   }
+  // Durable child snapshots update the original launch card across resumptions.
+  QHash<QString,int> owners, calls, children;
+  for(int i=0;i<rows.size();++i){auto row=rows[i].toMap();owners[row["entryId"].toString()]=i;for(auto tool:row["tools"].toList())calls[tool.toMap()["id"].toString()]=i;}
+  QSet<QString> launches;int previous=-1;
+  for(auto entry:branch){
+    if(entry["type"]=="message"&&entry["message"].toMap()["role"]=="assistant")previous=owners.value(entry["id"].toString(),previous);
+    const auto data=entry["data"].toMap();
+    if(entry["type"]!="custom"||data["version"].toInt()!=1)continue;
+    const auto call=data["toolCallId"].toString();
+    if(entry["customType"]=="umeko-subagent-link"){launches.insert(call);continue;}
+    const auto tool=data["tool"].toMap();const auto id=tool["id"].toString();
+    if(entry["customType"]!="umeko-subagent"||id.isEmpty()||tool["name"]!="subagent"||tool["subagent"].toMap().isEmpty())continue;
+    int owner=children.value(id,owners.value(data["ownerEntryId"].toString(),calls.value(call,-1)));
+    if(owner<0){int length=-1;for(auto it=calls.begin();it!=calls.end();++it)if(call.startsWith(it.key()+"/")&&it.key().size()>length){owner=it.value();length=it.key().size();}}
+    if(owner<0)owner=previous;if(owner<0)continue;children[id]=owner;
+    auto row=rows[owner].toMap();auto tools=row["tools"].toList();int index=-1;
+    for(int i=0;i<tools.size();++i)if(tools[i].toMap()["id"]==id)index=i;
+    if(index>=0)tools[index]=tool;else{int position=tools.size();for(int i=0;i<tools.size();++i)if(tools[i].toMap()["id"]==call){position=i;break;}tools.insert(position,tool);}
+    row["tools"]=tools;rows[owner]=row;if(!call.isEmpty())launches.insert(call);
+  }
+  for(auto &value:rows){auto row=value.toMap();auto tools=row["tools"].toList();for(int i=tools.size()-1;i>=0;--i){auto tool=tools[i].toMap();if(tool["name"]=="subagent"&&launches.contains(tool["id"].toString())&&!children.contains(tool["id"].toString()))tools.removeAt(i);}if(row.contains("tools"))row["tools"]=tools;value=row;}
   return {rows, tree};
 }
 QString U::attachmentPrompt(QString text, QVariantList items) {

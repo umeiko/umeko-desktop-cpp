@@ -33,7 +33,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
     // The adapters belong to this desktop build, even when Pi itself was
     // upgraded separately. Keep web/queue fixes with the application update.
     QStringList adapters{"bridge.mjs", "resources.mjs", "provider-policy.mjs", "chatbox.mjs",
-          "network-retry.mjs", "pi-commands.mjs", "umeko-control.mjs", "umeko-operations.json", "webview-component.mjs", "webview-component.json"};
+          "network-retry.mjs", "pi-commands.mjs", "umeko-control.mjs", "subagents.mjs", "subagent-sdk.mjs", "subagent-settings.mjs", "input-queue.mjs", "rpc-ui.mjs", "umeko-operations.json", "webview-component.mjs", "webview-component.json"};
     QDirIterator docs(root + "/runtime/umeko-docs", QDir::Files, QDirIterator::Subdirectories);
     while (docs.hasNext()) adapters << QDir(root + "/runtime").relativeFilePath(docs.next());
     for (const auto &name : adapters) {
@@ -55,6 +55,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
                    destination.write(bytes) == bytes.size() &&
                    destination.commit();
     }
+    compatible = compatible && QFileInfo(candidate + "/node_modules/@gotgenes/pi-subagents/package.json").isFile();
     if (compatible)
       release = candidate;
   }
@@ -72,7 +73,8 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
   management = new PiManagement(this);
   about = new AppAbout(this);
   previewLoader = new SessionPreview(this);
-  documents = new DocumentPreview(this);
+  documents = new DocumentPreview(this, &store);
+  children = new Subagents(this);
   appearanceSave.setSingleShot(true);
   appearanceSave.setInterval(250);
   connect(&appearanceSave, &QTimer::timeout, this, [this] { store.save(); });
@@ -161,7 +163,7 @@ void Backend::repairSelection() {
 }
 bool Backend::modelsBusy(QString id) const {
   for (auto s : records)
-    if (s->busy() && (id.isEmpty() || s->provider == id))
+    if ((s->busy() || s->subagentsActive) && (id.isEmpty() || s->provider == id))
       return true;
   return false;
 }
@@ -1118,6 +1120,7 @@ void Backend::close() {
   if (about) about->closeDownload();
   appearanceSave.stop();
   previewLoader->cancel();
+  children->close();
   streaming.stop();
   providers->close();
   for (auto record : records)
@@ -1178,7 +1181,7 @@ void Backend::injectDemo() {
   auto p = ensureProject(path, true);
   store.data["workspace"] = path;
   store.data["activeProject"] = p["id"];
-  store.data["theme"] = "yanami";
+  if (!store.data["theme"].toString().startsWith("custom:")) store.data["theme"] = "yanami";
   store.data["dark"] = false;
   store.data["providers"] = QVariantList{QVariantMap{
       {"id", "demo"},
@@ -1246,6 +1249,15 @@ void Backend::injectDemo() {
            "default {\n  title: 'Umeko Notes',\n  contentDir: './notes',\n  "
            "search: { provider: 'local' },\n}\n```\n\n运行 `npm run dev` "
            "即可预览，下一步可以继续调整首页。"}}};
+  if (language() == "en") {
+    view->title = "Build a lightweight documentation site";
+    auto user = view->messages[0].toMap(); user["text"] = "Turn my notes into a lightweight documentation site. Keep the Markdown files and add search."; view->messages[0] = user;
+    auto work = view->messages[1].toMap(); work["thinking"] = "Inspect the notes, separate content from configuration, and generate a local search index for offline previews."; work["text"] = "I will inspect the notes, then set up navigation and search."; view->messages[1] = work;
+    auto reply = view->messages[2].toMap(); reply["text"] = "The documentation site is ready.\n\n- **Your content stays yours:** edit Markdown in `notes/`.\n- **Local search:** the index is generated at build time.\n- **Clear navigation:** guides, architecture and ideas.\n\n```typescript\nexport default {\n  title: 'Umeko Notes',\n  contentDir: './notes',\n  search: { provider: 'local' },\n}\n```\n\nRun `npm run dev` to preview it."; view->messages[2] = reply;
+  }
+  view->scrollIndex = 0;
+  view->scrollY = 0;
+  view->followTail = false;
   indexSession(view);
   configureGateway();
   emit changed();

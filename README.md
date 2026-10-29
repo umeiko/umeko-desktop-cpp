@@ -2,6 +2,7 @@
   <img src="app/icons/yanami-pixel.webp" width="140" alt="Pixel Yanami" />
   <h1>Umeko-Desktop</h1>
   <p>A lighter native desktop home for Pi Coding Agent.</p>
+  <p><a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a></p>
   <p>
     <a href="#downloads">Download</a> ·
     <a href="#features">Features</a> ·
@@ -10,6 +11,8 @@
     <a href="https://github.com/umeiko/umeko-desktop">Python edition</a>
   </p>
   <a href="https://github.com/umeiko/umeko-desktop-cpp/actions/workflows/build.yml"><img src="https://github.com/umeiko/umeko-desktop-cpp/actions/workflows/build.yml/badge.svg" alt="Native builds" /></a>
+  <a href="https://github.com/umeiko/umeko-desktop-cpp/compare"><img src="https://img.shields.io/badge/PRs-welcome-2ea44f?logo=github" alt="PRs welcome" /></a>
+  <a href="https://github.com/umeiko/umeko-desktop-cpp/issues/new"><img src="https://img.shields.io/badge/Issues-welcome-4f74c8?logo=github" alt="Issues welcome" /></a>
 <a id="downloads"></a>
 
 <!-- umeko-downloads:standard:start -->
@@ -31,9 +34,11 @@ Umeko-Desktop brings the Python edition's chat, tools, provider plugins and play
 
 The Agent manages the running desktop through **`config_umeko`**: providers, plugins, themes, settings, projects, chats and updates. Native controllers apply changes and refresh the UI; busy-task changes return queued jobs. `/help` returns the bundled [Umeko documentation directory](runtime/umeko-docs/README.md), with separate guides loaded on demand. Umeko's provider and theme configuration is distinct from upstream Pi's terminal settings.
 
-<img src="docs/screenshots/chat.png" width="100%" alt="Actual native application: chat, reasoning, grouped tool history and highlighted code" />
+<img src="docs/screenshots/chat-white-en.png" width="100%" alt="Actual C++ application in the pure white theme, with the English interface" />
 
-Pi can deliver images and compact file cards directly with [`submit_to_chatbox`](docs/chatbox-media.md). Click a file to open it; use its corner arrow or right-click menu to reveal or copy it. Queued messages sit above the composer with editing and deletion; steering interrupts the active run and submits a normal message immediately. Hover a message for its timestamp and copy action. Double-click selects a word; triple-click selects a paragraph. Pi settings have searchable, nested sections and click-activated inline scrolling. Model selection, sidebar highlights and compact context menus use continuous PID motion.
+Community Pi [subagents](docs/subagents.md) have independent side conversations, drafts, attachments and input queues. **Enter** queues a follow-up; **Ctrl+S** interrupts the selected agent immediately. Larger groups use a scrollable task matrix. Screenshots use isolated demo data and no real accounts or model requests.
+
+Pi can deliver images and compact file cards directly with [`submit_to_chatbox`](docs/chatbox-media.md). Click a file to open it; use its right-click menu to reveal, copy or attach it again. Queued messages sit above the composer with editing and deletion; steering interrupts the active run and submits a normal message immediately. Hover a message for its timestamp and copy action. Double-click selects a word; triple-click selects a paragraph. Pi settings have searchable, nested sections and click-activated inline scrolling. Model selection, sidebar highlights and compact context menus use continuous PID motion.
 
 Selecting a chat immediately shows an animated Yanami loading cover while cold history loads in the background. Rapid switching keeps only your latest choice; the conversation fades in after its layout is ready. File cards have themed hover details and clear menu states, and selected chat text offers a Copy / Select all context menu.
 
@@ -66,6 +71,7 @@ After a verified update download, the independent Yanami installer can stop all 
 | --- | --- |
 | Chat | Streaming text and reasoning, Markdown, bounded code highlighting, right-aligned user bubbles, attachment chips and vision input |
 | Conversation control | Follow-up queue, Ctrl+S steering, stop, independent background chats, unread state, native history, fork and export |
+| Subagents | Independent side conversations, per-agent follow-up queues and Ctrl+S interruption, file drops, character interactions and a scrollable task matrix for larger groups |
 | Reading | Stable streaming scroll, mouse wheel browsing, cross-message text selection, drag-edge scrolling, accessible selection colors |
 | Activity | Compact collapsible reasoning and consecutive tool groups; file paths copy to the clipboard |
 | Models | Context usage ring, automatic context/vision suggestions, per-model overrides and Pi-managed compaction |

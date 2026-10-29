@@ -147,6 +147,7 @@ int main(int argc, char **argv) {
                    &Backend::close);
   QTimer::singleShot(200, &backend, &Backend::loadNativeIndex);
   if (parser.isSet("demo")) {
+    if (parser.isSet("snapshot")) window->resize(1480, 960);
     QTimer::singleShot(600, &backend, &Backend::injectDemo);
 
   }

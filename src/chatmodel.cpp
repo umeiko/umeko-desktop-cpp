@@ -28,6 +28,13 @@ QVariantList ChatModel::project(const QVariantList &messages) {
       QVariantList batch;
       for (auto value : m["tools"].toList()) {
         auto tool = value.toMap();
+        if (!tool["subagent"].toMap().isEmpty()) {
+          if (!batch.isEmpty()) { activity << QVariantMap{{"kind","tools"},{"tools",batch}}; batch.clear(); }
+          if (!activity.isEmpty() && activity.last().toMap()["kind"] == "subagents") {
+            auto step=activity.last().toMap();auto agents=step["agents"].toList();agents<<tool["subagent"];step["agents"]=agents;activity.last()=step;
+          } else activity << QVariantMap{{"kind","subagents"},{"agents",QVariantList{tool["subagent"]}}};
+          continue;
+        }
         batch << tool;
         if (tool["name"] == "submit_to_chatbox" &&
             !tool["media"].toList().isEmpty()) {
@@ -82,12 +89,13 @@ QVariantList ChatModel::project(const QVariantList &messages) {
         }
       }
       if (!activity.isEmpty() && !steps.isEmpty() &&
-          activity.last().toMap()["kind"] == "tools" &&
-          steps.first().toMap()["kind"] == "tools") {
+          activity.last().toMap()["kind"] == steps.first().toMap()["kind"] &&
+          QStringList{"tools","subagents"}.contains(steps.first().toMap()["kind"].toString())) {
         auto step = activity.last().toMap();
-        auto tools = step["tools"].toList();
-        tools.append(steps.takeFirst().toMap()["tools"].toList());
-        step["tools"] = tools;
+        const auto field=step["kind"]=="tools"?"tools":"agents";
+        auto tools = step[field].toList();
+        tools.append(steps.takeFirst().toMap()[field].toList());
+        step[field] = tools;
         activity.last() = step;
       }
       activity.append(steps);
