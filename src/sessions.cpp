@@ -291,6 +291,7 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   values["agentDir"] = agentDir();
   values["webview"] = webviewConfiguration();
   values["sessionDir"] = store.directory + "/pi/sessions";
+  values["docsDir"] = store.directory + "/agent-docs";
   values["sessionFile"] = s->file;
   values["models"] = modelCatalog();
   values["agent"] = store.data["agent"];

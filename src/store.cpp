@@ -63,6 +63,7 @@ QVariantMap Store::defaults() {
       {"workspace", ""},
       {"dark", false},
       {"theme", "light"},
+      {"character", "yanami"},
       {"providers", QVariantList{}},
       {"selectedProvider", ""},
       {"selectedModel", ""},

@@ -167,6 +167,7 @@ QVariantList Providers::rows() const {
     out << QVariantMap{
         {"id", p["id"]},
         {"name", p["name"]},
+        {"description", m["description"].toString().trimmed()},
         {"version", p["pluginVersion"]},
         {"fields", fields},
         {"loggingIn", logins.contains(p["id"].toString())},
@@ -209,6 +210,7 @@ QVariantList Providers::packages() const {
       out << QVariantMap{{"id", plugin.fileName()},
                          {"version", version.fileName()},
                          {"name", m.value("name", plugin.fileName())},
+                         {"description", m["description"].toString().trimmed()},
                          {"accountCount", count},
                          {"busy", active},
                          {"valid", !m.isEmpty()}};
@@ -332,6 +334,9 @@ bool Providers::importZip(QString url) {
         m["name"].toString().trimmed().isEmpty())
       throw std::runtime_error(
           "manifest.json 缺少有效的 API 版本、ID、名称或版本");
+    if (m.contains("description") &&
+        m["description"].typeId() != QMetaType::QString)
+      throw std::runtime_error("manifest.json 的 description 必须是文本");
     auto entry = m["entrypoint"].toString().split(':');
     if (entry.size() == 2)
       entry[0] = portablePath(entry[0]);

@@ -51,7 +51,12 @@ Rectangle {
         onAtYEndChanged: if (atYEnd) followTail = true
         onCountChanged: if (followTail) tail.restart()
         onContentHeightChanged: if (followTail) tail.restart()
+        onContentYChanged: prefetch.restart()
         Timer { id: tail; interval: 0; onTriggered: if (conversation.followTail) conversation.positionViewAtEnd() }
+        Timer { id: prefetch; interval: 0; onTriggered: {
+            let first = conversation.indexAt(1,conversation.contentY+1)
+            backend.subagents.messageModel.requestRange(Math.max(0,first),Math.max(0,first)+8)
+        } }
         delegate: Column {
             id: message
             required property int index
@@ -164,6 +169,7 @@ Rectangle {
     ChatFileDrop {
         anchors.fill: parent; z: 70; chatWindow: root
         objectName: "subagentFileDropArea"; overlayName: "subagentFileDropOverlay"; mascotName: "subagentFileCatchMascot"
-        mascotSource: "../icons/subagents/" + ["lemon-yakishio","chika-komari","kaju-nukumizu","yumeko-shikiya"][root.agent.avatarSlot || 0] + "-catch.png"
+        mascotSource: Character.roleAsset(root.agent.avatarSlot || 0, "catch", "../icons/subagents/" + ["lemon-yakishio","chika-komari","kaju-nukumizu","yumeko-shikiya"][root.agent.avatarSlot || 0] + "-catch.png")
+        promptText: Character.roleLine(root.agent.avatarSlot || 0, "fileDrop", Character.scene("files.drop", ""))
     }
 }

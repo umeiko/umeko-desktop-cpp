@@ -209,6 +209,9 @@ class Backend : public QObject {
   Q_PROPERTY(QVariantMap config READ config NOTIFY changed)
   Q_PROPERTY(QVariantList customThemes READ customThemes NOTIFY changed)
   Q_PROPERTY(QVariantMap themeStyle READ themeStyle NOTIFY changed)
+  Q_PROPERTY(QVariantMap characterStyle READ characterStyle NOTIFY changed)
+  Q_PROPERTY(QVariantList characterPacks READ characterPacks NOTIFY changed)
+  Q_PROPERTY(QStringList characterNames READ characterNames NOTIFY changed)
   Q_PROPERTY(QVariantList messages READ messages NOTIFY chatChanged)
   Q_PROPERTY(
       QVariantList displayMessages READ displayMessages NOTIFY chatChanged)
@@ -272,6 +275,16 @@ public:
   QVariantMap config() const;
   QVariantList customThemes() const;
   QVariantMap themeStyle() const;
+  QVariantMap characterStyle() const;
+  QVariantList characterPacks() const;
+  QStringList characterNames() const;
+  QVariantMap characterConfiguration() const;
+  void initCharacters();
+  void refreshCharacters();
+  Q_INVOKABLE bool configureCharacter(QString raw);
+  Q_INVOKABLE bool importCharacter(QString url);
+  Q_INVOKABLE bool selectCharacter(QString id);
+  Q_INVOKABLE bool removeCharacter(QString id);
   Q_INVOKABLE bool importTheme(QString url);
   Q_INVOKABLE void removeTheme(QString id);
   Q_INVOKABLE void copyThemePrompt();
@@ -448,6 +461,7 @@ signals:
 
 private:
   friend class Providers;
+  QVariantMap characterDefaults, characterOptions, characterConfig, resolvedCharacter;
   friend class PiManagement;
   friend class AppAbout;
   friend class SessionPreview;

@@ -36,6 +36,7 @@ Subagents::Subagents(Backend *backend)
     }
   });
   deadline.start();
+  connect(b, &Backend::changed, this, [this] { emit changed(); });
   connect(b, &Backend::viewChanged, this, [this] {
     closeView();
     sync(b->view);
@@ -50,12 +51,13 @@ QVariantList Subagents::project(std::shared_ptr<Session> record) const {
     return {};
   QVariantList out;
   int totals[4]{}, counts[4]{};
+  const auto configuredNames=b->characterNames();
   for (auto v : record->subagents)
     ++totals[qBound(0, v.toMap()["avatarSlot"].toInt(), 3)];
   for (auto v : record->subagents) {
     auto row = v.toMap();
     const int slot = qBound(0, row["avatarSlot"].toInt(), 3);
-    row["name"] = names[slot] + (totals[slot] > 1
+    row["name"] = configuredNames.value(slot,names[slot]) + (totals[slot] > 1
                                      ? " · " + QString::number(++counts[slot])
                                      : QString());
     row["avatar"] = avatars[slot];

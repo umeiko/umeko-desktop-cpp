@@ -170,12 +170,15 @@ QVariantMap Backend::umekoRequest(QVariantMap request, QString callerKey, bool q
     auto args = request["arguments"].toMap();
     require(json(args).size() <= 2 * 1024 * 1024, "Desktop arguments exceed 2 MiB");
     const auto caller = records.value(callerKey);
-    if (operation == "help") return finish({{"docsRoot", release + "/umeko-docs"}, {"entry", release + "/umeko-docs/README.md"}});
+    if (operation == "help") {
+      const auto directory = QFileInfo::exists(store.directory + "/agent-docs/README.md") ? store.directory + "/agent-docs" : release + "/umeko-docs";
+      return finish({{"docsRoot", directory}, {"entry", directory + "/README.md"}});
+    }
     if (operation == "operations.list") {
       QVariantMap found;
       for (auto it = controlOperations.cbegin(); it != controlOperations.cend(); ++it)
         if (it.key().startsWith(args["prefix"].toString())) found[it.key()] = it.value();
-      return finish({{"operations", found}, {"reads", QStringList{"settings.get", "providers.list", "plugins.list", "plugins.getConfig", "themes.list", "projects.list", "sessions.list", "sessions.get", "mcp.get", "status.get", "jobs.get"}}});
+      return finish({{"operations", found}, {"reads", QStringList{"settings.get", "providers.list", "models.list", "characters.list", "characters.get", "characters.config", "plugins.list", "plugins.getConfig", "themes.list", "projects.list", "sessions.list", "sessions.get", "mcp.get", "status.get", "jobs.get"}}});
     }
     if (operation == "batch") {
       auto items = args["operations"].toList();
@@ -189,6 +192,20 @@ QVariantMap Backend::umekoRequest(QVariantMap request, QString callerKey, bool q
     }
     if (operation == "settings.get") { auto settings = config(); settings.remove("sessionMeta"); return finish({{"config", redact(settings)}, {"activeSession", activeSession()}, {"callerSession", caller ? caller->id : ""}}); }
     if (operation == "providers.list") return finish({{"providers", redact(config()["providers"])}, {"presets", commonProviders()}});
+    if (operation == "models.list") {
+      QVariantList models;
+      for (const auto &value : modelCatalog()) {
+        auto row = value.toMap();
+        row["model"] = "umeko/" + row["id"].toString();
+        row["provider"] = "umeko";
+        row["displayProvider"] = row["owned_by"];
+        models << row;
+      }
+      return finish({{"models", models}});
+    }
+    if (operation == "characters.list") return finish({{"selected", characterStyle()["id"]}, {"characters", characterPacks()}});
+    if (operation == "characters.get") return finish({{"character", characterStyle()}});
+    if (operation == "characters.config") return finish(characterConfiguration());
     if (operation == "plugins.list") return finish({{"accounts", redact(providers->rows())}, {"packages", providers->packages()}});
     if (operation == "plugins.resource") {
       const auto kind = args["kind"].toString();

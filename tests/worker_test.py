@@ -11,6 +11,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT))
+
+from umeko_provider_sdk import ProviderError
+from umeko_provider_sdk.packages import validate_folder
 
 class WorkerTests(unittest.TestCase):
     def setUp(self):
@@ -28,6 +32,22 @@ class WorkerTests(unittest.TestCase):
         return result,events
     def implementation(self,body):
         (self.folder/'scripts/provider.py').write_text(body,encoding='utf-8')
+    def test_optional_description_metadata(self):
+        path=self.folder/'manifest.json'
+        manifest=json.loads(path.read_text(encoding='utf-8'))
+        manifest.pop('description',None)
+        path.write_text(json.dumps(manifest),encoding='utf-8')
+        self.assertEqual(validate_folder(self.folder)[0]['description'],'')
+        for value in ('', ' \n ', '  插件说明\nUse <b>plain text</b>.  '):
+            manifest['description']=value
+            path.write_text(json.dumps(manifest),encoding='utf-8')
+            self.assertEqual(validate_folder(self.folder)[0]['description'],value.strip())
+        for value in (None,42,True,[],{}):
+            with self.subTest(value=value):
+                manifest['description']=value
+                path.write_text(json.dumps(manifest),encoding='utf-8')
+                with self.assertRaisesRegex(ProviderError,'description must be a string'):
+                    validate_folder(self.folder)
     def test_login_and_fresh_process_inference(self):
         result,events=self.worker('login',{'credentials':{'username':'synthetic-user'}})
         self.assertEqual(result.returncode,0,result.stderr)

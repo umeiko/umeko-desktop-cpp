@@ -91,7 +91,8 @@ class NativeUiTests : public QObject {
   }
   bool package(QString path, bool malicious = false, bool updated = false,
                QString plugin = "example-echo", QString version = "0.1.0",
-               QString prefix = {}, QByteArray implementation = {}) {
+               QString prefix = {}, QByteArray implementation = {},
+               QVariant description = {}) {
     mz_zip_archive zip{};
     if (!mz_zip_writer_init_file(&zip, path.toUtf8().constData(), 0))
       return false;
@@ -117,6 +118,10 @@ class NativeUiTests : public QObject {
           auto manifest = QJsonDocument::fromJson(raw).object();
           manifest["id"] = plugin;
           manifest["version"] = version;
+          if (description.isValid())
+            manifest["description"] = QJsonValue::fromVariant(description);
+          else
+            manifest.remove("description");
           if (!prefix.isEmpty()) {
             manifest["entrypoint"] = "./scripts/provider.py:create_provider";
             manifest["config"] = "./config.json";
@@ -2280,6 +2285,194 @@ Item {
         "complete upstream error details"));
     QTest::keyClick(window, Qt::Key_Escape);
     QVERIFY(backend->setProviderProxy(provider, "system", ""));
+  }
+  void characterArtworkAndDialogue() {
+    const auto previousCharacter=backend->store.data.value("character","yanami");
+    const auto previousOptions=backend->characterConfiguration()["overrides"].toMap();
+    const auto previousPage=window->property("page");
+    const auto json=[](QVariant value) { return QString::fromUtf8(QJsonDocument::fromVariant(value).toJson(QJsonDocument::Compact)); };
+    const auto restore=qScopeGuard([&] {
+      backend->configureCharacter(json(previousOptions));
+      backend->selectCharacter(previousCharacter.toString());
+      window->setProperty("page",previousPage);
+    });
+    backend->newSession();
+    window->setProperty("page","chat");
+    QVERIFY(backend->selectCharacter("komari"));
+    QCOMPARE(backend->characterStyle()["id"].toString(),QString("komari"));
+    QCOMPARE(backend->characterStyle()["assets"].toMap().size(),10);
+    QTRY_VERIFY_WITH_TIMEOUT(find("welcomeMascot")->property("loaded").toBool(),3000);
+    QDir().mkpath(root+"/build/screenshots");
+    QVERIFY(window->grabWindow().save(root+"/build/screenshots/komari-welcome.png"));
+    const auto fixtures = directory.filePath("character-fixture");
+    QVERIFY(QDir().mkpath(fixtures));
+    QImage portrait(16, 16, QImage::Format_ARGB32);
+    portrait.fill(QColor("#bb4466"));
+    QVERIFY(portrait.save(fixtures + "/portrait.png"));
+    const auto gif = QByteArray::fromHex(
+        "47494638396101000100800000000000ffffff21ff0b4e45545343415045322e300301"
+        "00000021f904000a0000002c000000000100010000020244010021f904000a0000002c"
+        "00000000010001000002024c01003b");
+    QFile movie(fixtures + "/portrait.gif");
+    QVERIFY(movie.open(QIODevice::WriteOnly));
+    QCOMPARE(movie.write(gif), gif.size());
+    movie.close();
+    const QVariantMap options{
+        {"scenes",
+         QVariantMap{
+             {"welcome", QVariantMap{{"tap", QVariantList{"custom welcome"}}}},
+             {"reply", QVariantMap{{"tap", QVariantList{"custom reply"}}}}}},
+        {"subagents",
+         QVariantList{QVariantMap{{"name", "Custom Worker"},
+                                  {"avatar", fixtures + "/portrait.png"},
+                                  {"catch", fixtures + "/portrait.gif"},
+                                  {"tap", QVariantList{"custom role"}}}}}};
+    auto result = backend->umekoRequest(
+        {{"operation", "characters.configure"},
+         {"arguments", QVariantMap{{"config", options}}}});
+    QVERIFY2(result["ok"].toBool(), qPrintable(json(result)));
+    QCOMPARE(backend->characterNames().value(0), QString("Custom Worker"));
+    QCOMPARE(backend->characterNames().value(1), QString("小鞠知花"));
+    QVERIFY(backend->characterStyle()["subagents"]
+                .toList()
+                .first()
+                .toMap()["avatar"]
+                .toString()
+                .contains("/character-assets/"));
+    QTest::qWait(150);
+    QVERIFY(QMetaObject::invokeMethod(find("welcomeMascot"), "tap"));
+    QCOMPARE(find("welcomeMascot")->property("reactionText").toString(), QString("custom welcome"));
+    QVERIFY(
+        QFileInfo::exists(backend->store.directory + "/character-config.json"));
+    const QVariantMap manifest{
+        {"format", "umeko-character"},
+        {"version", 1},
+        {"id", "animated-test"},
+        {"name", "Animated Test"},
+        {"assets", QVariantMap{{"welcome", "portrait.gif"},
+                               {"reply", "portrait.png"},
+                               {"loading", "portrait.gif"}}}};
+    QVERIFY(U::writeJson(fixtures + "/manifest.json", manifest));
+    QVERIFY(backend->importCharacter(fixtures + "/manifest.json"));
+    QTRY_VERIFY_WITH_TIMEOUT(find("welcomeMascot")->property("loaded").toBool(),
+                             3000);
+    QCOMPARE(backend->characterStyle()["id"].toString(),
+             QString("animated-test"));
+    const auto previousArtwork = backend->characterStyle()["assets"].toMap()["welcome"];
+    QVERIFY(backend->importCharacter(fixtures + "/manifest.json"));
+    QTRY_VERIFY_WITH_TIMEOUT(find("welcomeMascot")->property("loaded").toBool(),3000);
+    QVERIFY(backend->characterStyle()["assets"].toMap()["welcome"] != previousArtwork);
+    auto component = std::make_unique<QQmlComponent>(
+        engine.get(), QUrl::fromLocalFile(root + "/app/qml/CharacterArt.qml"));
+    std::unique_ptr<QObject> movieItem(component->create());
+    QVERIFY2(movieItem, qPrintable(component->errorString()));
+    auto image = qobject_cast<QQuickItem *>(movieItem.get());
+    QVERIFY(image);
+    image->setParentItem(window->contentItem());
+    image->setWidth(32);
+    image->setHeight(32);
+    image->setProperty("artwork",
+                       QUrl::fromLocalFile(fixtures + "/portrait.gif"));
+    QTRY_COMPARE_WITH_TIMEOUT(image->property("frameCount").toInt(), 2, 3000);
+    QVERIFY(image->property("playing").toBool());
+    image->setVisible(false);
+    QTest::qWait(50);
+    QVERIFY(!image->property("playing").toBool());
+    image->setParentItem(nullptr);
+    movieItem.reset();
+    component.reset();
+    QVERIFY(backend->selectCharacter("yanami"));
+    QVERIFY(backend->characterStyle()["assets"].toMap().isEmpty());
+    QVERIFY(backend->removeCharacter("animated-test"));
+    QVERIFY(!backend->removeCharacter("komari"));
+    QVERIFY(backend->configureCharacter("{}"));
+    QCOMPARE(backend->characterNames().value(0), QString("烧盐柠檬"));
+    QVERIFY(!backend->configureCharacter("{\"scenes\":{\"unknown\":{}}}"));
+  }
+  void providerDescriptions() {
+    auto manager = qobject_cast<Providers *>(backend->providerPlugins());
+    QVERIFY(manager);
+    const auto previousPage = window->property("page"),
+               previousTab = window->property("settingsTab");
+    auto restore = qScopeGuard([&] {
+      for (int i = 0; i < 3; ++i)
+        manager->uninstall("example-description", QString("0.1.%1").arg(i));
+      window->setProperty("page", previousPage);
+      window->setProperty("settingsTab", previousTab);
+    });
+    window->setProperty("page", "settings");
+    window->setProperty("settingsTab", 0);
+    const QVariantList descriptions{
+        QVariant(), QString(" \n "),
+        QString("  插件说明\nUse <b>plain text</b>.  ")};
+    for (int i = 0; i < descriptions.size(); ++i) {
+      const auto version = QString("0.1.%1").arg(i);
+      const auto archive =
+          directory.filePath("description-" + version + ".zip");
+      QVERIFY(package(archive, false, false, "example-description", version, {},
+                      {}, descriptions[i]));
+      QVERIFY(manager->importZip(QUrl::fromLocalFile(archive).toString()));
+      const auto row = manager->rows().last().toMap();
+      const auto id = row["id"].toString();
+      const auto expected = descriptions[i].toString().trimmed();
+      QCOMPARE(row["description"].toString(), expected);
+      bool listed = false;
+      for (const auto &value : manager->packages()) {
+        const auto plugin = value.toMap();
+        if (plugin["id"] == "example-description" &&
+            plugin["version"] == version) {
+          QCOMPARE(plugin["description"].toString(), expected);
+          listed = true;
+        }
+      }
+      QVERIFY(listed);
+      QTest::qWait(180);
+      for (const auto &name :
+           {"pluginDescription_example-description_" + version,
+            "providerDescription_" + id}) {
+        auto target = find(name);
+        QVERIFY(target);
+        QCOMPARE(target->isVisible(), !expected.isEmpty());
+        if (expected.isEmpty())
+          continue;
+        auto scroll = find("settingsScroll");
+        QVERIFY(scroll);
+        auto flick = qobject_cast<QQuickItem *>(
+            scroll->property("contentItem").value<QObject *>());
+        QVERIFY(flick);
+        const auto center =
+            target->mapToItem(flick, target->boundingRect().center());
+        flick->setProperty(
+            "contentY",
+            qBound(0.0,
+                   flick->property("contentY").toDouble() + center.y() -
+                       flick->height() / 2,
+                   qMax(0.0, flick->property("contentHeight").toDouble() -
+                                 flick->height())));
+        QTest::qWait(180);
+        movePointer(point(target));
+        QTRY_VERIFY_WITH_TIMEOUT(target->property("hovered").toBool(), 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(target->property("pinned").toBool(), 2000);
+        auto text = find("helpText_" + name);
+        QVERIFY(text);
+        QCOMPARE(text->property("text").toString(), expected);
+        QCOMPARE(text->property("textFormat").toInt(), 0);
+        QVERIFY(text->property("readOnly").toBool());
+        QDir().mkpath(root + "/build/screenshots");
+        QVERIFY(window->grabWindow().save(root + "/build/screenshots/" +
+                                          name.section('_', 0, 0) + ".png"));
+        movePointer(QPoint(2, 2));
+        QTRY_VERIFY_WITH_TIMEOUT(!target->property("pinned").toBool(), 2000);
+      }
+    }
+    const auto invalid = directory.filePath("invalid-description.zip");
+    QVERIFY(package(invalid, false, false, "example-description", "9.0.0", {},
+                    {}, 42));
+    const auto before = manager->rows().size();
+    QVERIFY(!manager->importZip(QUrl::fromLocalFile(invalid).toString()));
+    QCOMPARE(manager->rows().size(), before);
+    QVERIFY(
+        manager->importError()["message"].toString().contains("description"));
   }
   void providerPackages() {
     auto bad = directory.filePath("bad.zip");
