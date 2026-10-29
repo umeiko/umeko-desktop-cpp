@@ -285,6 +285,7 @@ public:
   Q_INVOKABLE bool importCharacter(QString url);
   Q_INVOKABLE bool selectCharacter(QString id);
   Q_INVOKABLE bool removeCharacter(QString id);
+  Q_INVOKABLE bool exportCharacterSkill(QString url);
   Q_INVOKABLE bool importTheme(QString url);
   Q_INVOKABLE void removeTheme(QString id);
   Q_INVOKABLE void copyThemePrompt();

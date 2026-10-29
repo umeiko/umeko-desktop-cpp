@@ -1,4 +1,5 @@
 #include "backend.hpp"
+#include "miniz.h"
 #include <QImageReader>
 #include <stdexcept>
 
@@ -12,6 +13,102 @@ const QSet<QString> artworkSlots{
 void requireCharacter(bool ok, const char *text) {
   if (!ok)
     throw std::runtime_error(text);
+}
+const QStringList builtInCharacters{"yanami", "komari", "kaju"};
+QString unpackCharacterZip(const QString &source, const QString &destination) {
+  constexpr quint64 limit = 96 * 1024 * 1024 + 131072;
+  QFile input(source);
+  requireCharacter(input.open(QIODevice::ReadOnly) &&
+                       input.size() <= qint64(limit),
+                   "形象 ZIP 超过 96 MiB 或无法读取");
+  const auto raw = input.readAll();
+  mz_zip_archive zip{};
+  requireCharacter(mz_zip_reader_init_mem(&zip, raw.constData(), raw.size(), 0),
+                   "ZIP 文件无效");
+  const auto cleanup = qScopeGuard([&] { mz_zip_reader_end(&zip); });
+  const auto count = mz_zip_reader_get_num_files(&zip);
+  requireCharacter(count > 0 && count <= 128, "形象 ZIP 最多包含 128 个条目");
+  struct Entry {
+    mz_uint index;
+    QString name;
+    quint64 size;
+  };
+  QList<Entry> files;
+  QMap<QString, bool> names;
+  QStringList manifests;
+  quint64 total = 0;
+  for (mz_uint i = 0; i < count; ++i) {
+    mz_zip_archive_file_stat info{};
+    requireCharacter(mz_zip_reader_file_stat(&zip, i, &info), "ZIP 索引无效");
+    const auto length = mz_zip_reader_get_filename(&zip, i, nullptr, 0);
+    requireCharacter(length > 1 && length < 4096, "ZIP 路径无效");
+    QByteArray filename(length, '\0');
+    requireCharacter(
+        mz_zip_reader_get_filename(&zip, i, filename.data(), length),
+        "ZIP 路径无效");
+    auto name = QString::fromUtf8(filename.constData(), length - 1);
+    const bool directory = name.endsWith('/');
+    if (directory)
+      name.chop(1);
+    bool safe = !name.isEmpty() && !name.contains('\\') && !name.contains(':');
+    for (auto c : name)
+      safe &= c.unicode() >= 32;
+    for (const auto &part : name.split('/'))
+      safe &= !part.isEmpty() && part != "." && part != ".." &&
+              !part.endsWith(' ') && !part.endsWith('.');
+    requireCharacter(safe, "ZIP 包含无效路径");
+    const auto kind = (info.m_external_attr >> 16) & 0170000;
+    requireCharacter((kind == 0 || kind == 0100000 || kind == 0040000) &&
+                         (!kind || (kind == 0040000) == directory),
+                     "ZIP 不能包含符号链接或特殊文件");
+    const auto key =
+        name.normalized(QString::NormalizationForm_C).toCaseFolded();
+    requireCharacter(!names.contains(key), "ZIP 包含重复或冲突路径");
+    for (auto it = names.cbegin(); it != names.cend(); ++it)
+      requireCharacter(!(key.startsWith(it.key() + "/") && !it.value()) &&
+                           !(it.key().startsWith(key + "/") && !directory),
+                       "ZIP 包含重复或冲突路径");
+    names[key] = directory;
+    if (directory)
+      continue;
+    requireCharacter((info.m_method == 0 || info.m_method == 8) &&
+                         !(info.m_bit_flag & 1),
+                     "ZIP 仅支持未加密的 Stored/Deflate 格式");
+    const auto suffix = QFileInfo(name).suffix().toLower();
+    requireCharacter(
+        QStringList{"json", "png", "jpg", "jpeg", "gif", "webp"}.contains(
+            suffix),
+        "形象 ZIP 只能包含 JSON 和图片");
+    const quint64 maximum = suffix == "json" ? 65536 : 12 * 1024 * 1024;
+    requireCharacter(info.m_uncomp_size <= maximum &&
+                         info.m_uncomp_size <= limit - total,
+                     "ZIP 解压大小超过形象包限制");
+    total += info.m_uncomp_size;
+    files.append({i, name, info.m_uncomp_size});
+    if (name.section('/', -1) == "manifest.json")
+      manifests << name;
+  }
+  requireCharacter(manifests.size() == 1 && manifests.first().count('/') <= 1,
+                   "ZIP 需要一个根目录或一级目录中的 manifest.json");
+  const auto prefix =
+      manifests.first().chopped(QString("manifest.json").size());
+  for (const auto &entry : files)
+    requireCharacter(entry.name.startsWith(prefix),
+                     "ZIP 文件必须位于同一个形象目录");
+  for (const auto &entry : files) {
+    QByteArray bytes(entry.size, '\0');
+    requireCharacter(mz_zip_reader_extract_to_mem(
+                         &zip, entry.index, bytes.data(), bytes.size(), 0),
+                     "ZIP 数据校验失败");
+    const auto path = destination + "/" + entry.name;
+    requireCharacter(QDir().mkpath(QFileInfo(path).absolutePath()),
+                     "无法创建形象暂存目录");
+    QFile output(path);
+    requireCharacter(output.open(QIODevice::WriteOnly) &&
+                         output.write(bytes) == bytes.size(),
+                     "无法解压形象资源");
+  }
+  return destination + "/" + manifests.first();
 }
 QVariantMap mergeConfiguration(QVariantMap base, const QVariantMap &patch) {
   for (auto it = patch.cbegin(); it != patch.cend(); ++it) {
@@ -200,16 +297,11 @@ QVariantMap defaultCharacter() {
 }
 QVariantList characterLibrary(const QString &root, const QString &directory) {
   QVariantList rows{defaultCharacter()};
-  auto builtin =
-      QString(":/qt/qml/Umeko/App/app/icons/characters/komari/manifest.json");
-  if (!QFileInfo::exists(builtin))
-    builtin = root + "/app/icons/characters/komari/manifest.json";
   const auto append = [&](const QString &file, bool builtIn) {
     try {
       auto row = readCharacter(file);
-      if (!builtIn &&
-          (QStringList{"yanami", "komari"}.contains(row["id"].toString()) ||
-           row["id"] != QFileInfo(file).dir().dirName()))
+      if (!builtIn && (builtInCharacters.contains(row["id"].toString()) ||
+                       row["id"] != QFileInfo(file).dir().dirName()))
         return;
       row["builtin"] = builtIn;
       row["directory"] = QFileInfo(file).absolutePath();
@@ -218,7 +310,13 @@ QVariantList characterLibrary(const QString &root, const QString &directory) {
     } catch (const std::exception &) {
     }
   };
-  append(builtin, true);
+  for (const auto &id : QStringList{"komari", "kaju"}) {
+    auto file =
+        ":/qt/qml/Umeko/App/app/icons/characters/" + id + "/manifest.json";
+    if (!QFileInfo::exists(file))
+      file = root + "/app/icons/characters/" + id + "/manifest.json";
+    append(file, true);
+  }
   for (const auto &folder :
        QDir(directory + "/characters")
            .entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks))
@@ -399,8 +497,25 @@ QVariantList Backend::characterPacks() const {
   QVariantList rows;
   for (const auto &value : characterLibrary(root, store.directory)) {
     const auto row = value.toMap();
+    const auto assets = row["assets"].toMap();
+    QString path;
+    for (const auto &key : QStringList{"avatarSmile", "reply", "welcome"})
+      if (assets.contains(key)) {
+        path = row["directory"].toString() + "/" + assets[key].toString();
+        break;
+      }
+    if (path.isEmpty()) {
+      path = ":/qt/qml/Umeko/App/app/icons/avatars/smile.webp";
+      if (!QFileInfo::exists(path))
+        path = root + "/app/icons/avatars/smile.webp";
+    }
     rows << QVariantMap{
-        {"id", row["id"]}, {"name", row["name"]}, {"builtin", row["builtin"]}};
+        {"id", row["id"]},
+        {"name", row["name"]},
+        {"builtin", row["builtin"]},
+        {"portrait", path.startsWith(':')
+                         ? "qrc" + path
+                         : QUrl::fromLocalFile(path).toString()}};
   }
   return rows;
 }
@@ -459,7 +574,12 @@ bool Backend::importCharacter(QString url) {
   bool committed = false;
   const auto previous = store.data.value("character", "yanami");
   try {
-    const auto file = U::localPath(url);
+    auto file = U::localPath(url);
+    QTemporaryDir extraction;
+    if (file.endsWith(".zip", Qt::CaseInsensitive)) {
+      requireCharacter(extraction.isValid(), "无法创建形象暂存目录");
+      file = unpackCharacterZip(file, extraction.path());
+    }
     auto item = readCharacter(file, true);
     const auto configuration = normalizeConfiguration(
         item["_configuration"].toMap(), characterDefaults);
@@ -470,7 +590,7 @@ bool Backend::importCharacter(QString url) {
                        "包内头像请放入 assets.subagent0 等资源项");
     }
     const auto id = item["id"].toString();
-    requireCharacter(id != "yanami" && id != "komari", "不能覆盖内置形象的 id");
+    requireCharacter(!builtInCharacters.contains(id), "不能覆盖内置形象的 id");
     const auto library = store.directory + "/characters",
                target = library + "/" + id;
     requireCharacter(!QFileInfo(library).isSymLink() &&
@@ -557,7 +677,7 @@ bool Backend::importCharacter(QString url) {
   }
 }
 bool Backend::removeCharacter(QString id) {
-  if (id == "yanami" || id == "komari" ||
+  if (builtInCharacters.contains(id) ||
       !QRegularExpression("^[a-z0-9][a-z0-9-]{0,47}$").match(id).hasMatch())
     return false;
   const auto folder = store.directory + "/characters/" + id;
@@ -574,5 +694,26 @@ bool Backend::removeCharacter(QString id) {
   emit changed();
   QTimer::singleShot(
       250, [folder, marker] { cleanupRemovedCharacter(folder, marker); });
+  return true;
+}
+
+bool Backend::exportCharacterSkill(QString url) {
+  auto name = QString("create-umeko-character.zip");
+  QFile source(root + "/provider-resources/" + name);
+  if (!source.exists())
+    source.setFileName(root + "/build/provider-resources/" + name);
+  const auto target = U::localPath(url);
+  if (target.isEmpty() || !source.open(QIODevice::ReadOnly)) {
+    emit toast("角色制作 Skill 不可用，请重新构建开发资源");
+    return false;
+  }
+  const auto bytes = source.readAll();
+  QSaveFile output(target);
+  if (!output.open(QIODevice::WriteOnly) ||
+      output.write(bytes) != bytes.size() || !output.commit()) {
+    emit toast("无法导出角色制作 Skill");
+    return false;
+  }
+  emit toast("角色制作 Skill 已导出");
   return true;
 }

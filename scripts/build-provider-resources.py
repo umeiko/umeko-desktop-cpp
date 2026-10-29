@@ -1,4 +1,4 @@
-"""Build the two public development downloads bundled with Umeko. No private packages."""
+"""Build the public provider and character development downloads bundled with Umeko."""
 from pathlib import Path
 import zipfile
 
@@ -22,6 +22,7 @@ def main():
         (ROOT / "pyproject.toml", "pyproject.toml"), (ROOT / "provider_dev/README.md", "README.md"),
         (ROOT / "provider_dev/examples", "examples")])
     archive(OUT / "develop-umeko-provider.zip", [(ROOT / "provider_dev/skills/develop-umeko-provider", "develop-umeko-provider")])
+    archive(OUT / "create-umeko-character.zip", [(ROOT / "character_dev/skills/create-umeko-character", "create-umeko-character")])
     print(OUT)
 
 

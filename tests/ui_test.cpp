@@ -2286,6 +2286,179 @@ Item {
     QTest::keyClick(window, Qt::Key_Escape);
     QVERIFY(backend->setProviderProxy(provider, "system", ""));
   }
+  void themeThumbnailsAreIndependentOfCharacters() {
+    const auto previousPage=window->property("page"),previousTab=window->property("settingsTab");
+    const auto previousCharacter=backend->characterStyle()["id"].toString();
+    const auto restore=qScopeGuard([&] {
+      backend->selectCharacter(previousCharacter);
+      window->setProperty("page",previousPage);
+      window->setProperty("settingsTab",previousTab);
+    });
+    window->setProperty("page","settings");
+    window->setProperty("settingsTab",5);
+    for (const auto &character:QStringList{"yanami","komari","kaju"}) {
+      QVERIFY(backend->selectCharacter(character));
+      QTest::qWait(250);
+      for (const auto &theme:QStringList{"light","dark","yanami"}) {
+        auto card=find("theme_"+theme);
+        QVERIFY(card && card->isVisible());
+        QList<QQuickItem *> pending{card};
+        while (!pending.isEmpty()) {
+          auto item=pending.takeLast();
+          QVERIFY2(!item->inherits("QQuickImage"),"Theme thumbnails must show colors without character artwork");
+          pending.append(item->childItems());
+        }
+      }
+    }
+    QDir().mkpath(root+"/build/screenshots");
+    QVERIFY(window->grabWindow().save(root+"/build/screenshots/theme-preview-no-character.png"));
+  }
+  void characterPickerAndZip() {
+    const auto previousCharacter = backend->characterStyle()["id"].toString();
+    const auto previousTheme =
+        backend->store.data.value("theme", "light").toString();
+    const auto previousPage = window->property("page"),
+               previousTab = window->property("settingsTab");
+    const auto restore = qScopeGuard([&] {
+      backend->removeCharacter("zip-character");
+      backend->selectCharacter(previousCharacter);
+      backend->setTheme(previousTheme);
+      window->setProperty("page", previousPage);
+      window->setProperty("settingsTab", previousTab);
+    });
+    for (const auto &id : QStringList{"yanami", "komari", "kaju"})
+      QVERIFY(!backend->removeCharacter(id));
+    QVERIFY(backend->selectCharacter("kaju"));
+    QCOMPARE(backend->characterStyle()["name"].toString(), QString("温水佳树"));
+    QCOMPARE(backend->characterStyle()["assets"].toMap().size(), 10);
+    for (const auto &url : backend->characterStyle()["assets"].toMap())
+      QVERIFY(QFileInfo(QUrl(url.toString()).toLocalFile()).isFile());
+    backend->setTheme("yanami");
+    QCOMPARE(backend->characterStyle()["id"].toString(), QString("kaju"));
+    window->setProperty("page", "settings");
+    window->setProperty("settingsTab", 5);
+    QTest::qWait(200);
+    click("chooseCharacterButton");
+    QTRY_VERIFY(find("character_kaju") && find("character_kaju")->isVisible());
+    QVERIFY(!find("deleteCharacter_yanami")->isVisible());
+    QVERIFY(!find("deleteCharacter_komari")->isVisible());
+    QVERIFY(!find("deleteCharacter_kaju")->isVisible());
+    click("character_komari");
+    QCOMPARE(backend->characterStyle()["id"].toString(), QString("komari"));
+    click("character_kaju");
+    QDir().mkpath(root + "/build/screenshots");
+    QVERIFY(window->grabWindow().save(
+        root + "/build/screenshots/character-picker.png"));
+    click("closeCharacterDialog");
+    QTest::qWait(350);
+    QVERIFY(window->grabWindow().save(
+        root + "/build/screenshots/character-themes.png"));
+    window->setProperty("page", "chat");
+    backend->newSession();
+    QTRY_VERIFY_WITH_TIMEOUT(find("welcomeMascot")->property("loaded").toBool(),
+                             3000);
+    QVERIFY(window->grabWindow().save(root +
+                                      "/build/screenshots/kaju-welcome.png"));
+    const auto fixtures = directory.filePath("character-zip-fixture");
+    QVERIFY(QDir().mkpath(fixtures));
+    QImage image(16, 16, QImage::Format_ARGB32);
+    image.fill(QColor("#aa4466"));
+    QByteArray png;
+    QBuffer buffer(&png);
+    QVERIFY(buffer.open(QIODevice::WriteOnly));
+    QVERIFY(image.save(&buffer, "PNG"));
+    QVariantMap manifest{
+        {"format", "umeko-character"},
+        {"version", 1},
+        {"id", "zip-character"},
+        {"name", "ZIP Character"},
+        {"assets", QVariantMap{{"welcome", "portrait.png"},
+                               {"avatarSmile", "portrait.png"}}}};
+    const auto archive = fixtures + "/character.zip";
+    auto writeZip = [&](QList<QPair<QString, QByteArray>> entries) {
+      mz_zip_archive zip{};
+      if (!mz_zip_writer_init_file(&zip, archive.toUtf8().constData(), 0))
+        return false;
+      bool ok = true;
+      for (const auto &entry : entries)
+        ok &= mz_zip_writer_add_mem(&zip, entry.first.toUtf8().constData(),
+                                    entry.second.constData(),
+                                    entry.second.size(), MZ_BEST_COMPRESSION);
+      ok &= mz_zip_writer_finalize_archive(&zip);
+      mz_zip_writer_end(&zip);
+      return ok;
+    };
+    const auto json = [](QVariant value) {
+      return QJsonDocument::fromVariant(value).toJson(QJsonDocument::Compact);
+    };
+    for (const auto &prefix : QStringList{"", "wrapped/"}) {
+      QVERIFY(writeZip({{prefix + "manifest.json", json(manifest)},
+                        {prefix + "portrait.png", png}}));
+      QVERIFY(
+          backend->importCharacter(QUrl::fromLocalFile(archive).toString()));
+      QCOMPARE(backend->characterStyle()["id"].toString(),
+               QString("zip-character"));
+    }
+    const auto installed = backend->characterStyle()["assets"].toMap();
+    for (const auto &id : QStringList{"yanami", "komari", "kaju"}) {
+      auto reserved = manifest;
+      reserved["id"] = id;
+      QVERIFY(
+          writeZip({{"manifest.json", json(reserved)}, {"portrait.png", png}}));
+      QVERIFY(!backend->importCharacter(archive));
+    }
+    QList<QList<QPair<QString, QByteArray>>> bad{
+        {{"manifest.json", json(manifest)}, {"../outside.png", png}},
+        {{"manifest.json", json(manifest)},
+         {"portrait.png", png},
+         {"PORTRAIT.PNG", png}},
+        {{"wrapped/manifest.json", json(manifest)}, {"portrait.png", png}},
+        {{"a/b/manifest.json", json(manifest)}},
+        {{"manifest.json", json(manifest)}, {"script.py", "print(1)"}},
+        {{"manifest.json", json(manifest)},
+         {"portrait.png", QByteArray(12 * 1024 * 1024 + 1, 'x')}},
+        {{"manifest.json", json(manifest)}, {"portrait.png", "not an image"}},
+        {{"manifest.json", json(manifest)},
+         {"thing.json", "{}"},
+         {"thing.json/image.png", png}}};
+    for (const auto &entries : bad) {
+      QVERIFY(writeZip(entries));
+      QVERIFY(!backend->importCharacter(archive));
+      QCOMPARE(backend->characterStyle()["id"].toString(),
+               QString("zip-character"));
+      QCOMPARE(backend->characterStyle()["assets"].toMap(), installed);
+    }
+    const auto skill = fixtures + "/create-umeko-character.zip";
+    QVERIFY(
+        backend->exportCharacterSkill(QUrl::fromLocalFile(skill).toString()));
+    QFile file(skill);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const auto bytes = file.readAll();
+    mz_zip_archive zip{};
+    QVERIFY(mz_zip_reader_init_mem(&zip, bytes.constData(), bytes.size(), 0));
+    QVERIFY(mz_zip_reader_locate_file(&zip, "create-umeko-character/SKILL.md",
+                                      nullptr, 0) >= 0);
+    QVERIFY(mz_zip_reader_locate_file(
+                &zip, "create-umeko-character/scripts/package.py", nullptr,
+                0) >= 0);
+    mz_zip_reader_end(&zip);
+    window->setProperty("page", "settings");
+    window->setProperty("settingsTab", 5);
+    click("chooseCharacterButton");
+    QTRY_VERIFY(find("deleteCharacter_zip-character") &&
+                find("deleteCharacter_zip-character")->isVisible());
+    auto list = find("characterList");
+    list->setProperty(
+        "contentY",
+        qMax(0.0, list->property("contentHeight").toDouble() - list->height()));
+    QTest::qWait(350);
+    click("deleteCharacter_zip-character");
+    QTRY_VERIFY(find("confirmRemoveCharacter"));
+    click("confirmRemoveCharacter");
+    QCOMPARE(backend->characterStyle()["id"].toString(), QString("yanami"));
+    click("closeCharacterDialog");
+    QTest::qWait(350);
+  }
   void characterArtworkAndDialogue() {
     const auto previousCharacter=backend->store.data.value("character","yanami");
     const auto previousOptions=backend->characterConfiguration()["overrides"].toMap();
