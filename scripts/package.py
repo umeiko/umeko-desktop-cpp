@@ -94,7 +94,7 @@ def main():
           'python':'bundled, CPython '+python_distribution['version'] if bundle_python else 'external, >=3.10',
           'pythonDistribution':python_distribution,
           'node':'bundled, '+node_distribution['version'],'nodeDistribution':node_distribution,
-          'parityBaseline':'f648e18b0c8ef86c65363dc78d99223ef0276fcf'}
+          'parityBaseline':'736419ce6393d5220f67a3194ffa17fdec9a8fe0'}
     (resources/'build-info.json').write_text(json.dumps(info,indent=2)+'\n',encoding='utf-8')
     if sys.platform=='darwin':finalize_macos(prefix/'UmekoCpp.app')
     executable=prefix/'UmekoCpp.app/Contents/MacOS/UmekoCpp' if sys.platform=='darwin' else prefix/('UmekoCpp.exe' if os.name=='nt' else 'UmekoCpp')
