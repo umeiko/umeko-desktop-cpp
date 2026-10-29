@@ -14,6 +14,17 @@
 [![欢迎 PR](https://img.shields.io/badge/PRs-welcome-2ea44f?logo=github)](https://github.com/umeiko/umeko-desktop-cpp/compare)
 [![欢迎 Issue](https://img.shields.io/badge/Issues-welcome-4f74c8?logo=github)](https://github.com/umeiko/umeko-desktop-cpp/issues/new)
 
+<!-- umeko-downloads:standard:start -->
+
+**Download v0.5.2 · 点击下载**
+
+[![Windows x64 ZIP](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/windows.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.2/UmekoCpp-v0.5.2-windows-x64.zip)
+[![macOS Apple Silicon DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-arm64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.2/UmekoCpp-v0.5.2-macos-arm64.dmg)
+[![macOS Intel DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-x64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.2/UmekoCpp-v0.5.2-macos-x64.dmg)
+[![Linux x64 TAR.GZ](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/linux.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.5.2/UmekoCpp-v0.5.2-linux-x64.tar.gz)
+
+<!-- umeko-downloads:standard:end -->
+
 </div>
 
 Umeko 是围绕项目组织聊天和任务的原生桌面应用。这个仓库使用 **C++20 与 Qt Quick**，共享 Python 版的界面和 Pi 运行适配层，桌面控制器采用原生 C++ 实现。

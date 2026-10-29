@@ -68,7 +68,7 @@ class ReleaseDownloadsTests(unittest.TestCase):
             def commit(*args): calls.append(json.loads(Path(args[-1]).read_text(encoding='utf-8')))
             downloads.refresh_readmes('umeiko/umeko-desktop-cpp', 'v0.5.0', assets('UmekoCpp-v0.5.0'),
                                       lambda _: {'sha': 'current-blob', 'content': base64.b64encode(old.encode()).decode()}, commit)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 2)
         self.assertEqual((calls[0]['branch'], calls[0]['sha']), ('main', 'current-blob'))
         new = base64.b64decode(calls[0]['content']).decode()
         self.assertTrue(new.startswith('Current introduction\n'))

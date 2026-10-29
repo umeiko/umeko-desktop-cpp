@@ -57,7 +57,7 @@ def refresh_readmes(repo, tag, assets, api, gh):
         return
     section = 'minimal' if tag.endswith('-minimal') else 'standard'
     block = download_buttons(repo, tag, assets, section)
-    paths = ('README.md',) if repo.endswith('-cpp') else ('README.md', 'README.zh-CN.md')
+    paths = ('README.md', 'README.zh-CN.md')
     for path in paths:
         for attempt in range(3):
             current = api('contents/' + path + '?ref=main')
