@@ -3713,6 +3713,7 @@ def create_provider(context): return Interactive(context)
     holdReplies=true;
     QVERIFY(g->ui("send",{{"id",id},{"text","coordinate "+target}})["ok"].toBool());
     QTRY_VERIFY_WITH_TIMEOUT(!heldReplies.isEmpty(),10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!coordinator->optimistic,10000);
     int echoes=0;for(auto value:coordinator->messages)if(value.toMap()["role"]=="user"&&value.toMap()["text"]=="coordinate "+target)++echoes;
     QCOMPARE(echoes,1);QVERIFY(!coordinator->optimistic);QTest::qWait(800);
     echoes=0;for(auto value:g->snapshot(id)["messages"].toList())if(value.toMap()["role"]=="user")++echoes;QCOMPARE(echoes,1);
@@ -3741,7 +3742,7 @@ def create_provider(context): return Interactive(context)
     // The full suite leaves many projects in the virtualized list. Locate the
     // owned fixture through the same project search available to the user.
     find("agentBusSearch")->setProperty("text","总线验收项目");QTRY_COMPARE(find("agentBusProjectTree")->property("count").toInt(),2);
-    auto projectKey=QDir::fromNativeSeparators(workspace);
+    auto projectKey=QDir::fromNativeSeparators(U::cleanPath(workspace));
 #ifdef Q_OS_WIN
     projectKey=projectKey.toLower();
 #endif
