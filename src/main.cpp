@@ -1,4 +1,5 @@
 #include "terminal_view.hpp"
+#include <QFileDialog>
 #include "backend.hpp"
 #include "webview_support.hpp"
 #include "syntaxhighlighter.hpp"
@@ -88,6 +89,19 @@ int main(int argc, char **argv) {
   qmlRegisterType<TerminalView>("Umeko.Terminal",1,0,"TerminalView");
   qmlRegisterType<SyntaxHighlighter>("Umeko.Text", 1, 0, "SyntaxHighlighter");
   Backend backend(root, parser.value("data-dir"));
+  QObject::connect(qobject_cast<DesktopPlugins*>(backend.desktopPlugins()), &DesktopPlugins::openWithRequested,
+                   &app, [&backend](const QString &path) {
+    const auto application=QFileDialog::getOpenFileName(nullptr,
+        backend.language()=="en" ? "Choose an application" : "选择打开此文件的应用",
+#ifdef Q_OS_MACOS
+        "/Applications");
+    const bool launched=application.isEmpty() || QProcess::startDetached("/usr/bin/open",{"-a",application,path});
+#else
+        "/usr/bin");
+    const bool launched=application.isEmpty() || QProcess::startDetached(application,{path});
+#endif
+    if(!launched)emit backend.toast(backend.language()=="en" ? "Could not start the selected application" : "无法启动所选应用");
+  });
   QQmlApplicationEngine engine;
   const auto browserImports = webviewConfiguration()["qmlPath"].toString();
   if (!browserImports.isEmpty()) engine.addImportPath(browserImports);

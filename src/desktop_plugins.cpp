@@ -679,10 +679,8 @@ void DesktopPlugins::hostEvent(QString id, QVariantMap event) {
       U::hideConsole(process);
       connect(process, &QProcess::finished, process, &QObject::deleteLater);
       process->start("rundll32.exe", {"shell32.dll,OpenAs_RunDLL", path});
-#elif defined(Q_OS_MACOS)
-      QProcess::startDetached("open", {"-a", "Finder", path});
 #else
-      QProcess::startDetached("gio", {"open", path});
+      emit openWithRequested(path);
 #endif
     }
     return;

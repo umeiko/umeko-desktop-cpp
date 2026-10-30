@@ -52,6 +52,7 @@ signals:
   void response(QString request, QVariantMap result);
   void managed(QString token, QVariantMap result);
   void event(QString topic, QVariantMap data);
+  void openWithRequested(QString path);
 
 private:
   friend class WidgetChannel;

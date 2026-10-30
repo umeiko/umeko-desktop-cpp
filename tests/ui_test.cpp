@@ -3163,8 +3163,18 @@ def create_provider(context): return Interactive(context)
     QVERIFY(manager);QCOMPARE(manager->rows().size(),4);
     QTemporaryDir workspace;QVERIFY(workspace.isValid());
     QFile file(workspace.filePath("hello.md"));QVERIFY(file.open(QIODevice::WriteOnly));file.write("# Plugin fixture\n");file.close();
+#ifndef Q_OS_WIN
+    QSignalSpy chooser(manager,&DesktopPlugins::openWithRequested);
+    manager->hostEvent("file-tree",{{"event","file.openWith"},{"arguments",QVariantMap{{"path",workspace.filePath("hello.md")}}}});
+    // The request must be in the selected workspace before offering a chooser.
+    QCOMPARE(chooser.size(),0);
+#endif
     QVERIFY(QDir().mkpath(workspace.filePath("folder")));
     backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());
+#ifndef Q_OS_WIN
+    manager->hostEvent("file-tree",{{"event","file.openWith"},{"arguments",QVariantMap{{"path",workspace.filePath("hello.md")}}}});
+    QCOMPARE(chooser.size(),1);QCOMPARE(chooser.first()[0].toString(),workspace.filePath("hello.md"));
+#endif
     window->resize(1560,1000);window->setProperty("settingsTab",3);window->setProperty("page","settings");QTest::qWait(100);click("openDesktopPluginsButton");QTest::qWait(200);
     QVERIFY(find("desktopPluginsPage"));QVERIFY(find("desktopPluginsPage")->isVisible());
     auto search=find("desktopPluginSearch");QVERIFY(search);search->setProperty("text","版本");QTest::qWait(100);
