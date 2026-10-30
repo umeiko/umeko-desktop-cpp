@@ -1,12 +1,15 @@
 #include "terminal_view.hpp"
 #include "widget_channel.hpp"
 #include "desktop_pet.hpp"
+#include "global_agents.hpp"
 #include "backend.hpp"
 #include "miniz.h"
 #include "syntaxhighlighter.hpp"
 #include "update_network_fixture.hpp"
 #include <QDesktopServices>
 #include <QImageReader>
+#include <QAbstractItemModel>
+#include <QJSValue>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
@@ -25,6 +28,7 @@ class NativeUiTests : public QObject {
   QTcpServer upstream;
   QVariantList requests;
   bool nativeTool = false, slow = false;
+  bool globalBridge = false;
   bool desktopTool = false;
   int desktopCalls = 0;
   bool holdReplies = false;
@@ -314,6 +318,19 @@ private slots:
             message = {
                 {"role", "assistant"},
                 {"content", nativeTool ? "Native complete" : "Got: " + text}};
+          }
+          if(globalBridge) {
+            auto msgs=body["messages"].toList();auto last=msgs.isEmpty()?QVariantMap{}:msgs.last().toMap();
+            auto value=last["content"];QString content=value.toString();
+            if(value.metaType().id()==QMetaType::QVariantList)for(auto v:value.toList())content+=v.toMap()["text"].toString();
+            auto request=QRegularExpression("requestId=([a-f0-9]{32})").match(content);
+            QVariantMap call;
+            if(last["role"]!="tool"&&request.hasMatch())call={{"operation","agent_bus.reply"},{"arguments",QVariantMap{{"requestId",request.captured(1)},{"status","completed"},{"result","Native bridge result from the actual target session"}}}};
+            else if(last["role"]!="tool"&&content.startsWith("coordinate "))call={{"operation","agent_bus.dispatch"},{"arguments",QVariantMap{{"targetId",content.mid(11)},{"text","Check the native agent bridge and return its result"}}}};
+            if(!call.isEmpty()) {
+              auto args=QString::fromUtf8(QJsonDocument::fromVariant(call).toJson(QJsonDocument::Compact));
+              message={{"role","assistant"},{"content",QVariant()},{"tool_calls",QVariantList{QVariantMap{{"id","bridge-"+U::uuid()},{"type","function"},{"function",QVariantMap{{"name","umeko_desktop"},{"arguments",args}}}}}}};finish="tool_calls";
+            } else {message={{"role","assistant"},{"content",content.contains("Agent Bus result [completed]")?"GLOBAL_BRIDGE_SUMMARY_COMPLETE":"Waiting for the bridge result"}};finish="stop";}
           }
           QJsonObject response{
               {"choices", QJsonArray{QJsonObject{
@@ -1550,6 +1567,11 @@ Item {
     QVERIFY(catalog.size() > 50);
     for (auto it = catalog.cbegin(); it != catalog.cend(); ++it) {
       if(it.key().startsWith("widgets."))continue; // Widget dispatch validates its public operation schema.
+      if(it.key().startsWith("agent_bus.")) {
+        QVERIFY((QStringList{"agent_bus.overview","agent_bus.requests","agent_bus.dispatch","agent_bus.reply"}.contains(it.key())));
+        QCOMPARE(it.value().toMap()["target"].toString(),QString("global-agents"));
+        continue; // Native, identity-bound dispatcher is exercised by globalAgentsWidgetAndNativeBridge.
+      }
       const auto spec = it.value().toMap();
       const auto name = spec["target"].toString();
       QObject *target = name == "plugins" ? backend->providerPlugins() : name == "management" ? backend->piManagement() : name == "about" ? backend->appAbout() : backend.get();
@@ -3161,7 +3183,7 @@ def create_provider(context): return Interactive(context)
   }
   void desktopPluginPagesAndSessionBoundary() {
     auto manager=qobject_cast<DesktopPlugins*>(backend->desktopPlugins());
-    QVERIFY(manager);QCOMPARE(manager->rows().size(),4);
+    QVERIFY(manager);QCOMPARE(manager->rows().size(),5);
     QTemporaryDir workspace;QVERIFY(workspace.isValid());
     QFile file(workspace.filePath("hello.md"));QVERIFY(file.open(QIODevice::WriteOnly));file.write("# Plugin fixture\n");file.close();
 #ifndef Q_OS_WIN
@@ -3275,6 +3297,72 @@ def create_provider(context): return Interactive(context)
     QInputMethodEvent ime;ime.setCommitString("你好");QCoreApplication::sendEvent(&terminal,&ime);QCOMPARE(input.last()[0].toString(),QString("你好"));
     terminal.applyFrame({{"revision",2},{"bracketedPaste",true}});QGuiApplication::clipboard()->setText("line1\nline2");terminal.paste();QCOMPARE(input.last()[0].toString(),QString("\x1b[200~line1\nline2\x1b[201~"));
     terminal.reset();QVERIFY(!terminal.hasSelection());
+  }
+  void globalAgentsWidgetAndNativeBridge() {
+    releaseReplies();nativeTool=false;desktopTool=false;mediaTool=false;upstreamError=false;limitResponse=false;slow=false;
+    auto previousAgent=backend->store.data["agent"].toMap();auto testAgent=previousAgent;testAgent["agentDir"]=directory.filePath("global-bridge-agent");testAgent["safeMode"]=true;testAgent["autoCompaction"]=false;backend->store.data["agent"]=testAgent;
+    auto restoreAgent=qScopeGuard([&]{backend->store.data["agent"]=previousAgent;});
+    configureAPI();backend->newSession();backend->selectCharacter("komari");
+    auto workspace=directory.filePath("global-bridge-workspace");QDir().mkpath(workspace);backend->setWorkspace(workspace);
+    window->setProperty("page","chat");window->resize(1640,1040);
+    auto manager=backend->desktopExtensions;auto g=manager->globalAgents();QVERIFY(g);globalBridge=true;
+    auto reset=qScopeGuard([&]{globalBridge=false;for(auto id:g->agents.keys())g->ui("delete",{{"id",id}});manager->closePage();backend->newSession();});
+    QVERIFY(manager->openPage("global-agents"));QTRY_VERIFY(find("globalAgentsPage"));QTest::qWait(1000);
+    auto created=g->ui("create",{{"name","小鞠 · 协调员"},{"instructions","Delegate then summarize returned results"}});QVERIFY2(created["ok"].toBool(),qPrintable(created["error"].toString()));
+    auto id=created["result"].toMap()["id"].toString();QCOMPARE(g->agents[id].toMap()["character"].toString(),backend->characterStyle()["id"].toString());
+    QVERIFY(!g->ui("create",{{"name","forged"}},true)["ok"].toBool());
+    auto target=g->identity(backend->view);auto coordinator=g->ensure(id);
+    auto denied=backend->umekoRequest({{"operation","agent_bus.dispatch"},{"arguments",QVariantMap{{"targetId",target},{"text","no access"}}}},coordinator->key);QVERIFY(!denied["ok"].toBool());
+    QVERIFY(g->ui("setBridge",{{"id",target},{"enabled",true}})["ok"].toBool());
+    QVERIFY(QMetaObject::invokeMethod(find("globalAgentsPage"),"openAgent",Q_ARG(QVariant,id)));QTest::qWait(800);
+    QVERIFY(g->ui("send",{{"id",id},{"text","coordinate "+target}})["ok"].toBool());
+    QTRY_VERIFY2_WITH_TIMEOUT(!g->requests.isEmpty()&&g->requests.last().toMap()["status"]=="completed",qPrintable(QString::fromUtf8(QJsonDocument::fromVariant(QVariantMap{{"requests",g->requests},{"source",coordinator->messages},{"target",backend->view->messages},{"approval",backend->view->approval}}).toJson())),30000);
+    QTRY_VERIFY_WITH_TIMEOUT(QJsonDocument::fromVariant(g->snapshot(id)["messages"]).toJson().contains("GLOBAL_BRIDGE_SUMMARY_COMPLETE"),30000);
+    QVERIFY(!coordinator->file.isEmpty());QVERIFY(!backend->view->file.isEmpty());QVERIFY(coordinator->file!=backend->view->file);
+    for(auto v:backend->sessionIndex)QVERIFY(v.toMap()["id"]!=coordinator->id);
+    bool restricted=false;for(auto v:requests){auto tools=v.toMap()["tools"].toList();if(tools.size()==1&&tools.first().toMap()["function"].toMap()["name"]=="umeko_desktop")restricted=true;}QVERIFY(restricted);
+    // Results cannot be forged by a different session or replayed after completion.
+    auto requestId=g->requests.last().toMap()["id"].toString();
+    QVERIFY(!backend->umekoRequest({{"operation","agent_bus.reply"},{"arguments",QVariantMap{{"requestId",requestId},{"result","forged"}}}},coordinator->key)["ok"].toBool());
+    QVERIFY(!backend->umekoRequest({{"operation","sessions.list"}},coordinator->key)["ok"].toBool());
+    g->save();auto saved=U::readJson(g->registry).toMap()["agents"].toList();QVERIFY(!saved.isEmpty());QCOMPARE(saved.first().toMap()["sessionFile"].toString(),coordinator->file);
+    QTest::qWait(700);QVERIFY(find("globalAgentsPage"));QDir().mkpath(root+"/build/global-agents-ui");window->grabWindow().save(root+"/build/global-agents-ui/native-conversation.png");
+    // The same conversation remains authorized while its project is collapsed.
+    auto project=backend->ensureProject(workspace);backend->renameProject(project["id"].toString(),"总线验收项目");
+    QVERIFY(QMetaObject::invokeMethod(find("globalAgentsPage"),"openAgent",Q_ARG(QVariant,QString{})));QTest::qWait(750);
+    QCOMPARE(find("globalSubagentsHeading")->property("text").toString(),QString("全局子智能体"));
+    click("agentBusTabButton");QTRY_COMPARE(find("globalAgentsPage")->property("section").toString(),QString("bridge"));
+    // The full suite leaves many projects in the virtualized list. Locate the
+    // owned fixture through the same project search available to the user.
+    find("agentBusSearch")->setProperty("text","总线验收项目");QTRY_COMPARE(find("agentBusProjectTree")->property("count").toInt(),2);
+    auto folder="agentBusProject_"+workspace;
+    auto toggle="agentBusCheckbox_"+g->identity(backend->view);
+    QTRY_VERIFY(find(folder));QTRY_VERIFY(find(toggle));QVERIFY(find(toggle)->property("checked").toBool());
+    find("agentBusSearch")->setProperty("text","");
+    auto tree=find("agentBusProjectTree");
+    auto treeModel=qobject_cast<QAbstractItemModel*>(tree->property("model").value<QObject*>());QVERIFY(treeModel);
+    auto role=treeModel->roleNames().key("rowData",-1);QVERIFY(role>=0);int projectIndex=-1;
+    for(int i=0;i<treeModel->rowCount();++i){auto value=treeModel->data(treeModel->index(i,0),role);auto row=value.metaType().id()==qMetaTypeId<QJSValue>()?value.value<QJSValue>().toVariant().toMap():value.toMap();if(row["key"]==workspace){projectIndex=i;break;}}
+    QVERIFY(projectIndex>=0);QVERIFY(QMetaObject::invokeMethod(tree,"forceLayout"));
+    QVERIFY(QMetaObject::invokeMethod(tree,"positionViewAtIndex",Q_ARG(int,projectIndex),Q_ARG(int,0)));QTest::qWait(200);
+    QTRY_VERIFY(find(folder));
+    click(folder);QTRY_VERIFY(!find(toggle));QVERIFY(g->allowed(backend->view));
+    click(folder);QTRY_VERIFY(find(toggle));
+    find("agentBusSearch")->setProperty("text","总线验收项目");QTRY_COMPARE(find("agentBusProjectTree")->property("count").toInt(),2);
+    window->grabWindow().save(root+"/build/global-agents-ui/native-agent-bus.png");
+    click("globalSubagentsHelpButton");QTRY_VERIFY(find("globalSubagentsHelpText"));
+    QCOMPARE(find("globalSubagentsHelpTitle")->property("text").toString(),QString("Agent Bus（智能体总线）"));
+    QVERIFY(find("globalSubagentsHelpText")->property("text").toString().contains("勾选"));
+    QTest::keyClick(window,Qt::Key_Escape);QTest::qWait(200);
+    click("agentBusRequestsTabButton");click("globalSubagentsHelpButton");QTRY_VERIFY(find("globalSubagentsHelpText"));
+    QCOMPARE(find("globalSubagentsHelpTitle")->property("text").toString(),QString("请求"));
+    QVERIFY(find("globalSubagentsHelpText")->property("text").toString().contains("返回结果"));
+    QVERIFY(find("globalSubagentsHelpText")->property("text").toString().contains("不会撤销"));
+    window->grabWindow().save(root+"/build/global-agents-ui/native-requests-help.png");
+    QTest::keyClick(window,Qt::Key_Escape);
+
+    auto queued=backend->umekoRequest({{"operation","agent_bus.dispatch"},{"arguments",QVariantMap{{"targetId",g->identity(backend->view)},{"text","cancel this request"}}}},coordinator->key);QVERIFY(queued["ok"].toBool());
+    QVERIFY(g->ui("setBridge",{{"id",g->identity(backend->view)},{"enabled",false}})["ok"].toBool());QCOMPARE(g->requests.last().toMap()["status"].toString(),QString("cancelled"));
   }
   void whalePetBuiltInAndPlayback() {
     auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);

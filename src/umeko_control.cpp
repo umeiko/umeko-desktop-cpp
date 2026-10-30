@@ -1,4 +1,5 @@
 #include "backend.hpp"
+#include "global_agents.hpp"
 #include <cmath>
 #include <algorithm>
 #include <stdexcept>
@@ -170,10 +171,12 @@ QVariantMap Backend::umekoRequest(QVariantMap request, QString callerKey, bool q
     auto args = request["arguments"].toMap();
     require(json(args).size() <= 2 * 1024 * 1024, "Desktop arguments exceed 2 MiB");
     const auto caller = records.value(callerKey);
+    if(operation.startsWith("agent_bus."))return finish(desktopExtensions->globalAgents()->execute(operation,args,callerKey));
+    require(!caller || caller->globalAgent.isEmpty() || operation == "help" || operation == "models.list", "全局协调子智能体只能使用 agent_bus.* 和 models.list；其他任务请委派给已开启桥的工作区代理");
     if(operation.startsWith("widgets."))return finish(desktopExtensions->execute(operation,args,callerKey));
     if (operation == "help") {
       const auto directory = QFileInfo::exists(store.directory + "/agent-docs/README.md") ? store.directory + "/agent-docs" : release + "/umeko-docs";
-      const QVariantMap topics{{"plugins",directory+"/plugins.md"},{"provider",directory+"/provider-plugins.md"},{"widget",directory+"/widget-plugins.md"}};
+      const QVariantMap topics{{"plugins",directory+"/plugins.md"},{"provider",directory+"/provider-plugins.md"},{"widget",directory+"/widget-plugins.md"},{"agents",directory+"/global-agents.md"}};
       const auto topic=args["topic"].toString();
       require(topic.isEmpty() || topics.contains(topic),"topic 请选择 plugins、provider 或 widget");
       QVariantMap result{{"docsRoot",directory},{"entry",topic.isEmpty()?directory+"/README.md":topics[topic].toString()},{"topics",topics}};

@@ -1,4 +1,5 @@
 #include "backend.hpp"
+#include "global_agents.hpp"
 
 std::shared_ptr<Session> Backend::fresh(QString workspace) {
   auto s = std::make_shared<Session>();
@@ -126,7 +127,7 @@ void Backend::invalidate() {
   emit contextUsageChanged();
 }
 void Backend::indexSession(std::shared_ptr<Session> s) {
-  if (s->id.isEmpty())
+  if (s->id.isEmpty() || !s->globalAgent.isEmpty())
     return;
   QVariantMap info{
       {"id", s->id},       {"file", s->file},   {"workspace", s->workspace},
@@ -139,6 +140,7 @@ void Backend::indexSession(std::shared_ptr<Session> s) {
   sessionIndex.prepend(info);
 }
 void Backend::sessionInfo(std::shared_ptr<Session> s, QVariantMap info) {
+  if (!s->globalAgent.isEmpty()) { s->id=info.value("id",s->id).toString(); if(!info["file"].toString().isEmpty())s->file=info["file"].toString(); return; }
   auto old = s->id;
   s->id = info.value("id", s->id).toString();
   if (!info["file"].toString().isEmpty())
@@ -309,6 +311,7 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
     }
   }
   values["mcpEnv"] = envValues;
+  if (!s->globalAgent.isEmpty()) { const auto extra=desktopExtensions->globalAgents()->runtimeConfig(s); for(auto it=extra.cbegin();it!=extra.cend();++it) values[it.key()]=it.value(); }
   auto p = new QProcess(this);
   U::hideConsole(p);
   s->process = p;
@@ -717,7 +720,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     s->tree = payload["tree"].toList();
     s->resources = payload["resources"].toMap();
     s->usage = payload["contextUsage"].toMap();
-    for (auto v : payload["sessions"].toList()) {
+    if (s->globalAgent.isEmpty()) for (auto v : payload["sessions"].toList()) {
       auto ns = v.toMap();
       bool exists = false;
       for (auto &old : sessionIndex) {
@@ -781,7 +784,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
         }
       }
     }
-    if (was && s->action == "prompt" && !s->cancelled && !s->id.isEmpty()) {
+    if (was && s->globalAgent.isEmpty() && s->action == "prompt" && !s->cancelled && !s->id.isEmpty()) {
       setMetadata(s->id, {{"unread", !(visible && chatVisible)}});
       emit taskFinished(s->id, s->title, type == "done" && !s->failed, longRunning);
     }

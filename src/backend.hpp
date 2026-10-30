@@ -164,6 +164,7 @@ private:
 };
 
 struct Session {
+  QString globalAgent;
   std::optional<std::chrono::steady_clock::time_point> promptStarted;
   QString key = U::uuid(), id, file, workspace, model, provider,
           title = "新会话", draft, phase = "idle", action, status, greeting, petActivity;
@@ -473,6 +474,7 @@ private:
   friend class DesktopPlugins;
   friend class WidgetChannel;
   friend class DesktopPet;
+  friend class GlobalAgents;
   ChatModel chat;
   Providers *providers;
   PiManagement *management;

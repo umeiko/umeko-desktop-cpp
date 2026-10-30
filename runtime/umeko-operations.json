@@ -1050,6 +1050,10 @@
       "idle": "all",
       "async": true,
       "args": []
-    }
+    },
+    "agent_bus.overview": {"target":"global-agents","read":true,"args":[]},
+    "agent_bus.requests": {"target":"global-agents","read":true,"args":[]},
+    "agent_bus.dispatch": {"target":"global-agents","args":[["targetId","string"],["text","string"]]},
+    "agent_bus.reply": {"target":"global-agents","args":[["requestId","string"],["result","string"],["status","string","completed"]]}
   }
 }
