@@ -10,7 +10,7 @@
 namespace {
 const QStringList states{"idle",    "thinking", "working",
                          "waiting", "done",     "error"};
-const QStringList builtinAppearances{"yanami", "komari"};
+const QStringList builtinAppearances{"yanami", "komari", "whale-girl"};
 const QVariantMap defaults{{"visible", false},      {"appearance", "yanami"},
                            {"size", 192},           {"alwaysOnTop", true},
                            {"paused", false},       {"sampleIntervalMs", 1500},
@@ -124,9 +124,9 @@ QVariantMap readPack(QString folder, bool check = false) {
            value["dialogue"].typeId() == QMetaType::QVariantMap,
        "dialogue 必须为对象");
   for (auto it = dialogue.cbegin(); it != dialogue.cend(); ++it) {
-    need(QStringList{"tap", "hover", "drag"}.contains(it.key()) &&
+    need(QStringList{"tap", "hover", "drag", "done", "error"}.contains(it.key()) &&
              it.value().typeId() == QMetaType::QVariantList,
-         "dialogue 支持 tap、hover、drag");
+         "dialogue 支持 tap、hover、drag、done、error");
     auto lines = it.value().toList();
     need(!lines.isEmpty() && lines.size() <= 16, "每种互动台词需要 1–16 条");
     for (auto line : lines)
@@ -315,8 +315,8 @@ QVariantList DesktopPet::appearances() const {
   QVariantList rows;
   for (auto v : packs) {
     auto p = v.toMap();
-    rows << QVariantMap{
-        {"id", p["id"]}, {"name", p["name"]}, {"builtin", p["builtin"]}};
+    QVariantMap row{{"id", p["id"]}, {"name", p["name"]}, {"builtin", p["builtin"]}};
+    if (p["id"] == "yanami") rows.prepend(row); else rows << row;
   }
   return rows;
 }
@@ -327,7 +327,10 @@ QVariantMap DesktopPet::state() const {
                   .toMap()
                   .value(action, pack["states"].toMap()["idle"])
                   .toString();
+  auto top = pack["images"].toMap()[name].toMap()["contentTop"].toDouble();
+  top = qIsFinite(top) ? qBound(0., top, 1.) : 0.;
   return {{"action", action},
+          {"contentTop", top},
           {"source",
            name.isEmpty()
                ? ""
@@ -442,6 +445,7 @@ void DesktopPet::sample() {
         ++subagents;
   }
   observed = next;
+  const auto previousTarget = target;
   target = waiting     ? "waiting"
            : active    ? (working ? "working" : "thinking")
            : subagents ? "working"
@@ -452,15 +456,12 @@ void DesktopPet::sample() {
                            {"activeSubagents", subagents}};
   bool changedActivity = nextActivity != activity;
   activity = nextActivity;
+  if (target != previousTarget && (target == "done" || target == "error"))
+    speak(target);
   if (step() || changedActivity)
     emit changed();
 }
-void DesktopPet::interact(QString kind) {
-  auto now = clock.elapsed();
-  if (!running || (kind == lastKind && now - lastInteraction < 400))
-    return;
-  lastKind = kind;
-  lastInteraction = now;
+void DesktopPet::speak(QString kind) {
   auto lines = packs[options["appearance"].toString()]
                    .toMap()["dialogue"]
                    .toMap()[kind]
@@ -468,6 +469,14 @@ void DesktopPet::interact(QString kind) {
   if (!lines.isEmpty())
     emit reaction(lines[QRandomGenerator::global()->bounded(int(lines.size()))]
                       .toString());
+}
+void DesktopPet::interact(QString kind) {
+  auto now = clock.elapsed();
+  if (!running || (kind == lastKind && now - lastInteraction < 400))
+    return;
+  lastKind = kind;
+  lastInteraction = now;
+  speak(kind);
   if (QStringList{"tap", "hover", "drag"}.contains(kind) &&
       (kind != "hover" || target == "idle")) {
     interaction = kind == "tap" ? "done" : "waiting";
