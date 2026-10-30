@@ -30,7 +30,7 @@ class DesktopPluginSdkTests(unittest.TestCase):
                 seen.append(context.request_id);context.notify_agent('background result',session=captured)
                 seen.append(str(context.resolve_workspace('.',session=captured)))
             thread=threading.Thread(target=send);thread.start();thread.join()
-            self.assertEqual(seen,['',name]);self.assertEqual(events[0]['arguments']['session'],captured);self.assertEqual(events[0]['arguments']['requestId'],'')
+            self.assertEqual(seen,['',str(Path(name).resolve())]);self.assertEqual(events[0]['arguments']['session'],captured);self.assertEqual(events[0]['arguments']['requestId'],'')
     def test_builtin_icon_catalog_and_custom_asset_validation(self):
         icons=json.loads((ROOT/'plugin-runtime/umeko_plugin_sdk/icons.json').read_text(encoding='utf-8'));self.assertEqual(len(icons),21)
         for icon in icons:self.assertTrue((ROOT/'app/icons'/(icon['glyph']+'.svg')).is_file())
