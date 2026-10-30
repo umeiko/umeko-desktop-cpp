@@ -2,6 +2,8 @@
 var strings = {
   "Widgets": "Widgets",
   "请先在插件管理 Widget 中启用 builtin:mcp，再配置 MCP 服务器。已有配置会保留。": "Enable builtin:mcp in the Pi manager Widget before configuring MCP servers. Existing configuration is preserved.",
+  "查看": "View",
+  "智能体总线": "Agent Bus",
   "桌面小宠物": "Desktop pet",
   "桌宠设置": "Pet settings",
   "打开 Umeko": "Open Umeko",

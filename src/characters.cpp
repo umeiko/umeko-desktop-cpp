@@ -509,13 +509,16 @@ QVariantList Backend::characterPacks() const {
       if (!QFileInfo::exists(path))
         path = root + "/app/icons/avatars/smile.webp";
     }
+    auto reply=assets.contains("reply")?row["directory"].toString()+"/"+assets["reply"].toString():row["id"]=="yanami"?QString(":/qt/qml/Umeko/App/app/icons/yanami-pixel.webp"):path;
+    if(!QFileInfo::exists(reply))reply=row["id"]=="yanami"?root+"/app/icons/yanami-pixel.webp":path;
     rows << QVariantMap{
         {"id", row["id"]},
         {"name", row["name"]},
         {"builtin", row["builtin"]},
         {"portrait", path.startsWith(':')
                          ? "qrc" + path
-                         : QUrl::fromLocalFile(path).toString()}};
+                         : QUrl::fromLocalFile(path).toString()},
+        {"replyPortrait",reply.startsWith(':')?"qrc"+reply:QUrl::fromLocalFile(reply).toString()}};
   }
   return rows;
 }
