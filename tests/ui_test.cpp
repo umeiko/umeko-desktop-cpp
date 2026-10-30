@@ -3261,6 +3261,26 @@ def create_provider(context): return Interactive(context)
     QTemporaryDir workspace;backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());window->setProperty("page","chat");
     QVERIFY(!m->enabled("terminal"));m->setEnabled("terminal",true);QVERIFY(m->openPage("terminal"));
     QTRY_VERIFY_WITH_TIMEOUT(m->workers.value("terminal")&&m->workers.value("terminal")->ready,10000);
+    // Unscoped view events reach only the open Widget. Explicit session targets
+    // must still match both the chat and workspace; never weaken that boundary.
+    QSignalSpy viewEvents(m,&DesktopPlugins::event);
+    auto publish=[&](QVariantMap args,QString source="terminal") {
+      m->hostEvent(source,{{"event","widget.event"},{"arguments",args}});
+    };
+    QVariantMap viewArgs{{"topic","fixture.frame"},{"data",QVariantMap{{"text","live"}}}};
+    publish(viewArgs);QCOMPARE(viewEvents.size(),1);QVERIFY(!viewArgs.contains("session"));
+    QCOMPARE(viewEvents.last()[0].toString(),QString("fixture.frame"));
+    QCOMPARE(viewEvents.last()[1].toMap()["text"].toString(),QString("live"));
+    auto scoped=viewArgs;scoped["session"]=m->m_session;
+    publish(scoped);QCOMPARE(viewEvents.size(),2);
+    auto stale=m->m_session;stale["token"]="stale-chat";scoped["session"]=stale;
+    publish(scoped);QCOMPARE(viewEvents.size(),2);
+    stale=m->m_session;stale["workspace"]="stale-workspace";scoped["session"]=stale;
+    publish(scoped);QCOMPARE(viewEvents.size(),2);
+    scoped["session"]=QVariantMap{};publish(scoped);QCOMPARE(viewEvents.size(),2);
+    publish(viewArgs,"file-tree");QCOMPARE(viewEvents.size(),2);
+    auto oversized=viewArgs;oversized["data"]=QVariantMap{{"text",QString(65537,'x')}};
+    publish(oversized);QCOMPARE(viewEvents.size(),2);
     QSignalSpy replies(m,&DesktopPlugins::response);
     auto await=[&](QString request){QVariantMap result;QElapsedTimer timer;timer.start();while(timer.elapsed()<10000){QCoreApplication::processEvents();for(auto row:replies)if(row[0].toString()==request)return row[1].toMap();QTest::qWait(10);}return result;};
     auto listed=await(m->call("list","{\"ensure\":true}"));QVERIFY2(listed["ok"].toBool(),qPrintable(listed["error"].toString()));
@@ -3284,6 +3304,61 @@ def create_provider(context): return Interactive(context)
     auto pet=qobject_cast<DesktopPet*>(m->pet());QVERIFY(pet);QVERIFY(!pet->appearances().isEmpty());QVERIFY(pet->ui("show",{})["ok"].toBool());QVERIFY(pet->visible());QVERIFY(!pet->ui("configure",{{"sampleIntervalMs",100}})["ok"].toBool());
     QTRY_VERIFY(window->findChild<QObject*>("desktopPetWindowLoader"));
     QVERIFY(pet->ui("hide",{})["ok"].toBool());QVERIFY(!pet->visible());QVERIFY(m->workers.contains("desktop-pet"));
+  }
+  void terminalLiveOutputWithoutWindowActivation() {
+    auto m=qobject_cast<DesktopPlugins*>(backend->desktopPlugins());QVERIFY(m);
+    QTemporaryDir workspace;QVERIFY(workspace.isValid());
+    backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());
+    // Other Widget tests can leave an asynchronously unloading page and a
+    // debounced session refresh. Start only after both have completed.
+    m->closePage();
+    QTRY_VERIFY(!find("terminalPluginPage"));
+    QTRY_VERIFY(!m->contextRefresh.isActive());
+    const auto previous=m->enabled("terminal");
+    auto restore=qScopeGuard([&]{m->closePage();m->setEnabled("terminal",previous);});
+    window->setProperty("page","chat");window->resize(1480,960);
+    m->setEnabled("terminal",true);QVERIFY(m->openPage("terminal"));
+    QTRY_VERIFY_WITH_TIMEOUT(find("terminalPluginPage"),10000);
+    auto page=find("terminalPluginPage");
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("activeId").toString().isEmpty(),10000);
+    const auto id=page->property("activeId").toString();
+    QTRY_VERIFY(find("terminalScreen_"+id));
+    auto terminal=qobject_cast<TerminalView*>(find("terminalScreen_"+id));QVERIFY(terminal);
+    auto contents=[&]{terminal->selectAll();return terminal->selectedText();};
+    QTRY_VERIFY_WITH_TIMEOUT(!contents().trimmed().isEmpty(),10000);
+    auto process=m->workers.value("terminal")->process;
+    QTest::qWait(800); // Let the pane animation finish; never reactivate the window.
+    QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point(terminal));
+    QTRY_VERIFY(terminal->hasActiveFocus());
+    QSignalSpy inputs(terminal,&TerminalView::input);
+    // Keep the marker out of echoed command text so only executed output passes.
+    const QString command=
+#ifdef Q_OS_WIN
+        "Write-Output ('UMEKO_LIVE_'+'INPUT')";
+#else
+        "printf 'UMEKO_LIVE_%s\\n' INPUT";
+#endif
+    QKeyEvent input(QEvent::KeyPress,0,Qt::NoModifier,command);
+    QCoreApplication::sendEvent(window,&input);QTest::keyClick(window,Qt::Key_Return);
+    QTRY_VERIFY(!inputs.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(contents().contains("UMEKO_LIVE_INPUT"),10000);
+    // Output continues without additional input, focus changes or snapshots.
+    const QString delayed=
+#ifdef Q_OS_WIN
+        "Write-Output ('UMEKO_STREAM_'+1); Start-Sleep -Milliseconds 300; Write-Output ('UMEKO_STREAM_'+2)";
+#else
+        "printf 'UMEKO_STREAM_%s\\n' 1; sleep 0.3; printf 'UMEKO_STREAM_%s\\n' 2";
+#endif
+    QKeyEvent stream(QEvent::KeyPress,0,Qt::NoModifier,delayed);
+    QCoreApplication::sendEvent(window,&stream);QTest::keyClick(window,Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(contents().contains("UMEKO_STREAM_1"),10000);
+    QTRY_VERIFY_WITH_TIMEOUT(contents().contains("UMEKO_STREAM_2"),10000);
+    QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point(terminal));
+    QDir().mkpath(root+"/build/screenshots");
+    window->grabWindow().save(root+"/build/screenshots/terminal-live.png");
+    m->closePage();m->setEnabled("terminal",previous);
+    if(!previous)QTRY_VERIFY_WITH_TIMEOUT(process.isNull()||process->state()==QProcess::NotRunning,2000);
+    restore.dismiss();
   }
   void terminalGridColorsSelectionAndInput() {
     TerminalView terminal;terminal.setWidth(640);terminal.setHeight(320);

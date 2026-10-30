@@ -581,14 +581,16 @@ void DesktopPlugins::receive(QString id, std::shared_ptr<Worker> w) {
 }
 void DesktopPlugins::hostEvent(QString id, QVariantMap event) {
   auto kind = event["event"].toString();
-  auto args = event["arguments"].toMap();
+  const auto args = event["arguments"].toMap();
   auto perms = entry(id)["permissions"].toList();
   if (kind == "agent.notify") {
     if (perms.contains("session.write"))
       channel->notify(id, args);
     return;
   }
-  const auto target = args["session"].toMap();
+  // Reading a missing session must not insert it: unscoped Widget events
+  // target the currently open page (e.g. live terminal output).
+  const auto target = args.value("session").toMap();
   if (kind == "widget.event") {
     if (args.contains("session") &&
         (target["token"] != m_session["token"] ||
