@@ -1,6 +1,7 @@
 #include "desktop_plugins.hpp"
 #include "backend.hpp"
 #include "desktop_pet.hpp"
+#include "global_agents.hpp"
 #include "widget_channel.hpp"
 #include <QClipboard>
 #include <QDesktopServices>
@@ -57,6 +58,7 @@ DesktopPlugins::DesktopPlugins(Backend *backend)
   applicationToken = "application:" + U::uuid();
   channel = new WidgetChannel(this);
   companion = new DesktopPet(this);
+  coordinators = new GlobalAgents(this);
   synchronize();
 }
 DesktopPlugins::~DesktopPlugins() { close(); }
@@ -75,7 +77,7 @@ bool DesktopPlugins::enabled(QString id) const {
   return entries.contains(id) &&
          settings.value("enabled")
              .toMap()
-             .value(id, !application(id) || (id == "desktop-pet" &&
+             .value(id, !application(id) || ((id == "desktop-pet" || id == "global-agents") &&
                                              entry(id)["builtin"].toBool()))
              .toBool();
 }
@@ -188,7 +190,7 @@ void DesktopPlugins::synchronize() {
   auto key = v->id.isEmpty() ? "draft:" + v->key : v->id;
   if (m_session.value("token").toString() != v->key ||
       m_session.value("workspace").toString() != v->workspace) {
-    closePage();
+    if (m_page != "global-agents") closePage();
     for (auto id : workers.keys())
       if (!application(id))
         stop(id);
@@ -347,6 +349,7 @@ void DesktopPlugins::stop(QString id) {
     emit response(request, {{"ok", false}, {"error", "插件任务已取消"}});
   if (id == "desktop-pet" && entry(id)["builtin"].toBool())
     companion->stop();
+  if (id == "global-agents" && entry(id)["builtin"].toBool()) coordinators->stop();
   emit changed();
   if (w->process) {
     auto p = w->process;
@@ -387,9 +390,9 @@ void DesktopPlugins::start(QString id) {
   w->token =
       application(id) ? applicationToken : m_session.value("token").toString();
   workers[id] = w;
-  if (id == "desktop-pet" && entry(id)["builtin"].toBool()) {
+  if ((id == "desktop-pet" || id == "global-agents") && entry(id)["builtin"].toBool()) {
     w->ready = true;
-    companion->start();
+    if (id == "desktop-pet") companion->start(); else coordinators->start();
     emit changed();
     return;
   }
@@ -490,11 +493,11 @@ QString DesktopPlugins::callFor(QString id, QString method, QString raw,
   const auto request = U::uuid();
   w->pending.insert(request);
   if (!w->process) {
-    QTimer::singleShot(0, this, [this, id, w, method, args, request] {
+    QTimer::singleShot(0, this, [this, id, w, method, args, request, agent] {
       if (workers.value(id) != w)
         return;
-      auto result = companion->ui(method, args.object().toVariantMap());
-      if (method == "importAppearance" && result["ok"].toBool()) {
+      auto result = id == "global-agents" ? coordinators->ui(method, args.object().toVariantMap(), agent) : companion->ui(method, args.object().toVariantMap());
+      if (id == "desktop-pet" && method == "importAppearance" && result["ok"].toBool()) {
         const auto token = result["result"].toMap()["importId"].toString();
         auto connection = std::make_shared<QMetaObject::Connection>();
         *connection =
@@ -880,6 +883,7 @@ void DesktopPlugins::close() {
     return;
   m_closed = true;
   contextRefresh.stop();
+  coordinators->close();
   companion->close();
   QList<QPointer<QProcess>> processes;
   for (auto worker : workers)
@@ -940,6 +944,7 @@ QVariantMap DesktopPlugins::recentPlugin() const {
   for (auto p : pages)
     if (p.toMap()["id"] == id)
       return p.toMap();
+  for (auto p : pages) if (!application(p.toMap()["id"].toString())) return p.toMap();
   return pages.isEmpty() ? QVariantMap{} : pages.first().toMap();
 }
 QVariantMap DesktopPlugins::execute(QString operation, QVariantMap args,
@@ -948,4 +953,5 @@ QVariantMap DesktopPlugins::execute(QString operation, QVariantMap args,
 }
 void DesktopPlugins::observe(QString key, QVariantMap value) {
   channel->observe(key, value);
+  coordinators->observe(key, value);
 }

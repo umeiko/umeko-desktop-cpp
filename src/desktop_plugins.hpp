@@ -3,6 +3,7 @@
 class Backend;
 class WidgetChannel;
 class DesktopPet;
+class GlobalAgents;
 class DesktopPlugins : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantList rows READ rows NOTIFY changed)
@@ -35,6 +36,7 @@ public:
   QVariantMap recentPlugin() const;
   QVariantList iconCatalog() const { return icons; }
   QObject *pet() const;
+  GlobalAgents *globalAgents() const { return coordinators; }
   QString callFor(QString id, QString method, QString raw, bool agent = false,
                   int timeout = 20000, QVariantMap session = {});
   QVariantMap execute(QString operation, QVariantMap args, QString callerKey);
@@ -57,6 +59,7 @@ signals:
 private:
   friend class WidgetChannel;
   friend class DesktopPet;
+  friend class GlobalAgents;
   friend class NativeUiTests;
   struct Worker {
     QPointer<QProcess> process;
@@ -74,6 +77,7 @@ private:
   QHash<QString, std::shared_ptr<Worker>> workers;
   WidgetChannel *channel;
   DesktopPet *companion;
+  GlobalAgents *coordinators;
   QVariantList icons;
   QSet<QString> failedServices;
   QString applicationToken, selection;
