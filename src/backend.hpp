@@ -166,7 +166,7 @@ private:
 struct Session {
   std::optional<std::chrono::steady_clock::time_point> promptStarted;
   QString key = U::uuid(), id, file, workspace, model, provider,
-          title = "新会话", draft, phase = "idle", action, status, greeting;
+          title = "新会话", draft, phase = "idle", action, status, greeting, petActivity;
   QVariantList messages, attachments, queue, tree;
   QVariantList subagents;
   bool subagentsActive = false;
@@ -471,6 +471,8 @@ private:
   friend class SessionPreview;
   friend class Subagents;
   friend class DesktopPlugins;
+  friend class WidgetChannel;
+  friend class DesktopPet;
   ChatModel chat;
   Providers *providers;
   PiManagement *management;

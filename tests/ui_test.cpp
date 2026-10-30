@@ -1,3 +1,6 @@
+#include "terminal_view.hpp"
+#include "widget_channel.hpp"
+#include "desktop_pet.hpp"
 #include "backend.hpp"
 #include "miniz.h"
 #include "syntaxhighlighter.hpp"
@@ -180,7 +183,8 @@ private slots:
     root = qEnvironmentVariable("UMEKO_TEST_ROOT", QDir::currentPath());
     QVERIFY(directory.isValid());
     QQuickStyle::setStyle("Basic");
-    qmlRegisterType<SyntaxHighlighter>("Umeko.Text", 1, 0, "SyntaxHighlighter");
+    qmlRegisterType<TerminalView>("Umeko.Terminal",1,0,"TerminalView");
+  qmlRegisterType<SyntaxHighlighter>("Umeko.Text", 1, 0, "SyntaxHighlighter");
     Store seed(directory.path());
     auto agent = seed.data["agent"].toMap();
     agent["agentDir"] = directory.filePath("agent");
@@ -257,7 +261,7 @@ private slots:
           QVariantMap message;
           QString finish = limitResponse ? "length" : "stop";
           if (desktopTool && desktopCalls++ == 0) {
-            QVariantMap function{{"name", "config_umeko"}, {"arguments", "{\"operation\":\"appearance.fontScale\",\"arguments\":{\"scale\":1.1}}"}};
+            QVariantMap function{{"name", "umeko_desktop"}, {"arguments", "{\"operation\":\"appearance.fontScale\",\"arguments\":{\"scale\":1.1}}"}};
             message = {{"role", "assistant"}, {"content", QVariant()},
                        {"tool_calls", QVariantList{QVariantMap{{"id", "desktop-control"}, {"type", "function"}, {"function", function}}}}};
             finish = "tool_calls";
@@ -634,6 +638,9 @@ private slots:
   }
   void historyFoldsAndSelection() {
     backend->injectDemo();
+    const auto fixture=directory.filePath("site.config.ts");
+    QFile source(fixture);QVERIFY(source.open(QIODevice::WriteOnly));source.write("export default { title: 'Preview fixture' };\n");source.close();
+    auto message=backend->view->messages[1].toMap();auto tools=message["tools"].toList();auto tool=tools[1].toMap();tool["path"]=fixture;tools[1]=tool;message["tools"]=tools;backend->view->messages[1]=message;emit backend->chatChanged();
     QTest::qWait(400);
     auto view = find("conversation");
     QVERIFY(view);
@@ -645,8 +652,10 @@ private slots:
     QVERIFY(path);
     QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
                       point(path, 30, 7));
-    QCOMPARE(QGuiApplication::clipboard()->text(),
-             QString("/workspace/umeko-notes/site.config.ts"));
+    QTRY_COMPARE(find("webPane")->property("mode").toString(),QString("document"));
+    QCOMPARE(find("webPane")->property("documentPath").toString(),fixture);
+    QMetaObject::invokeMethod(find("webPane"),"dismiss");
+    QTRY_VERIFY(!find("webPane")->property("moving").toBool());
     auto selection = find("chatSelection");
     QVERIFY(selection);
     QMetaObject::invokeMethod(selection, "selectAll");
@@ -1539,6 +1548,7 @@ Item {
     auto catalog = call("operations.list")["operations"].toMap();
     QVERIFY(catalog.size() > 50);
     for (auto it = catalog.cbegin(); it != catalog.cend(); ++it) {
+      if(it.key().startsWith("widgets."))continue; // Widget dispatch validates its public operation schema.
       const auto spec = it.value().toMap();
       const auto name = spec["target"].toString();
       QObject *target = name == "plugins" ? backend->providerPlugins() : name == "management" ? backend->piManagement() : name == "about" ? backend->appAbout() : backend.get();
@@ -3150,14 +3160,14 @@ def create_provider(context): return Interactive(context)
   }
   void desktopPluginPagesAndSessionBoundary() {
     auto manager=qobject_cast<DesktopPlugins*>(backend->desktopPlugins());
-    QVERIFY(manager);QCOMPARE(manager->rows().size(),2);
+    QVERIFY(manager);QCOMPARE(manager->rows().size(),4);
     QTemporaryDir workspace;QVERIFY(workspace.isValid());
     QFile file(workspace.filePath("hello.md"));QVERIFY(file.open(QIODevice::WriteOnly));file.write("# Plugin fixture\n");file.close();
     QVERIFY(QDir().mkpath(workspace.filePath("folder")));
     backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());
-    window->resize(1560,1000);window->setProperty("settingsTab",7);window->setProperty("page","settings");QTest::qWait(200);
+    window->resize(1560,1000);window->setProperty("settingsTab",3);window->setProperty("page","settings");QTest::qWait(100);click("openDesktopPluginsButton");QTest::qWait(200);
     QVERIFY(find("desktopPluginsPage"));QVERIFY(find("desktopPluginsPage")->isVisible());
-    auto search=find("desktopPluginSearch");QVERIFY(search);search->setProperty("text","Git");QTest::qWait(100);
+    auto search=find("desktopPluginSearch");QVERIFY(search);search->setProperty("text","版本");QTest::qWait(100);
     QCOMPARE(find("desktopPluginInstalledList")->property("count").toInt(),1);search->setProperty("text","");
     const auto output=root+"/build/screenshots";QDir().mkpath(output);window->grabWindow().save(output+"/desktop-plugin-manager.png");
     QVERIFY(manager->openPage("file-tree"));
@@ -3165,7 +3175,9 @@ def create_provider(context): return Interactive(context)
     QCOMPARE(find("webPane")->property("mode").toString(),"plugin");QTRY_VERIFY(!find("webPane")->property("moving").toBool());
     window->grabWindow().save(output+"/desktop-plugin-tree.png");
     click("fileTreeRow_hello.md");
-    QTRY_COMPARE(find("webPane")->property("mode").toString(),"document");QVERIFY(manager->page().isEmpty());
+    QVERIFY(backend->attachments().isEmpty());
+    auto treeRow=find("fileTreeRow_hello.md");QVERIFY(treeRow);QTest::mouseDClick(window,Qt::LeftButton,Qt::NoModifier,treeRow->mapToScene(QPointF(treeRow->width()/2,treeRow->height()/2)).toPoint());
+    QTRY_VERIFY(!backend->attachments().isEmpty());
     QVERIFY(manager->openPage("file-tree"));QTRY_VERIFY(find("fileTreeEntries"));
     window->setProperty("page","settings");QTest::qWait(100);QVERIFY(manager->page().isEmpty());QVERIFY(!find("webPane")->property("opened").toBool());
     manager->setSessionEnabled("file-tree",false);QVERIFY(!manager->openPage("file-tree"));manager->setSessionEnabled("file-tree",true);
@@ -3181,7 +3193,7 @@ def create_provider(context): return Interactive(context)
     QTRY_VERIFY_WITH_TIMEOUT(!documentEvents.isEmpty(),10000);
     backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());
 
-    backend->setFontScale(2);window->setProperty("settingsTab",7);window->setProperty("page","settings");QTest::qWait(250);
+    backend->setFontScale(2);window->setProperty("settingsTab",3);window->setProperty("page","settings");QTest::qWait(100);click("openDesktopPluginsButton");QTest::qWait(250);
     QVERIFY(find("desktopPluginSearch")->isVisible());backend->setFontScale(1);window->setProperty("settingsTab",0);window->setProperty("page","chat");
   }
   void desktopPluginZipLifecycle() {
@@ -3208,6 +3220,59 @@ def create_provider(context): return Interactive(context)
     manager->saveConfig("zip-plugin-fixture","{\"showHidden\":true,\"directoryLimit\":200}");QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(),10000);
     auto config=QJsonDocument::fromJson(manager->details("zip-plugin-fixture")["configText"].toString().toUtf8()).object();QVERIFY(config["showHidden"].toBool());
     QVERIFY(manager->uninstall("zip-plugin-fixture"));QVERIFY(manager->details("zip-plugin-fixture").isEmpty());QTest::qWait(300);
+  }
+  void applicationWidgetsAndAgentChannel() {
+    auto m=qobject_cast<DesktopPlugins*>(backend->desktopPlugins());QVERIFY(m);
+    auto help=backend->umekoRequest({{"operation","help"},{"arguments",QVariantMap{{"topic","widget"}}}});
+    QVERIFY(help["entry"].toString().endsWith("/widget-plugins.md"));QVERIFY(!help["activeWidgets"].toList().isEmpty());
+    QTemporaryDir workspace;backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());window->setProperty("page","chat");
+    QVERIFY(!m->enabled("terminal"));m->setEnabled("terminal",true);QVERIFY(m->openPage("terminal"));
+    QTRY_VERIFY_WITH_TIMEOUT(m->workers.value("terminal")&&m->workers.value("terminal")->ready,10000);
+    QSignalSpy replies(m,&DesktopPlugins::response);
+    auto await=[&](QString request){QVariantMap result;QElapsedTimer timer;timer.start();while(timer.elapsed()<10000){QCoreApplication::processEvents();for(auto row:replies)if(row[0].toString()==request)return row[1].toMap();QTest::qWait(10);}return result;};
+    auto listed=await(m->call("list","{\"ensure\":true}"));QVERIFY2(listed["ok"].toBool(),qPrintable(listed["error"].toString()));
+    const auto terminals=listed["result"].toMap()["terminals"].toList();QVERIFY(!terminals.isEmpty());auto terminal=terminals.first().toMap();const auto id=terminal["id"].toString();auto process=m->workers["terminal"]->process;
+    auto raw=QString::fromUtf8(QJsonDocument::fromVariant(QVariantMap{{"terminalId",id}}).toJson(QJsonDocument::Compact));
+    QVERIFY(await(m->call("attach",raw))["ok"].toBool());QVERIFY(backend->view->draft.contains(id));
+    auto call=backend->umekoRequest({{"operation","widgets.call"},{"arguments",QVariantMap{{"id","terminal"},{"method","read"},{"arguments",QVariantMap{{"terminalId",id}}}}}});
+    QVERIFY2(call["ok"].toBool(),qPrintable(call["error"].toString()));QCOMPARE(call["status"].toString(),"accepted");
+    auto request=call["requestId"].toString();QTRY_VERIFY(m->channel->execute("widgets.result",{{"requestId",request}},{} )["status"]!="running");
+    auto result=backend->umekoRequest({{"operation","widgets.result"},{"arguments",QVariantMap{{"requestId",request}}}});QCOMPARE(result["status"].toString(),"completed");QCOMPARE(result["result"].toMap()["result"].toMap()["pid"],terminal["pid"]);
+    m->closePage();QVERIFY(m->workers.contains("terminal"));QCOMPARE(m->workers["terminal"]->process,process);
+    auto old=backend->view;backend->newSession();QTest::qWait(100);QCOMPARE(m->workers["terminal"]->process,process);
+    auto forbidden=backend->umekoRequest({{"operation","widgets.result"},{"arguments",QVariantMap{{"requestId",request}}}});QVERIFY(!forbidden["ok"].toBool());
+    auto oldSnapshot=QVariantMap{{"token",old->key},{"id",old->id},{"workspace",old->workspace}};
+    // A passive application update stays with its captured chat; it does not wake Pi.
+    auto notification=QVariantMap{{"id",QString(32,'a')},{"message","background update"},{"data",QVariantMap{}},{"wake",false},{"session",oldSnapshot}};
+    m->channel->notify("terminal",notification);
+    auto updates=backend->umekoRequest({{"operation","widgets.messages"}},old->key);QVERIFY(updates["ok"].toBool());QCOMPARE(updates["updates"].toList().size(),1);
+    QVERIFY(backend->umekoRequest({{"operation","widgets.messages"}})["updates"].toList().isEmpty());
+    m->setEnabled("terminal",false);QVERIFY(!m->workers.contains("terminal"));QTRY_VERIFY(process.isNull()||process->state()==QProcess::NotRunning);
+    auto pet=qobject_cast<DesktopPet*>(m->pet());QVERIFY(pet);QVERIFY(!pet->appearances().isEmpty());QVERIFY(pet->ui("show",{})["ok"].toBool());QVERIFY(pet->visible());QVERIFY(!pet->ui("configure",{{"sampleIntervalMs",100}})["ok"].toBool());
+    QTRY_VERIFY(window->findChild<QObject*>("desktopPetWindowLoader"));
+    QVERIFY(pet->ui("hide",{})["ok"].toBool());QVERIFY(!pet->visible());QVERIFY(m->workers.contains("desktop-pet"));
+  }
+  void terminalGridColorsSelectionAndInput() {
+    TerminalView terminal;terminal.setWidth(640);terminal.setHeight(320);
+    QVariantMap row{{"text","RED 中文"},{"runs",QVariantList{QVariantList{0,"RED","red","default",0,3},QVariantList{4,"中文","default","default",1,4}}}};
+    terminal.applyFrame({{"revision",1},{"reset",true},{"screen",QVariantList{row}},{"cursor",QVariantMap{{"x",8},{"y",0},{"hidden",true}}}});
+    QImage image(640,320,QImage::Format_ARGB32_Premultiplied);image.fill(Qt::transparent);QPainter painter(&image);terminal.paint(&painter);painter.end();
+    bool red=false;for(int y=4;y<28;++y)for(int x=4;x<40;++x){auto pixel=image.pixelColor(x,y);red|=pixel.red()>pixel.green()*1.5&&pixel.red()>pixel.blue()*1.5;}
+    QVERIFY(red);QCOMPARE(image.pixelColor(500,200),QColor("#ffffff"));
+    terminal.selectAll();QVERIFY(terminal.hasSelection());QCOMPARE(terminal.selectedText(),QString("RED 中文"));
+    QSignalSpy input(&terminal,&TerminalView::input);QKeyEvent up(QEvent::KeyPress,Qt::Key_Up,Qt::ControlModifier);QCoreApplication::sendEvent(&terminal,&up);QCOMPARE(input.last()[0].toString(),QString("\x1b[1;5A"));
+    QInputMethodEvent ime;ime.setCommitString("你好");QCoreApplication::sendEvent(&terminal,&ime);QCOMPARE(input.last()[0].toString(),QString("你好"));
+    terminal.applyFrame({{"revision",2},{"bracketedPaste",true}});QGuiApplication::clipboard()->setText("line1\nline2");terminal.paste();QCOMPARE(input.last()[0].toString(),QString("\x1b[200~line1\nline2\x1b[201~"));
+    terminal.reset();QVERIFY(!terminal.hasSelection());
+  }
+  void desktopPetImportsDataWithoutCode() {
+    auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);
+    QTemporaryDir temp;QImage image(64,64,QImage::Format_ARGB32);image.fill(QColor("#4488ff"));auto source=temp.filePath("sample.png");QVERIFY(image.save(source));
+    QSignalSpy imported(pet,&DesktopPet::imported);auto result=pet->ui("importAppearance",{{"path",source}});QVERIFY(result["ok"].toBool());QTRY_VERIFY_WITH_TIMEOUT(!imported.isEmpty(),10000);
+    auto actual=imported.last()[1].toMap();QVERIFY2(actual["ok"].toBool(),qPrintable(actual["error"].toString()));auto id=actual["result"].toMap()["appearance"].toString();QVERIFY(id.startsWith("custom-"));QVERIFY(pet->ui("selectAppearance",{{"id",id}})["ok"].toBool());QVERIFY(pet->state()["source"].toString().endsWith(".png"));QVERIFY(!pet->state()["animated"].toBool());
+    QVERIFY(pet->ui("removeAppearance",{{"id",id}})["ok"].toBool());QCOMPARE(pet->config()["appearance"].toString(),"yanami");QVERIFY(!pet->ui("removeAppearance",{{"id","yanami"}})["ok"].toBool());
+    auto zipPath=temp.filePath("unsafe.zip");mz_zip_archive zip{};QVERIFY(mz_zip_writer_init_file(&zip,zipPath.toUtf8().constData(),0));QVERIFY(mz_zip_writer_add_mem(&zip,"../escape.png","invalid",7,MZ_DEFAULT_COMPRESSION));QVERIFY(mz_zip_writer_finalize_archive(&zip));mz_zip_writer_end(&zip);
+    imported.clear();QVERIFY(pet->ui("importAppearance",{{"path",zipPath}})["ok"].toBool());QTRY_VERIFY_WITH_TIMEOUT(!imported.isEmpty(),10000);QVERIFY(!imported.last()[1].toMap()["ok"].toBool());QVERIFY(!QFileInfo::exists(temp.filePath("escape.png")));
   }
   void cleanup() {
     if (QTest::currentTestFailed() && window) {

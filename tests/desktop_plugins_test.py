@@ -1,5 +1,5 @@
 """Portable, offline SDK and worker tests; no PySide or desktop profile required."""
-import importlib.util,json,os,subprocess,sys,tempfile,unittest,zipfile
+import importlib.util,json,os,subprocess,sys,tempfile,unittest,zipfile,shutil,threading
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'plugin-runtime'))
@@ -7,6 +7,41 @@ from umeko_plugin_sdk import Context,PluginError
 from umeko_plugin_sdk.packages import validate,install
 
 class DesktopPluginSdkTests(unittest.TestCase):
+    def test_documents_summary_and_public_schema_are_required(self):
+        with tempfile.TemporaryDirectory() as name:
+            folder=Path(name)/'widget';shutil.copytree(ROOT/'umeko-plugins/file-tree',folder)
+            file=folder/'manifest.json';original=json.loads(file.read_text(encoding='utf-8'))
+            for patch in ({'summary':''},{'summary':'x'*21},{'agent':{}},{'agent':{'document':'../outside.md'}},
+                    {'agent':{'document':'AGENT.md','methods':{'bad':{'description':'bad','parameters':{'type':'object','pattern':'unsupported'}}}}}):
+                with self.subTest(patch=patch):
+                    file.write_text(json.dumps({**original,**patch}),encoding='utf-8')
+                    with self.assertRaises((PluginError,ValueError)):validate(folder)
+            file.write_text(json.dumps(original),encoding='utf-8');(folder/'AGENT.md').write_text('',encoding='utf-8')
+            with self.assertRaisesRegex(PluginError,'Markdown'):validate(folder)
+    def test_application_notifications_require_captured_target_and_thread_local_request(self):
+        with tempfile.TemporaryDirectory() as name:
+            folder=Path(name);first={'token':'first','id':'first-id','workspace':name};second={'token':'second','id':'second-id','workspace':name}
+            events=[];context=Context(folder,folder,{},first,['workspace.read','session.write'],emit=events.append,lifecycle='application')
+            captured=context.capture_session();context.session=second
+            with self.assertRaises(PluginError):context.notify_agent('implicit target')
+            with self.assertRaises(PluginError):context.resolve_workspace('.')
+            context.request_id='parent-request';context.request_session=first;seen=[]
+            def send():
+                seen.append(context.request_id);context.notify_agent('background result',session=captured)
+                seen.append(str(context.resolve_workspace('.',session=captured)))
+            thread=threading.Thread(target=send);thread.start();thread.join()
+            self.assertEqual(seen,['',name]);self.assertEqual(events[0]['arguments']['session'],captured);self.assertEqual(events[0]['arguments']['requestId'],'')
+    def test_builtin_icon_catalog_and_custom_asset_validation(self):
+        icons=json.loads((ROOT/'plugin-runtime/umeko_plugin_sdk/icons.json').read_text(encoding='utf-8'));self.assertEqual(len(icons),21)
+        for icon in icons:self.assertTrue((ROOT/'app/icons'/(icon['glyph']+'.svg')).is_file())
+        with tempfile.TemporaryDirectory() as name:
+            folder=Path(name)/'widget';shutil.copytree(ROOT/'umeko-plugins/file-tree',folder);file=folder/'manifest.json';manifest=json.loads(file.read_text(encoding='utf-8'))
+            manifest['icon']='does-not-exist';file.write_text(json.dumps(manifest),encoding='utf-8')
+            with self.assertRaises(PluginError):validate(folder)
+            (folder/'assets/custom.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M2 2h16v16H2z"/></svg>',encoding='utf-8')
+            manifest['icon']={'path':'assets/custom.svg'};file.write_text(json.dumps(manifest),encoding='utf-8');self.assertEqual(validate(folder)[0]['icon'],manifest['icon'])
+            manifest['icon']={'path':'../outside.svg'};file.write_text(json.dumps(manifest),encoding='utf-8')
+            with self.assertRaises(PluginError):validate(folder)
     def test_builtins_and_worker_are_portable_and_bounded(self):
         with tempfile.TemporaryDirectory() as name:
             folder=Path(name);(folder/'hello.py').write_text('print(1)')

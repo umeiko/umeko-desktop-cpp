@@ -1,3 +1,4 @@
+#include "terminal_view.hpp"
 #include "backend.hpp"
 #include "webview_support.hpp"
 #include "syntaxhighlighter.hpp"
@@ -84,6 +85,7 @@ int main(int argc, char **argv) {
     QTimer::singleShot(0, &installer, &UpdateInstaller::begin);
     return app.exec();
   }
+  qmlRegisterType<TerminalView>("Umeko.Terminal",1,0,"TerminalView");
   qmlRegisterType<SyntaxHighlighter>("Umeko.Text", 1, 0, "SyntaxHighlighter");
   Backend backend(root, parser.value("data-dir"));
   QQmlApplicationEngine engine;

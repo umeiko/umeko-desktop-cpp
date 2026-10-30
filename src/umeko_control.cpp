@@ -170,9 +170,15 @@ QVariantMap Backend::umekoRequest(QVariantMap request, QString callerKey, bool q
     auto args = request["arguments"].toMap();
     require(json(args).size() <= 2 * 1024 * 1024, "Desktop arguments exceed 2 MiB");
     const auto caller = records.value(callerKey);
+    if(operation.startsWith("widgets."))return finish(desktopExtensions->execute(operation,args,callerKey));
     if (operation == "help") {
       const auto directory = QFileInfo::exists(store.directory + "/agent-docs/README.md") ? store.directory + "/agent-docs" : release + "/umeko-docs";
-      return finish({{"docsRoot", directory}, {"entry", directory + "/README.md"}});
+      const QVariantMap topics{{"plugins",directory+"/plugins.md"},{"provider",directory+"/provider-plugins.md"},{"widget",directory+"/widget-plugins.md"}};
+      const auto topic=args["topic"].toString();
+      require(topic.isEmpty() || topics.contains(topic),"topic 请选择 plugins、provider 或 widget");
+      QVariantMap result{{"docsRoot",directory},{"entry",topic.isEmpty()?directory+"/README.md":topics[topic].toString()},{"topics",topics}};
+      if(topic=="widget"||topic=="plugins")result["activeWidgets"]=desktopExtensions->execute("widgets.list",{{"activeOnly",true}},callerKey)["widgets"];
+      return finish(result);
     }
     if (operation == "operations.list") {
       QVariantMap found;
@@ -253,6 +259,8 @@ QVariantMap Backend::umekoRequest(QVariantMap request, QString callerKey, bool q
       QVariantList rows;
       for (const auto &key : controlJobOrder) if (id.isEmpty() || id == key) {
         auto job = controlJobs[key].toMap();
+        auto target=caller?caller:view;
+        if(job.contains("widgetSession")&&job["widgetSession"]!=target->key&&!(job["widgetSessionId"]==target->id&&!target->id.isEmpty()&&job["widgetWorkspace"]==target->workspace))continue;
         QVariantMap row{{"id", key}};
         for (const auto &field : {"operation", "status", "result"}) if (job.contains(field)) row[field] = job[field];
         rows << row;

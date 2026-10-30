@@ -1,6 +1,6 @@
 # Build Umeko-Desktop
 
-Use CMake 3.24+, a C++20 compiler, Qt 6.10.2 (Core, Gui, Widgets, Quick, Quick Controls, Quick Dialogs, Network, Concurrent, Test, SVG and Image Formats), Node.js 22.19+, and Python 3.12+ for build helpers/tests. Standard releases include a standalone Python interpreter; minimal releases omit it.
+Use CMake 3.24+, a C++20 compiler, Qt 6.10.2 (Core, Gui, Widgets, Quick, Quick Controls, Quick Dialogs, Network, Concurrent, Test, SVG and Image Formats), Node.js 22.19+, and Python 3.12+ for build helpers/tests. Standard releases include a standalone Python interpreter. New minimal releases are no longer maintained.
 
 The [native build workflow](../.github/workflows/build.yml) is the reproducible recipe for Windows MSVC 2022, macOS ARM/Intel and Linux GCC. CMake fetches pinned QtKeychain and miniz sources. The Qt Image Formats module is required for the lossless WebP character assets.
 
@@ -37,12 +37,11 @@ Use an isolated profile for tests. Tests use synthetic local HTTP fixtures, an i
 cmake -S . -B build -DUMEKO_BUNDLE_PYTHON=ON
 python scripts/package.py
 
-# Minimal release: external Python
+# Local development without bundled Python
 cmake -S . -B build -DUMEKO_BUNDLE_PYTHON=OFF
-python scripts/package.py
 ```
 
-The packaging override `--bundle-python` / `--no-bundle-python` also works without recompiling. The CI manual **Bundle standalone Python** checkbox selects the edition; pushes build standard packages. Publish standard builds with tag `v0.3.4`, minimal builds with `v0.3.4-minimal`. The publisher rejects mismatched manifests. Release titles match their tags; minimal releases do not replace the latest standard release.
+Use `-DUMEKO_BUNDLE_PYTHON=OFF` only for local builds. Official CI and releases use `ON`; no new minimal tags are published. The packaging override `--bundle-python` / `--no-bundle-python` must agree with the intended local runtime.
 
 The pinned downloads are approximately 21 MiB (Windows), 24 MiB (macOS) and 33 MiB (Linux). Packaging verifies the installed app's runtime selection, imports native Python modules, runs pip and executes Provider SDK process tests with the bundled interpreter. Bundled Python is used when present; system Python is the automatic fallback. There are no global or per-account overrides. The app does not install plugin dependencies automatically. Use a custom environment or the package's `vendor/` directory for extra dependencies.
 
@@ -56,6 +55,8 @@ Native IME composition, desktop credential prompts, file dialogs and interactive
 
 Release packaging excludes the build SDK, development environment, PySide, duplicate source PNGs and JavaScript source maps. It retains the complete Pi coding package, CLI, extension loader, search binaries, runtime modules, public SDK/Skill archives and licenses. Standard releases also retain the complete stripped Python installation. Images are losslessly encoded as WebP; decoded RGBA equality is recorded in `app/icons/lossless-assets.json`.
 
-Do not strip Pi's CLI bundle or extension dependencies to reduce size: doing so would break the native terminal, package management or extension execution. Node.js 22.23.3 and npm are bundled in both editions, with official archive hashes pinned in `scripts/node-distributions.json`. GUI startup, the Pi tool loop and npm are verified with system Node removed from PATH. Earlier size comparisons refer to the minimal edition, without an external Python installation.
+Do not strip Pi's CLI bundle or extension dependencies to reduce size: doing so would break the native terminal, package management or extension execution. Node.js 22.23.3 and npm are bundled in official releases, with official archive hashes pinned in `scripts/node-distributions.json`. GUI startup, the Pi tool loop and npm are verified with system Node removed from PATH. Earlier size comparisons refer to the minimal edition, without an external Python installation.
 
 macOS packaging also needs `python -m pip install ds-store==1.3.1 mac-alias==2.2.3`. It creates and mounts a verified DMG alongside the updater ZIP; see [macOS disk images](macos-dmg.md).
+
+正式发行版使用 `UMEKO_BUNDLE_PYTHON=ON`。不再维护新的 minimal 发行版；关闭该选项仅用于本地开发。Widget 终端的 VT 解析依赖已随插件附带，原生宿主不需要 PySide。

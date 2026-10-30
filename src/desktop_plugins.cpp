@@ -1,6 +1,10 @@
 #include "desktop_plugins.hpp"
 #include "backend.hpp"
+#include "desktop_pet.hpp"
+#include "widget_channel.hpp"
+#include <QClipboard>
 #include <QDesktopServices>
+#include <QMimeData>
 
 static QByteArray frame(QVariantMap value) {
   return QJsonDocument::fromVariant(value).toJson(QJsonDocument::Compact) +
@@ -47,6 +51,12 @@ DesktopPlugins::DesktopPlugins(Backend *backend)
     if (!contextRefresh.isActive())
       contextRefresh.start();
   });
+  icons = U::readJson(b->root + "/plugin-runtime/umeko_plugin_sdk/icons.json",
+                      QVariantList{})
+              .toList();
+  applicationToken = "application:" + U::uuid();
+  channel = new WidgetChannel(this);
+  companion = new DesktopPet(this);
   synchronize();
 }
 DesktopPlugins::~DesktopPlugins() { close(); }
@@ -62,9 +72,16 @@ QString DesktopPlugins::packagePath(QString id) const {
              : root + "/packages/" + id + "/" + e["version"].toString();
 }
 bool DesktopPlugins::enabled(QString id) const {
-  return settings.value("enabled").toMap().value(id, true).toBool();
+  return entries.contains(id) &&
+         settings.value("enabled")
+             .toMap()
+             .value(id, !application(id) || (id == "desktop-pet" &&
+                                             entry(id)["builtin"].toBool()))
+             .toBool();
 }
 bool DesktopPlugins::sessionEnabled(QString id) const {
+  if (application(id))
+    return enabled(id);
   auto sessions = settings.value("sessions").toMap();
   return sessions.contains(storageKey)
              ? sessions[storageKey].toList().contains(id)
@@ -74,6 +91,12 @@ QVariantList DesktopPlugins::rows() const {
   QVariantList result;
   for (auto id : entries.keys()) {
     auto e = entry(id);
+    const auto icon = iconFor(id);
+    e["iconGlyph"] = icon["iconGlyph"];
+    e["iconSource"] = icon["iconSource"];
+    e["lifecycle"] = e.value("lifecycle", "session");
+    e["running"] = workers.contains(id) && workers.value(id)->ready;
+    e["starting"] = workers.contains(id) && !workers.value(id)->ready;
     e["enabled"] = enabled(id);
     e["sessionEnabled"] = sessionEnabled(id);
     e["hasPage"] = !e["page"].toString().isEmpty();
@@ -108,6 +131,9 @@ QVariantMap DesktopPlugins::page() const {
   auto w = workers.value(m_page);
   return {
       {"id", m_page},
+      {"iconGlyph", iconFor(m_page)["iconGlyph"]},
+      {"iconSource", iconFor(m_page)["iconSource"]},
+      {"selection", selection},
       {"title", e["name"]},
       {"url",
        QUrl::fromLocalFile(packagePath(m_page) + "/" + e["page"].toString())
@@ -124,6 +150,11 @@ QVariantMap DesktopPlugins::details(QString id) const {
   auto e = entry(id);
   if (e.isEmpty())
     return {};
+  e["settingsUrl"] = e["settingsPage"].toString().isEmpty()
+                         ? ""
+                         : QUrl::fromLocalFile(packagePath(id) + "/" +
+                                               e["settingsPage"].toString())
+                               .toString();
   e["readmeText"] = boundedText(packagePath(id) + "/" +
                                 e.value("readme", "README.md").toString());
   auto config = settings.value("config").toMap().value(
@@ -159,7 +190,8 @@ void DesktopPlugins::synchronize() {
       m_session.value("workspace").toString() != v->workspace) {
     closePage();
     for (auto id : workers.keys())
-      stop(id);
+      if (!application(id))
+        stop(id);
     storageKey = key;
     switched = true;
   } else if (storageKey != key) {
@@ -194,12 +226,21 @@ void DesktopPlugins::synchronize() {
   // Headless plugins run only for the current, explicitly enabled session.
   for (auto id : entries.keys())
     if (enabled(id) && sessionEnabled(id) &&
-        entry(id)["page"].toString().isEmpty())
+        (application(id) || entry(id)["page"].toString().isEmpty()))
       start(id);
 }
 void DesktopPlugins::setEnabled(QString id, bool value) {
   if (!entries.contains(id))
     return;
+  if (value && application(id)) {
+    int count = 0;
+    for (auto other : entries.keys())
+      count += other != id && application(other) && enabled(other);
+    if (count >= 8) {
+      emit b->toast("应用级后台服务最多同时启用 8 个");
+      return;
+    }
+  }
   auto options = settings.value("enabled").toMap();
   auto old = settings;
   options[id] = value;
@@ -208,20 +249,27 @@ void DesktopPlugins::setEnabled(QString id, bool value) {
     settings = old;
     return;
   }
+  if (value)
+    failedServices.remove(id);
   if (!value) {
     if (m_page == id)
       closePage();
     stop(id);
-  } else if (sessionEnabled(id) && entry(id)["page"].toString().isEmpty())
+  } else if (sessionEnabled(id) &&
+             (application(id) || entry(id)["page"].toString().isEmpty()))
     start(id);
   emit changed();
 }
 void DesktopPlugins::setSessionEnabled(QString id, bool value) {
+  if (application(id)) {
+    setEnabled(id, value);
+    return;
+  }
   if (!entries.contains(id))
     return;
   QVariantList selected;
   for (auto k : entries.keys())
-    if (sessionEnabled(k))
+    if (!application(k) && sessionEnabled(k))
       selected << k;
   selected.removeAll(id);
   if (value)
@@ -250,12 +298,25 @@ bool DesktopPlugins::openPage(QString id) {
   if (!enabled(id) || !sessionEnabled(id) ||
       entry(id)["page"].toString().isEmpty())
     return false;
+  if (m_page == id && m_error.isEmpty() && workers.contains(id))
+    return true;
+  failedServices.remove(id);
   closePage();
   m_page = id;
   m_error.clear();
+  auto recent = settings["recentPages"].toMap();
+  recent[U::cleanPath(m_session["workspace"].toString())] = id;
+  settings["recentPages"] = recent;
+  save();
   start(id);
+  send(id,
+       {{"id", U::uuid()},
+        {"operation", "event"},
+        {"arguments", QVariantMap{{"name", "page.visibility"},
+                                  {"data", QVariantMap{{"visible", true}}}}}});
   emit sessionChanged();
   emit pageChanged();
+  emit changed();
   emit requested();
   return true;
 }
@@ -265,17 +326,28 @@ void DesktopPlugins::closePage() {
   auto old = m_page;
   m_page.clear();
   m_error.clear();
-  stop(old);
+  selection.clear();
+  send(old,
+       {{"id", U::uuid()},
+        {"operation", "event"},
+        {"arguments", QVariantMap{{"name", "page.visibility"},
+                                  {"data", QVariantMap{{"visible", false}}}}}});
+  if (!application(old))
+    stop(old);
   emit sessionChanged();
   emit pageChanged();
   emit dismissed();
 }
 void DesktopPlugins::stop(QString id) {
+  channel->stopNotifications(id);
   auto w = workers.take(id);
   if (!w)
     return;
   for (auto request : w->pending)
     emit response(request, {{"ok", false}, {"error", "插件任务已取消"}});
+  if (id == "desktop-pet" && entry(id)["builtin"].toBool())
+    companion->stop();
+  emit changed();
   if (w->process) {
     auto p = w->process;
     disconnect(p, nullptr, this, nullptr);
@@ -309,11 +381,18 @@ void DesktopPlugins::stop(QString id) {
   }
 }
 void DesktopPlugins::start(QString id) {
-  if (workers.contains(id) || m_closed)
+  if (workers.contains(id) || m_closed || failedServices.contains(id))
     return;
   auto w = std::make_shared<Worker>();
-  w->token = m_session.value("token").toString();
+  w->token =
+      application(id) ? applicationToken : m_session.value("token").toString();
   workers[id] = w;
+  if (id == "desktop-pet" && entry(id)["builtin"].toBool()) {
+    w->ready = true;
+    companion->start();
+    emit changed();
+    return;
+  }
   auto p = new QProcess(this);
   w->process = p;
   U::hideConsole(p);
@@ -335,8 +414,10 @@ void DesktopPlugins::start(QString id) {
          QVariantMap{{"path", packagePath(id)},
                      {"config", config},
                      {"session", m_session},
-                     {"stateDir", root + "/state/" + id + "/" +
-                                      U::sha(storageKey.toUtf8())}}}};
+                     {"stateDir",
+                      root + "/state/" + id + "/" +
+                          (application(id) ? QString("application")
+                                           : U::sha(storageKey.toUtf8()))}}}};
     w->process->write(frame(payload));
   });
   auto failed = [this, id, w] {
@@ -345,10 +426,13 @@ void DesktopPlugins::start(QString id) {
     workers.remove(id);
     if (w->process)
       w->process->deleteLater();
-    m_error = "插件进程已停止，点击重试可重新打开";
+    if (application(id))
+      failedServices.insert(id);
+    m_error = "插件进程已停止，重新启用可重试";
     for (auto r : w->pending)
       emit response(r, {{"ok", false}, {"error", m_error}});
     emit pageChanged();
+    emit changed();
   };
   connect(p, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
           [failed](int, QProcess::ExitStatus) { failed(); });
@@ -358,6 +442,8 @@ void DesktopPlugins::start(QString id) {
            {"-B", b->root + "/plugin-runtime/worker.py"});
   QTimer::singleShot(20000, this, [this, id, w] {
     if (workers.value(id) == w && !w->ready) {
+      if (application(id))
+        failedServices.insert(id);
       m_error = "插件启动超时";
       stop(id);
       emit pageChanged();
@@ -366,7 +452,7 @@ void DesktopPlugins::start(QString id) {
 }
 void DesktopPlugins::send(QString id, QVariantMap request) {
   auto w = workers.value(id);
-  if (!w)
+  if (!w || !w->process)
     return;
   if (!w->ready) {
     if (request["operation"] == "session") {
@@ -381,22 +467,65 @@ void DesktopPlugins::send(QString id, QVariantMap request) {
   w->process->write(frame(request));
 }
 QString DesktopPlugins::call(QString method, QString raw) {
-  auto w = workers.value(m_page);
-  if (!w || w->pending.size() >= 8)
+  return callFor(m_page, method, raw);
+}
+QString DesktopPlugins::settingsCall(QString id, QString method, QString raw) {
+  return callFor(id, method, raw);
+}
+QString DesktopPlugins::callFor(QString id, QString method, QString raw,
+                                bool agent, int timeout, QVariantMap snapshot) {
+  if (!enabled(id) || !sessionEnabled(id) ||
+      (agent &&
+       !entry(id)["agent"].toMap()["methods"].toMap().contains(method)))
+    return {};
+  start(id);
+  auto w = workers.value(id);
+  if (!w || w->pending.size() >= 8 || raw.toUtf8().size() > 65536 ||
+      method.size() > 128)
     return {};
   QJsonParseError error;
   auto args = QJsonDocument::fromJson(raw.toUtf8(), &error);
-  if (error.error != QJsonParseError::NoError || !args.isObject() ||
-      raw.size() > 65536 || method.size() > 128)
+  if (error.error != QJsonParseError::NoError || !args.isObject())
     return {};
-  auto request = U::uuid(), id = m_page;
+  const auto request = U::uuid();
   w->pending.insert(request);
-  send(id, {{"id", request},
-            {"operation", "call"},
-            {"arguments", QVariantMap{{"method", method},
-                                      {"arguments", args.toVariant()}}}});
-  QTimer::singleShot(20000, this, [this, id, w, request] {
+  if (!w->process) {
+    QTimer::singleShot(0, this, [this, id, w, method, args, request] {
+      if (workers.value(id) != w)
+        return;
+      auto result = companion->ui(method, args.object().toVariantMap());
+      if (method == "importAppearance" && result["ok"].toBool()) {
+        const auto token = result["result"].toMap()["importId"].toString();
+        auto connection = std::make_shared<QMetaObject::Connection>();
+        *connection =
+            connect(companion, &DesktopPet::imported, this,
+                    [this, id, w, request, token,
+                     connection](QString done, QVariantMap result) {
+                      if (done != token)
+                        return;
+                      disconnect(*connection);
+                      if (workers.value(id) == w && w->pending.remove(request))
+                        emit response(request, result);
+                    });
+        return;
+      }
+      w->pending.remove(request);
+      emit response(request, result);
+    });
+  } else {
+    if (snapshot.isEmpty())
+      snapshot = m_session;
+    snapshot["language"] = b->language();
+    send(id, {{"id", request},
+              {"operation", agent ? "agentCall" : "call"},
+              {"arguments", QVariantMap{{"method", method},
+                                        {"arguments", args.toVariant()},
+                                        {"session", snapshot}}}});
+  }
+  QTimer::singleShot(timeout, this, [this, id, w, request] {
     if (workers.value(id) == w && w->pending.contains(request)) {
+      if (application(id))
+        failedServices.insert(id);
       m_error = "插件操作超时，已停止";
       stop(id);
       emit pageChanged();
@@ -409,6 +538,8 @@ void DesktopPlugins::receive(QString id, std::shared_ptr<Worker> w) {
     return;
   w->buffer += w->process->readAllStandardOutput();
   if (w->buffer.size() > 2 * 1024 * 1024) {
+    if (application(id))
+      failedServices.insert(id);
     m_error = "插件输出超过限制";
     stop(id);
     emit pageChanged();
@@ -420,13 +551,15 @@ void DesktopPlugins::receive(QString id, std::shared_ptr<Worker> w) {
     w->buffer.remove(0, offset + 1);
     auto value = QJsonDocument::fromJson(raw).toVariant().toMap();
     if (value["type"] == "event") {
-      if (w->token == m_session.value("token").toString())
+      if (application(id) || w->token == m_session.value("token").toString())
         hostEvent(id, value);
       continue;
     }
     auto request = value["id"].toString();
     if (request == "initialize") {
       if (!value["ok"].toBool()) {
+        if (application(id))
+          failedServices.insert(id);
         m_error = value["error"].toString();
         stop(id);
         emit pageChanged();
@@ -438,6 +571,7 @@ void DesktopPlugins::receive(QString id, std::shared_ptr<Worker> w) {
       for (auto item : queue)
         send(id, item.toMap());
       emit pageChanged();
+      emit changed();
     } else if (w->pending.remove(request))
       emit response(request, value);
   }
@@ -446,6 +580,113 @@ void DesktopPlugins::hostEvent(QString id, QVariantMap event) {
   auto kind = event["event"].toString();
   auto args = event["arguments"].toMap();
   auto perms = entry(id)["permissions"].toList();
+  if (kind == "agent.notify") {
+    if (perms.contains("session.write"))
+      channel->notify(id, args);
+    return;
+  }
+  const auto target = args["session"].toMap();
+  if (kind == "widget.event") {
+    if (args.contains("session") &&
+        (target["token"] != m_session["token"] ||
+         target["workspace"] != m_session["workspace"]))
+      return;
+    const auto topic = args["topic"].toString();
+    if (id == m_page && !topic.isEmpty() && topic.size() <= 80 &&
+        args["data"].typeId() == QMetaType::QVariantMap &&
+        frame(args["data"].toMap()).size() <= 65536)
+      emit this->event(topic, args["data"].toMap());
+    return;
+  }
+  if (application(id) && kind != "notification" &&
+      target["token"] != m_session["token"])
+    return;
+  if (kind == "page.open") {
+    if (perms.contains("session.write"))
+      openPage(id);
+    return;
+  }
+  if (kind == "session.draft") {
+    const auto text = args["text"].toString();
+    if (perms.contains("session.write") &&
+        target["token"] == m_session["token"] && !text.trimmed().isEmpty() &&
+        text.size() <= 16000) {
+      auto draft = b->view->draft;
+      if (!draft.isEmpty() && !draft.endsWith('\n'))
+        draft += '\n';
+      b->setDraft(draft + text);
+      emit b->editorText(b->view->draft);
+    }
+    return;
+  }
+  if (QStringList{"files.copy", "file.openWith", "file.reveal",
+                  "explorer.reveal"}
+          .contains(kind)) {
+    const auto base =
+        QFileInfo(m_session["workspace"].toString()).canonicalFilePath();
+    if (!perms.contains("workspace.read") || base.isEmpty())
+      return;
+    auto valid = [&](QString path) {
+      auto canonical = QFileInfo(path).canonicalFilePath();
+      auto rel = QDir(base).relativeFilePath(canonical);
+      return !canonical.isEmpty() && !QDir::isAbsolutePath(rel) &&
+             rel != ".." && !rel.startsWith("../");
+    };
+    if (kind == "files.copy") {
+      auto paths = args["paths"].toList();
+      if (paths.isEmpty() || paths.size() > 100 ||
+          (args["cut"].toBool() && !perms.contains("workspace.write")))
+        return;
+      QList<QUrl> urls;
+      for (auto path : paths) {
+        if (!valid(path.toString()))
+          return;
+        urls << QUrl::fromLocalFile(
+            QFileInfo(path.toString()).canonicalFilePath());
+      }
+      auto mime = new QMimeData;
+      mime->setUrls(urls);
+      const auto action = args["cut"].toBool() ? "cut" : "copy";
+      QByteArray gnome = QByteArray(action) + "\n";
+      for (auto url : urls)
+        gnome += url.toEncoded() + "\n";
+      mime->setData("x-special/gnome-copied-files", gnome);
+#ifdef Q_OS_WIN
+      QByteArray effect(4, '\0');
+      effect[0] = args["cut"].toBool() ? 2 : 1;
+      mime->setData(
+          "application/x-qt-windows-mime;value=\"Preferred DropEffect\"",
+          effect);
+#endif
+      QGuiApplication::clipboard()->setMimeData(mime);
+      return;
+    }
+    auto path = QFileInfo(args["path"].toString()).absoluteFilePath();
+    if (kind == "file.reveal" && !QFileInfo::exists(path))
+      path = QFileInfo(path).absolutePath();
+    if (!valid(path))
+      return;
+    if (kind == "file.reveal")
+      b->openChatboxPath(path, QFileInfo(path).isFile());
+    else if (kind == "explorer.reveal") {
+      if (openPage("file-tree")) {
+        selection = QDir(base).relativeFilePath(path);
+        emit pageChanged();
+      }
+    } else {
+#ifdef Q_OS_WIN
+      auto process = new QProcess(this);
+      U::hideConsole(process);
+      connect(process, &QProcess::finished, process, &QObject::deleteLater);
+      process->start("rundll32.exe", {"shell32.dll,OpenAs_RunDLL", path});
+#elif defined(Q_OS_MACOS)
+      QProcess::startDetached("open", {"-a", "Finder", path});
+#else
+      QProcess::startDetached("gio", {"open", path});
+#endif
+    }
+    return;
+  }
   if (kind == "notification") {
     emit b->toast(args["message"].toString().left(1000));
     return;
@@ -472,7 +713,8 @@ void DesktopPlugins::hostEvent(QString id, QVariantMap event) {
     if (base.isEmpty() || path.isEmpty() || !QFileInfo(path).isFile())
       return;
     const auto relative = QDir(base).relativeFilePath(path);
-    if (QDir::isAbsolutePath(relative) || relative == ".." || relative.startsWith("../"))
+    if (QDir::isAbsolutePath(relative) || relative == ".." ||
+        relative.startsWith("../"))
       return;
     if (kind == "session.attach")
       b->attachChatboxFile(path);
@@ -480,17 +722,18 @@ void DesktopPlugins::hostEvent(QString id, QVariantMap event) {
       emit b->documentRequested(path, QFileInfo(path).fileName(), "file");
   }
 }
-void DesktopPlugins::manage(QVariantMap request,
-                            std::function<void(QVariantMap)> done) {
+QString DesktopPlugins::manage(QVariantMap request,
+                               std::function<bool(QVariantMap)> done) {
   if (m_busy || m_closed)
-    return;
+    return {};
+  auto token = U::uuid();
   m_busy = true;
   m_status = "正在处理插件…";
   emit changed();
   U::run(
       this, b->providers->resolvePython(),
       {"-B", b->root + "/plugin-runtime/worker.py"}, frame(request),
-      [this, done](bool ok, QByteArray raw, QString) {
+      [this, done, token](bool ok, QByteArray raw, QString) {
         m_busy = false;
         auto result =
             QJsonDocument::fromJson(raw.trimmed()).toVariant().toMap();
@@ -499,87 +742,108 @@ void DesktopPlugins::manage(QVariantMap request,
                     {"error", "插件管理进程失败，请检查 Python 运行环境"}};
         m_status =
             result["ok"].toBool() ? "操作已完成" : result["error"].toString();
-        done(result);
+        if (m_closed)
+          return;
+        if (!done(result))
+          result = {{"ok", false}, {"error", m_status}};
         emit changed();
         emit b->toast(m_status);
+        emit managed(token, result);
       },
       30000);
+  return token;
 }
-void DesktopPlugins::importZip(QString url) {
+QString DesktopPlugins::importZip(QString url) {
   auto path = QUrl(url).toLocalFile();
-  if (path.isEmpty()) {
-    m_status = "请选择本机插件 ZIP 文件";
-    emit changed();
-    return;
-  }
+  if (path.isEmpty())
+    return {};
   QVariantList reserved;
   for (auto id : entries.keys())
     if (entry(id)["builtin"].toBool())
       reserved << id;
-  manage({{"id", "install"},
-          {"operation", "install"},
-          {"arguments",
-           QVariantMap{{"archive", path},
-                       {"destination", root + "/packages"},
-                       {"reserved", reserved},
-                       {"configs", settings.value("config").toMap()}}}},
-         [this](QVariantMap result) {
-           if (!result["ok"].toBool())
-             return;
-           auto value = result["result"].toMap();
-           auto m = value["manifest"].toMap();
-           m["builtin"] = false;
-           auto id = m["id"].toString();
-           auto previous = entries;
-           auto options = settings;
-           auto oldPath = packagePath(id);
-           if (m_page == id)
-             closePage();
-           stop(id);
-           entries[id] = m;
-           auto config = settings.value("config").toMap();
-           if (!config.contains(id))
-             config[id] = value["config"];
-           settings["config"] = config;
-           if (!save()) {
-             entries = previous;
-             settings = options;
-             return;
-           }
-           if (!oldPath.isEmpty() && oldPath != packagePath(id))
-             QDir(oldPath).removeRecursively();
-           m_status = "插件已导入，可在当前会话启用";
-         });
+  return manage({{"id", "install"},
+                 {"operation", "install"},
+                 {"arguments", QVariantMap{{"archive", path},
+                                           {"destination", root + "/packages"},
+                                           {"reserved", reserved},
+                                           {"configs", settings["config"]}}}},
+                [this](QVariantMap result) {
+                  if (!result["ok"].toBool())
+                    return true;
+                  auto value = result["result"].toMap(),
+                       m = value["manifest"].toMap();
+                  m["builtin"] = false;
+                  auto id = m["id"].toString();
+                  auto previous = entries, options = settings;
+                  auto oldPath = packagePath(id);
+                  if (m_page == id)
+                    closePage();
+                  stop(id);
+                  entries[id] = m;
+                  auto config = settings["config"].toMap();
+                  if (!config.contains(id))
+                    config[id] = value["config"];
+                  settings["config"] = config;
+                  if (application(id)) {
+                    auto flags = settings["enabled"].toMap();
+                    flags[id] = false;
+                    settings["enabled"] = flags;
+                  }
+                  if (!save()) {
+                    entries = previous;
+                    settings = options;
+                    return false;
+                  }
+                  if (!oldPath.isEmpty() && oldPath != packagePath(id))
+                    QDir(oldPath).removeRecursively();
+                  m_status = application(id)
+                                 ? "后台服务已导入，请启用以随应用运行"
+                                 : "插件已导入，可在当前会话启用";
+                  return true;
+                });
 }
-void DesktopPlugins::saveConfig(QString id, QString raw) {
-  if (!entries.contains(id) || raw.size() > 65536)
-    return;
+QString DesktopPlugins::saveConfig(QString id, QString raw) {
+  if (!entries.contains(id) || raw.toUtf8().size() > 65536)
+    return {};
   QJsonParseError error;
-  auto value = QJsonDocument::fromJson(raw.toUtf8(), &error);
-  if (error.error != QJsonParseError::NoError || !value.isObject()) {
+  auto doc = QJsonDocument::fromJson(raw.toUtf8(), &error);
+  if (error.error != QJsonParseError::NoError || !doc.isObject()) {
     m_status = "请输入有效的 JSON 配置对象";
     emit changed();
-    return;
+    return {};
   }
-  manage({{"id", "config"},
-          {"operation", "config"},
-          {"arguments", QVariantMap{{"path", packagePath(id)},
-                                    {"config", value.toVariant()}}}},
-         [this, id, value](QVariantMap result) {
-           if (!result["ok"].toBool())
-             return;
-           auto old = settings;
-           auto config = settings.value("config").toMap();
-           config[id] = value.toVariant();
-           settings["config"] = config;
-           if (!save()) {
-             settings = old;
-             return;
-           }
-           if (m_page == id)
-             closePage();
-           stop(id);
-         });
+  if (id == "desktop-pet" && entry(id)["builtin"].toBool()) {
+    auto token = U::uuid();
+    QTimer::singleShot(0, this, [this, token, doc] {
+      auto result = companion->ui("configure", doc.object().toVariantMap());
+      emit managed(token, result);
+    });
+    return token;
+  }
+  return manage({{"id", "config"},
+                 {"operation", "config"},
+                 {"arguments", QVariantMap{{"path", packagePath(id)},
+                                           {"config", doc.toVariant()}}}},
+                [this, id, doc](QVariantMap result) {
+                  if (!result["ok"].toBool())
+                    return true;
+                  auto old = settings;
+                  auto config = settings["config"].toMap();
+                  config[id] = doc.toVariant();
+                  settings["config"] = config;
+                  if (!save()) {
+                    settings = old;
+                    return false;
+                  }
+                  if (m_page == id)
+                    closePage();
+                  stop(id);
+                  if (application(id) && enabled(id)) {
+                    failedServices.remove(id);
+                    start(id);
+                  }
+                  return true;
+                });
 }
 bool DesktopPlugins::uninstall(QString id) {
   if (!entries.contains(id) || entry(id)["builtin"].toBool() || m_busy)
@@ -618,6 +882,7 @@ void DesktopPlugins::close() {
     return;
   m_closed = true;
   contextRefresh.stop();
+  companion->close();
   QList<QPointer<QProcess>> processes;
   for (auto worker : workers)
     processes << worker->process;
@@ -648,4 +913,41 @@ bool DesktopPlugins::exportSdk(QString url) {
   }
   emit b->toast("无法导出插件 SDK，请重新构建插件开发资源");
   return false;
+}
+
+bool DesktopPlugins::application(QString id) const {
+  return entry(id).value("lifecycle", "session") == "application";
+}
+QObject *DesktopPlugins::pet() const { return companion; }
+QVariantMap DesktopPlugins::iconFor(QString id) const {
+  const auto icon = entry(id).value("icon", "puzzle");
+  if (icon.typeId() == QMetaType::QString)
+    for (auto row : icons)
+      if (row.toMap()["id"] == icon)
+        return {{"iconGlyph", row.toMap()["glyph"]}, {"iconSource", ""}};
+  const auto folder = QFileInfo(packagePath(id)).canonicalFilePath(),
+             path = QFileInfo(packagePath(id) + "/" +
+                              icon.toMap()["path"].toString())
+                        .canonicalFilePath();
+  if (!icon.toMap().isEmpty() && !folder.isEmpty() &&
+      path.startsWith(folder + "/") && QFileInfo(path).isFile())
+    return {{"iconGlyph", "puzzle"},
+            {"iconSource", QUrl::fromLocalFile(path).toString()}};
+  return {{"iconGlyph", "puzzle"}, {"iconSource", ""}};
+}
+QVariantMap DesktopPlugins::recentPlugin() const {
+  auto pages = sessionPlugins();
+  auto id = settings["recentPages"]
+                .toMap()[U::cleanPath(m_session["workspace"].toString())];
+  for (auto p : pages)
+    if (p.toMap()["id"] == id)
+      return p.toMap();
+  return pages.isEmpty() ? QVariantMap{} : pages.first().toMap();
+}
+QVariantMap DesktopPlugins::execute(QString operation, QVariantMap args,
+                                    QString callerKey) {
+  return channel->execute(operation, args, callerKey);
+}
+void DesktopPlugins::observe(QString key, QVariantMap value) {
+  channel->observe(key, value);
 }

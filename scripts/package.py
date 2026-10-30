@@ -5,6 +5,7 @@ from pathlib import Path
 from bundle_python import install_python
 from bundle_node import install_node, node_binary
 from macos_dmg import create_dmg
+from terminal_smoke import verify_terminal_worker
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -71,7 +72,7 @@ def main():
         candidates=sorted((Path(installation)/'VC/Redist/MSVC').glob('*/x64/Microsoft.VC143.CRT'))
         if not candidates: raise RuntimeError('App-local MSVC redistributable was not found')
         for dll in candidates[-1].glob('*.dll'):copy(dll,prefix/dll.name)
-    for relative in ['runtime/gateway.mjs','runtime/transport.mjs','runtime/openai-responses.mjs','runtime/bridge.mjs','runtime/subagents.mjs','runtime/subagent-sdk.mjs','runtime/subagent-settings.mjs','runtime/input-queue.mjs','runtime/rpc-ui.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/chatbox.mjs','runtime/update-engine.mjs','runtime/network-retry.mjs','runtime/pi-commands.mjs','runtime/umeko-control.mjs','runtime/umeko-documents.mjs','runtime/umeko-operations.json','runtime/umeko-docs','runtime/webview-component.mjs','runtime/webview-component.json','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime','plugin-runtime','umeko-plugins']:
+    for relative in ['runtime/gateway.mjs','runtime/transport.mjs','runtime/openai-responses.mjs','runtime/bridge.mjs','runtime/subagents.mjs','runtime/subagent-sdk.mjs','runtime/subagent-settings.mjs','runtime/input-queue.mjs','runtime/widget-messages.mjs','runtime/rpc-ui.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/chatbox.mjs','runtime/update-engine.mjs','runtime/network-retry.mjs','runtime/pi-commands.mjs','runtime/umeko-control.mjs','runtime/umeko-documents.mjs','runtime/umeko-operations.json','runtime/umeko-docs','runtime/webview-component.mjs','runtime/webview-component.json','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime','plugin-runtime','umeko-plugins']:
         copy(ROOT/relative,resources/relative)
     copy(ROOT/'build/provider-resources',resources/'provider-resources')
     copy(ROOT/'build/desktop-plugin-resources',resources/'desktop-plugin-resources')
@@ -96,7 +97,7 @@ def main():
           'python':'bundled, CPython '+python_distribution['version'] if bundle_python else 'external, >=3.10',
           'pythonDistribution':python_distribution,
           'node':'bundled, '+node_distribution['version'],'nodeDistribution':node_distribution,
-          'parityBaseline':'736419ce6393d5220f67a3194ffa17fdec9a8fe0'}
+          'parityBaseline':'1beae9a892713b26bdcab90e647b8adcc855a117'}
     (resources/'build-info.json').write_text(json.dumps(info,indent=2)+'\n',encoding='utf-8')
     if sys.platform=='darwin':finalize_macos(prefix/'UmekoCpp.app')
     executable=prefix/'UmekoCpp.app/Contents/MacOS/UmekoCpp' if sys.platform=='darwin' else prefix/('UmekoCpp.exe' if os.name=='nt' else 'UmekoCpp')
@@ -144,6 +145,7 @@ def main():
         run(python,'-I','-B','-m','pip','--version')
         # Exercise real SDK login, vendor dependencies and inference in fresh processes.
         run(python,'-I','-B',ROOT/'tests/worker_test.py')
+        verify_terminal_worker([str(python),'-I','-B',str(resources/'plugin-runtime/worker.py')],resources,env,ROOT/'build')
     if sys.platform=='darwin':
         run('codesign','--verify','--deep','--strict',prefix/'UmekoCpp.app')
     output=ROOT/'release-assets';output.mkdir(exist_ok=True)

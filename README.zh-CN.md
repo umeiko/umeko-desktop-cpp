@@ -57,8 +57,20 @@ Umeko 是围绕项目组织聊天和任务的原生桌面应用。这个仓库�
 
 发布包包含 **CPython 3.12.15、Node.js 22.23.3 与 npm**，无需单独安装 Python 或 Node.js。模型账号需要自行配置。平台要求、构建步骤和打包说明见[构建文档](docs/BUILDING.md)。
 
-Agent 可以通过 `config_umeko` 管理应用的供应商、主题、设置、项目和会话，修改会实时刷新界面。`/help` 指向按主题组织的内置管理文档。
+Agent 可以通过 `umeko_desktop` 管理应用的供应商、主题、设置、项目和会话，修改会实时刷新界面。`/help` 指向按主题组织的内置管理文档。
 
 供应商 ZIP 与 Pi 扩展会执行本机代码，请使用可信来源。登录实现独立放在插件中，公开仓库不包含企业内网登录流程或私有地址。供应商配置与插件保留在用户目录中，升级应用无需重新导入。
 
 这个项目由 [umeiko](https://github.com/umeiko) 创建，基于 [Pi Coding Agent](https://github.com/earendil-works/pi) 与 Qt。角色素材为独立同人项目的一部分，与原作权利人无隶属关系。依赖及许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+
+## Widget 插件
+
+在「设置 → Agent → 插件管理」启用、导入 ZIP 或导出 SDK，聊天右下角可打开最近使用的插件。
+
+- **文件管理器**：双击文件附加到聊天，右键进行文件操作。
+- **版本管理**：修改列表、暂存、diff、提交记录与分支切换。
+- **终端**：ANSI 着色、上下分栏和聊天附加；Agent 操作的就是用户看见的同一个终端。
+- **桌宠**：原生动画服务，展示任务状态、支持点击互动和导入自定义形象。
+
+Widget 支持会话级或应用级生命周期，也可作为无界面后台服务。通过 `umeko_desktop` 查询各插件文档、公开方法和消息回执。参见 [Widget SDK](plugin-runtime/README.md) 与 [通信说明](runtime/umeko-docs/widget-plugins.md)。

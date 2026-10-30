@@ -263,7 +263,7 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   s->cancelled = false;
   s->phase =
       s->process
-          ? (action == "prompt" || action == "compact" ? "running" : "working")
+          ? (action == "prompt" || action == "widget-notify" || action == "compact" ? "running" : "working")
           : "loading";
   s->status = s->phase == "loading" ? "正在加载 Pi" : "正在生成";
   values["type"] = action;
@@ -507,12 +507,15 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
   if (closing)
     return;
   auto type = payload["type"].toString();
+  desktopExtensions->observe(s->key,payload);
+  if(type=="tool")s->petActivity="working";
+  else if(QStringList{"assistant_start","thinking_delta","done","error","exit"}.contains(type))s->petActivity.clear();
   if (type == "subagents" || type.startsWith("subagent_")) { children->handle(s, payload); return; }
   bool visible = s == view, transcript = false;
   if (type == "ready") {
     s->ready = true;
     s->phase =
-        s->action == "prompt" || s->action == "compact" ? "running" : "working";
+        s->action == "prompt" || s->action == "widget-notify" || s->action == "compact" ? "running" : "working";
     s->status = s->phase == "running" ? "正在生成" : "正在处理";
     sessionInfo(s, payload["session"].toMap());
   } else if (type == "session")

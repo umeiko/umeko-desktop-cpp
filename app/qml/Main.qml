@@ -14,6 +14,20 @@ ApplicationWindow {
     color: Theme.bg
     flags: Qt.Window | Qt.FramelessWindowHint
     property string page: "chat"
+    Loader {
+        id:petWindowLoader;objectName:"desktopPetWindowLoader"
+        active:backend.desktopPlugins.pet.visible
+        sourceComponent:Component { DesktopPetWindow { pet:backend.desktopPlugins.pet } }
+    }
+    Connections {
+        target:backend.desktopPlugins.pet
+        function onRestoreRequested() { window.showNormal();window.raise();window.requestActivate() }
+        function onSettingsRequested() {
+            window.showNormal();window.raise();window.requestActivate()
+            window.settingsTab=3;window.page="settings"
+            settingsPage.openPluginManagement("desktop-pet")
+        }
+    }
     readonly property bool mediaOverlayActive: imageViewer.visible || chatDrop.containsDrag
     property int settingsTab: 0
     property string notification: ""
@@ -106,7 +120,11 @@ ApplicationWindow {
         sidebarCollapseHintPending = false; sidebarToggle.stopCollapseHint()
         sidebarCollapsed = !sidebarCollapsed; saveSidebarLayout()
     }
-    function settings(tab) { settingsTab = tab === 2 ? 1 : tab === 4 ? 3 : tab; page = "settings" }
+    function settings(tab) {
+        settingsTab = tab === 2 ? 1 : tab === 4 || tab === 7 ? 3 : tab
+        page = "settings"
+        if (tab === 7) Qt.callLater(() => settingsPage.openPluginManagement())
+    }
     function startChat() { cancelSidebarSelection(); backend.newSession(); page = "chat"; composer.focusInput() }
     function startProjectChat(row) { cancelSidebarSelection(); backend.openProject(row.id); backend.newSession(); if (row.collapsed) backend.toggleProject(row.id); page = "chat"; composer.focusInput() }
     function focusChatInput() {
@@ -524,7 +542,7 @@ ApplicationWindow {
             Composer {
                 id: composer; objectName: "composer"
                 enabled: !chatCover.visible
-                x: chatWidth.composerLeft; anchors.bottom: parent.bottom; anchors.bottomMargin: 57 + (retryStatus.visible ? retryStatus.implicitHeight + 6 : 0)
+                x: chatWidth.composerLeft; anchors.bottom: parent.bottom; anchors.bottomMargin: Math.max(57, Math.max(footerActions.height, desktopPluginMenu.height) + Theme.control(10) + 13) + (retryStatus.visible ? retryStatus.implicitHeight + 6 : 0)
                 width: parent.width - chatWidth.composerLeft - chatWidth.composerRight
                 onOpenModels: modelPopup.toggle()
                 onChooseFiles: attachmentDialog.open()
@@ -538,8 +556,19 @@ ApplicationWindow {
             }
             Row { id: footerActions; x: composer.x + (composer.width - width) / 2; anchors.bottom: parent.bottom; anchors.bottomMargin: 13; spacing: 8
                 ActionButton { height: Theme.control(28); quiet: true; text: "Agent"; glyph: "sliders"; onClicked: window.settings(3) }
-                DesktopPluginMenu { id: desktopPluginMenu }
                 ActionButton { objectName: "forkSessionButton"; visible: backend.messages.length > 0; enabled: !backend.busy; height: Theme.control(28); quiet: true; text: I18n.t("分支"); glyph: "branch"; onClicked: backend.forkSession() }
+            }
+            DesktopPluginMenu {
+                id: desktopPluginMenu
+                readonly property bool docked: webPane.opened && chatPage.width - composer.x - composer.width < width + Theme.control(24)
+                readonly property bool docking: pluginDockMotion.moving
+                anchors.right: parent.right; anchors.bottom: parent.bottom
+                anchors.rightMargin: 12 + Math.max(0, pluginDockMotion.value.x); anchors.bottomMargin: 12; z: 45
+                onManageRequested: window.settings(7)
+            }
+            PidMotion {
+                id: pluginDockMotion
+                targetRect: Qt.rect(desktopPluginMenu.docked ? Math.max(0, chatPage.width - composer.x - composer.width - 12) : 0, 0, 1, 1)
             }
         }
 
@@ -588,6 +617,7 @@ ApplicationWindow {
         }
 
         SettingsPage {
+            id: settingsPage
             objectName: "settingsPage"
             anchors.top: header.bottom; anchors.bottom: parent.bottom; width: parent.width
             visible: window.page === "settings"

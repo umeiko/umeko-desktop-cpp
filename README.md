@@ -32,7 +32,7 @@ Umeko-Desktop brings the Python edition's chat, tools, provider plugins and play
 
 **Releases include CPython 3.12.15 for Provider plugins, plus Node.js 22.23.3 and npm for Pi.** No separate Python or Node.js installation is required. The C++ client runs the real upstream coding engine with its tools, extensions, Skills, MCP and native sessions, without PySide.
 
-The Agent manages the running desktop through **`config_umeko`**: providers, plugins, themes, settings, projects, chats and updates. Native controllers apply changes and refresh the UI; busy-task changes return queued jobs. `/help` returns the bundled [Umeko documentation directory](runtime/umeko-docs/README.md), with separate guides loaded on demand. Umeko's provider and theme configuration is distinct from upstream Pi's terminal settings.
+The Agent manages the running desktop through **`umeko_desktop`**: providers, plugins, themes, settings, projects, chats and updates. Native controllers apply changes and refresh the UI; busy-task changes return queued jobs. `/help` returns the bundled [Umeko documentation directory](runtime/umeko-docs/README.md), with separate guides loaded on demand. Umeko's provider and theme configuration is distinct from upstream Pi's terminal settings.
 
 <img src="docs/screenshots/chat-white-en.png" width="100%" alt="Actual C++ application in the pure white theme, with the English interface" />
 
@@ -84,6 +84,17 @@ Drag files anywhere in the chat to attach them and focus the input. Image previe
 
 <img src="docs/screenshots/providers.png" width="100%" alt="Provider settings and Python runtime selection" />
 
+## Widgets
+
+Open **Settings → Agent → Plugin management** to enable Widgets, import a ZIP or export the SDK. The chat launcher remembers your recent Widget for each workspace.
+
+- **File manager**: browse the workspace, double-click to attach a file, and manage files from the context menu.
+- **Version management**: changes, staging, diffs, history and branch selection.
+- **Terminal**: colored shared shells, vertical splits and chat attachment. The Agent operates the same terminal you see.
+- **Desktop pet**: a native animated companion with task states, interactions and importable appearances.
+
+Widgets may have a page or run as a headless service, with a session or application lifetime. Packages include a short introduction, full Agent documentation and explicit public methods. See the [Widget SDK](plugin-runtime/README.md) and [Agent communication guide](runtime/umeko-docs/widget-plugins.md).
+
 ## Provider packages
 
 Existing `umeko-provider-sdk` **API v1 ZIPs** can be imported unchanged. The core has no built-in enterprise login flow or private endpoints.
@@ -125,7 +136,7 @@ Qt Quick interface → C++ controller → native Pi session (Node.js)
                          API provider / Python plugin worker
 ```
 
-C++ owns state, sessions, credential access, package import and highlighting. Pi's upstream Node.js implementation owns the coding loop and tools. A small Node transport handles HTTP/SSE and the optional API proxy. A separate Python worker exists only for account plugins. This is a native desktop port, not a rewrite of Pi in C++.
+C++ owns state, sessions, credential access, package import and highlighting. Pi's upstream Node.js implementation owns the coding loop and tools. A small Node transport handles HTTP/SSE and the optional API proxy. Separate Python workers run Provider plugins and portable Widgets; terminal painting, the desktop pet and application state stay in native C++. This is a native desktop port, not a rewrite of Pi in C++.
 
 Build and test instructions: [BUILDING.md](docs/BUILDING.md). Porting baseline and verification boundaries: [PORTING.md](docs/PORTING.md). Release archives include provenance and SHA-256 files; Qt and npm dependency licenses remain alongside the application.
 
