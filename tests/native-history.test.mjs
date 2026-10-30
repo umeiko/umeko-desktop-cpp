@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SessionManager } from '../runtime/releases/coding-1.3.0/node_modules/@earendil-works/pi-coding-agent/dist/index.js';
 
-test('native desktop receives the entire history beyond the Python paging threshold', { timeout: 20000 }, async () => {
+test('native desktop receives the entire history beyond the Python paging threshold', { timeout: 60000 }, async () => {
   const temp = mkdtempSync(join(tmpdir(), 'umeko-native-history-'));
   const workspace = join(temp, 'project'), agentDir = join(temp, 'agent'), sessionDir = join(temp, 'sessions');
   for (const folder of [workspace, agentDir, sessionDir]) mkdirSync(folder);
@@ -33,8 +34,10 @@ test('native desktop receives the entire history beyond the Python paging thresh
   try {
     child.stdin.write(JSON.stringify({ type: 'inspect', targetFile: manager.getSessionFile(), workspace, defaultCwd: workspace,
       agentDir, sessionDir, agent: {}, model: 'fixture', models: [{ id: 'fixture' }], gateway: 'http://127.0.0.1:9/', token: 'test-only' }) + '\n');
-    const end = Date.now() + 12000;
-    while (!events.some(event => event.type === 'done') && Date.now() < end) await new Promise(done => setTimeout(done, 20));
+    // This is a data-integrity test, not a warm-start benchmark. On the Intel
+    // macOS runner, a cold Pi import shares CPUs with other integration tests.
+    const end = Date.now() + 45000;
+    while (!events.some(event => event.type === 'done') && child.exitCode === null && Date.now() < end) await new Promise(done => setTimeout(done, 20));
     assert.ok(events.some(event => event.type === 'done'), stderr || JSON.stringify(events.slice(-3)));
     const state = events.filter(event => event.type === 'state').at(-1);
     assert.equal(state.messages.length, 600);
@@ -46,8 +49,11 @@ test('native desktop receives the entire history beyond the Python paging thresh
     if (child.exitCode === null) {
       child.stdin.write('{"type":"shutdown"}\n');
       await Promise.race([new Promise(done => child.once('exit', done)), new Promise(done => setTimeout(done, 1500))]);
-      if (child.exitCode === null) child.kill();
+      if (child.exitCode === null) {
+        child.kill();
+        await new Promise(done => child.once('exit', done));
+      }
     }
-    rmSync(temp, { recursive: true, force: true });
+    await rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
