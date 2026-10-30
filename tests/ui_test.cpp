@@ -857,6 +857,13 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(), 10000);
     const QString id = "pi-management-example";
     QVERIFY2(manager->entries.contains(id), qPrintable(manager->status()));
+    const auto removeFixture = qScopeGuard([&] {
+      if (manager->entries.contains(id)) {
+        manager->closePage();
+        manager->setEnabled(id, false);
+        manager->uninstall(id);
+      }
+    });
     manager->setEnabled(id, true);
     QVERIFY(manager->openPage(id));
     QTRY_VERIFY_WITH_TIMEOUT(manager->workers.contains(id) && manager->workers[id]->ready, 10000);
@@ -924,7 +931,7 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(!backend->management->busy(), 20000);
     QString extension;
     for (const auto &item : backend->management->extensions())
-      if (item.toMap()["path"] == package + "/extensions/example.ts") extension = item.toMap()["id"].toString();
+      if (QFileInfo(item.toMap()["path"].toString()) == QFileInfo(package + "/extensions/example.ts")) extension = item.toMap()["id"].toString();
     QVERIFY2(!extension.isEmpty(), qPrintable(backend->management->status() + "\n" + QString::fromUtf8(QJsonDocument::fromVariant(backend->management->extensions()).toJson())));
     token = request("pi.remove", {{"id", extension}});
     QTRY_VERIFY(host->pendingApproval().contains("id"));
@@ -3734,7 +3741,11 @@ def create_provider(context): return Interactive(context)
     // The full suite leaves many projects in the virtualized list. Locate the
     // owned fixture through the same project search available to the user.
     find("agentBusSearch")->setProperty("text","总线验收项目");QTRY_COMPARE(find("agentBusProjectTree")->property("count").toInt(),2);
-    auto folder="agentBusProject_"+workspace;
+    auto projectKey=QDir::fromNativeSeparators(workspace);
+#ifdef Q_OS_WIN
+    projectKey=projectKey.toLower();
+#endif
+    auto folder="agentBusProject_"+projectKey;
     auto chat="agentBusConversation_"+g->identity(backend->view);auto toggle="agentBusCheckbox_"+g->identity(backend->view)+"_"+id;
     QTRY_VERIFY(find(folder));QTRY_VERIFY(find(chat));click(chat);QTRY_VERIFY(find(toggle));QVERIFY(find(toggle)->property("checked").toBool());
     window->grabWindow().save(root+"/build/global-agents-ui/native-bus-connections.png");click("agentBusBackButton");
@@ -3742,7 +3753,7 @@ def create_provider(context): return Interactive(context)
     auto tree=find("agentBusProjectTree");
     auto treeModel=qobject_cast<QAbstractItemModel*>(tree->property("model").value<QObject*>());QVERIFY(treeModel);
     auto role=treeModel->roleNames().key("rowData",-1);QVERIFY(role>=0);int projectIndex=-1;
-    for(int i=0;i<treeModel->rowCount();++i){auto value=treeModel->data(treeModel->index(i,0),role);auto row=value.metaType().id()==qMetaTypeId<QJSValue>()?value.value<QJSValue>().toVariant().toMap():value.toMap();if(row["key"]==workspace){projectIndex=i;break;}}
+    for(int i=0;i<treeModel->rowCount();++i){auto value=treeModel->data(treeModel->index(i,0),role);auto row=value.metaType().id()==qMetaTypeId<QJSValue>()?value.value<QJSValue>().toVariant().toMap():value.toMap();if(row["key"]==projectKey){projectIndex=i;break;}}
     QVERIFY(projectIndex>=0);QVERIFY(QMetaObject::invokeMethod(tree,"forceLayout"));
     QVERIFY(QMetaObject::invokeMethod(tree,"positionViewAtIndex",Q_ARG(int,projectIndex),Q_ARG(int,0)));QTest::qWait(200);
     QTRY_VERIFY(find(folder));
