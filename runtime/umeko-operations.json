@@ -796,6 +796,8 @@
         ]
       ]
     },
+    "extensions.details": {"target":"management","method":"loadExtensionDetails","async":true,"args":[["id","string"]]},
+    "extensions.activation": {"target":"management","method":"setExtensionMode","idle":"view","async":true,"args":[["id","string"],["mode","string"]]},
     "extensions.scan": {
       "target": "management",
       "method": "scan",
@@ -825,9 +827,32 @@
         ]
       ]
     },
+    "extensions.remove": {
+      "target": "management",
+      "method": "uninstallPackage",
+      "idle": "all",
+      "async": true,
+      "args": [
+        [
+          "id",
+          "string"
+        ]
+      ]
+    },
+    "extensions.checkUpdate": {
+      "target": "management",
+      "method": "checkExtensionUpdate",
+      "async": true,
+      "args": [
+        [
+          "id",
+          "string"
+        ]
+      ]
+    },
     "extensions.install": {
       "target": "management",
-      "method": "installExtension",
+      "method": "installPackage",
       "idle": "all",
       "async": true,
       "args": [

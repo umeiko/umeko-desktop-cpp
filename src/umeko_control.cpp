@@ -162,9 +162,18 @@ void Backend::endControlWork(QString token, QVariantMap result) {
 }
 
 QVariantMap Backend::umekoRequest(QVariantMap request, QString callerKey, bool queue, QString jobId) {
+  return umekoRequestImpl(request, callerKey, queue, jobId, false);
+}
+
+QVariantMap Backend::confirmedWidgetInstall(QVariantMap arguments, QString callerKey) {
+  return umekoRequestImpl({{"operation", "extensions.install"}, {"arguments", arguments}}, callerKey, false, {}, true);
+}
+
+QVariantMap Backend::umekoRequestImpl(QVariantMap request, QString callerKey, bool queue, QString jobId, bool widgetInstall) {
   const auto operation = request["operation"].toString();
   auto finish = [&operation](QVariantMap result) { if (!result.contains("ok")) result["ok"] = true; result["operation"] = operation; return result; };
   try {
+    require(operation != "extensions.install" || widgetInstall, "Agent package installation must use run_pi_command and its native installation permission; confirmed Widget installs use the private host entry");
     for (auto it = request.cbegin(); it != request.cend(); ++it) require(it.key() == "operation" || it.key() == "arguments", "Expected operation and arguments");
     require(request.contains("operation"), "Expected operation and arguments");
     require(!request.contains("arguments") || request["arguments"].metaType().id() == QMetaType::QVariantMap, "arguments must be an object");
@@ -340,6 +349,7 @@ QVariantMap Backend::umekoRequest(QVariantMap request, QString callerKey, bool q
       for (auto path : values[0].toList()) require(path.metaType().id() == QMetaType::QString && QDir(U::cleanPath(path.toString())).exists(), "paths must contain existing directories");
     }
     if (operation == "workspace.set") require(QDir(U::cleanPath(args["path"].toString())).exists(), "Workspace directory does not exist");
+    if (operation == "extensions.activation") require(QStringList{"global","session","disabled"}.contains(args["mode"].toString()), "Invalid extension activation mode");
     if (operation == "agent.save") {
       const auto patch = values[0].toMap();
       const QSet<QString> allowed{"maxTokens", "instructions", "autoCompaction", "agentDir", "skillPaths", "extensionPaths"};

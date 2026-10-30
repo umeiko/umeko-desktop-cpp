@@ -1,4 +1,5 @@
 #include "backend.hpp"
+#include "update_proxy.hpp"
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
@@ -356,6 +357,7 @@ void PiManagement::testNpmConfig() {
 }
 
 PiManagement::PiManagement(Backend *backend) : QObject(backend), b(backend) {
+  connect(b,&Backend::viewChanged,this,&PiManagement::changed);
   auto base = QDir(b->store.directory + "/pi-backups");
   auto entries = base.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
   if (!entries.isEmpty())
@@ -365,6 +367,10 @@ void PiManagement::resource(QVariantMap action, bool reload) {
   if (m_busy || b->kernelUpdating)
     return;
   const auto work = b->beginControlWork();
+  const auto detailId = action["action"] == "details" ? action["id"].toString() : QString();
+  auto target = action["action"] == "enable-global" ? b->view : std::shared_ptr<Session>();
+  const auto targetPath = action.take("targetPath").toString();
+  if(!detailId.isEmpty()) m_extensionDetails={{"id",detailId},{"busy",true}};
   const auto checkId = action["action"] == "check-update" ? action["id"].toString() : QString();
   m_busy = true;
   m_status = checkId.isEmpty() ? "正在读取 Pi 扩展…" : "正在检查扩展更新…";
@@ -381,15 +387,26 @@ void PiManagement::resource(QVariantMap action, bool reload) {
   U::run(
       this, U::node(), {b->release + "/resources.mjs"},
       QJsonDocument::fromVariant(action).toJson(QJsonDocument::Compact),
-      [this, reload, work, checkId, context](bool ok, QByteArray raw, QString error) {
+      [this, reload, work, checkId, detailId, target, targetPath, context](bool ok, QByteArray raw, QString error) {
         m_busy = false;
         auto result = QJsonDocument::fromJson(raw).object();
         const auto cwd = b->view->workspace.isEmpty() ? b->store.directory + "/workspace" : b->view->workspace;
         const auto current = QJsonDocument::fromVariant(QVariantList{b->release,cwd,b->store.data["agent"]}).toJson(QJsonDocument::Compact);
+        if(target && ok && result["ok"].toBool()) {
+          target->extensionModes.remove(targetPath);
+          saveModes(target);
+          b->invalidate();
+        }
         if (context != current) {
-          m_extensions.clear(); m_extensionUpdate.clear(); emit changed();
+          m_extensions.clear(); m_extensionUpdate.clear(); m_extensionDetails.clear(); emit changed();
           b->endControlWork(work,{{"ok",false},{"error","Pi 配置已变更，请重新检查"}});
           scan(); return;
+        }
+        if (!detailId.isEmpty()) {
+          m_extensionDetails = ok && result["ok"].toBool() ? result["details"].toObject().toVariantMap() : QVariantMap{{"id",detailId},{"error",result["error"].toString("无法读取扩展说明")}};
+          m_status=m_extensionDetails["error"].toString();
+          emit changed();
+          b->endControlWork(work, {{"ok",ok && result["ok"].toBool()}}); return;
         }
         if (!checkId.isEmpty()) {
           m_extensionUpdate = ok && result["ok"].toBool() ? result["update"].toObject().toVariantMap()
@@ -400,9 +417,10 @@ void PiManagement::resource(QVariantMap action, bool reload) {
           return;
         }
         if (ok && result["ok"].toBool()) {
+          m_resourceContext = context;
           m_extensions = result["extensions"].toArray().toVariantList();
           m_status = QString("已发现 %1 个扩展").arg(m_extensions.size());
-          if (reload)
+          if (reload && !target)
             b->invalidate();
         } else
           m_status = result["error"].toString(
@@ -417,10 +435,35 @@ void PiManagement::resource(QVariantMap action, bool reload) {
       45000, cwd, b->store.data["agent"].toMap());
 }
 void PiManagement::scan() { resource({{"action", "scan"}}); }
+bool PiManagement::extensionsCurrent() const {
+  const auto cwd = b->view->workspace.isEmpty() ? b->store.directory + "/workspace" : b->view->workspace;
+  return !m_resourceContext.isEmpty() && m_resourceContext ==
+      QJsonDocument::fromVariant(QVariantList{b->release, cwd, b->store.data["agent"]}).toJson(QJsonDocument::Compact);
+}
 void PiManagement::checkExtensionUpdate(QString id) { resource({{"action","check-update"},{"id",id}}); }
 void PiManagement::refresh() { resource({{"action", "scan"}}, true); }
 void PiManagement::setExtensionEnabled(QString id, bool enabled) {
   resource({{"action", "toggle"}, {"id", id}, {"enabled", enabled}}, true);
+}
+QVariantMap PiManagement::extensionModes() const { return b->view->extensionModes; }
+void PiManagement::loadExtensionDetails(QString id) { resource({{"action","details"},{"id",id}}); }
+void PiManagement::saveModes(std::shared_ptr<Session> session) {
+  if(!session->id.isEmpty()) { b->setMetadata(session->id,{{"extensionModes",session->extensionModes}}); b->store.save(); }
+  session->stale=true;
+  if(!session->busy() && !session->subagentsActive) b->retire(session);
+  emit changed(); emit b->chatChanged();
+}
+void PiManagement::setExtensionMode(QString id, QString mode) {
+  if(m_busy || b->kernelBusy() || b->store.data["agent"].toMap()["safeMode"].toBool() || !QStringList{"global","session","disabled"}.contains(mode)) return;
+  if(!extensionsCurrent()) { emit b->toast("请刷新当前对话的插件列表"); return; }
+  for(const auto &value:m_extensions) {
+    const auto row=value.toMap(); if(row["id"]!=id) continue;
+    if(row["info"].toMap()["required"].toBool()) { emit b->toast("Umeko 基础能力固定启用，不能修改启用范围"); return; }
+    const auto path=row["path"].toString();
+    if(mode=="global") resource({{"action","enable-global"},{"id",id},{"targetPath",path}},true);
+    else { b->view->extensionModes[path]=mode; saveModes(b->view); }
+    return;
+  }
 }
 void PiManagement::openCatalog() {
   QDesktopServices::openUrl(QUrl("https://pi.dev/packages"));
@@ -463,13 +506,107 @@ void PiManagement::installExtension(QString text, bool local) {
   auto source = tokens[0];
   if (source.startsWith('\'') && source.endsWith('\''))
     source = source.mid(1, source.size() - 2);
+  installPackage(source, local);
+}
+void PiManagement::installPackage(QString source, bool local) {
+  if (m_busy || b->kernelUpdating) return;
+  if (source.trimmed().isEmpty() || source.size() > 4096 || source.startsWith('-') ||
+      source.contains(QRegularExpression("[\\r\\n\\x00]"))) {
+    m_installState = "failed";
+    m_installMessage = "请提供一个有效的扩展来源";
+    emit changed();
+    return;
+  }
+  resilientInstall(source, local);
+}
+void PiManagement::cancelInstall() {
+  if(!installCancellable()) return;
+  m_installCancelled=true;
+  m_installMessage="正在取消安装…";
+  if(m_installProcess && m_installProcess->state()==QProcess::Running) m_installProcess->write("{\"cancel\":true}\n");
+  emit changed();
+}
+void PiManagement::resilientInstall(QString source, bool local) {
+  auto cwd=b->view->workspace.isEmpty() ? b->store.directory+"/workspace" : b->view->workspace;
+  QDir().mkpath(cwd);
+  const auto agent=b->store.data["agent"].toMap();
+  const auto work=b->beginControlWork();
+  m_busy=true;m_installActive=true;m_installCancelled=false;
+  m_installState="installing";m_installMessage="正在读取系统代理并准备安装…";emit changed();
+  auto process=new QProcess(this);m_installProcess=process;U::hideConsole(process);
+  auto environment=U::environment(agent);environment.remove("NODE_TLS_REJECT_UNAUTHORIZED");
+  process->setProcessEnvironment(environment);process->setWorkingDirectory(cwd);
+  auto buffer=std::make_shared<QByteArray>();auto result=std::make_shared<QVariantMap>();auto settled=std::make_shared<bool>(false);
+  const auto finish=[this,process,result,settled,work](bool exited) {
+    if (*settled) return;
+    *settled=true;
+    m_installProcess=nullptr;m_installActive=false;m_busy=false;
+    const bool ok=exited && result->value("ok").toBool();
+    m_installState=ok ? "succeeded" : m_installCancelled ? "cancelled" : "failed";
+    m_installMessage=ok ? "安装成功，已应用到 Pi 原生配置" : m_installCancelled ? "安装已取消" : result->value("error","Pi 安装引擎退出，请重新尝试").toString();
+    emit changed();
+    if(ok){b->invalidate();scan();}
+    b->endControlWork(work,ok ? QVariantMap{{"ok",true},{"value",m_installMessage}} : QVariantMap{{"ok",false},{"error",m_installMessage}});
+    process->deleteLater();
+  };
+  const auto read=[this,process,buffer,result] {
+    buffer->append(process->readAllStandardOutput());
+    while(buffer->contains('\n')) {
+      const auto end=buffer->indexOf('\n');const auto line=buffer->left(end);buffer->remove(0,end+1);
+      if(line.size()>65536)continue;
+      const auto message=QJsonDocument::fromJson(line).object();
+      if(message["type"]=="progress" && !m_installCancelled) {m_installMessage=message["message"].toString().left(800);emit changed();}
+      else if(message["type"]=="result")*result=message.toVariantMap();
+    }
+    if(buffer->size()>65536)buffer->clear();
+  };
+  connect(process,&QProcess::readyReadStandardOutput,process,read);
+  connect(process,&QProcess::readyReadStandardError,process,[process]{process->readAllStandardError();});
+  connect(process,&QProcess::finished,this,[finish,read](int code,QProcess::ExitStatus status){read();finish(code==0 && status==QProcess::NormalExit);});
+  connect(process,&QProcess::errorOccurred,this,[finish](QProcess::ProcessError error){if(error==QProcess::FailedToStart)finish(false);});
+  QVariantMap input{{"release",b->release},{"cwd",cwd},{"agentDir",b->agentDir()},{"source",source},{"local",local},{"caFile",agent.value("npmCafile","")}};
+  const QUrl url(source.startsWith("https://") ? source : agent.value("npmRegistry","https://registry.npmjs.org").toString().isEmpty() ? "https://registry.npmjs.org" : agent["npmRegistry"].toString());
+  auto watcher=new QFutureWatcher<QVariantMap>(this);
+  connect(watcher,&QFutureWatcher<QVariantMap>::finished,this,[this,watcher,process,input,finish]() mutable {
+    auto value=watcher->result();watcher->deleteLater();
+    if(m_installCancelled){finish(false);return;}
+    connect(process,&QProcess::started,process,[process,value]{process->write(QJsonDocument::fromVariant(value).toJson(QJsonDocument::Compact)+'\n');});
+    process->start(U::node(),{b->root+"/runtime/package-install.mjs"});
+  });
+  watcher->setFuture(QtConcurrent::run([input,url]() mutable {input["proxy"]=updateProxy(url);return input;}));
+}
+void PiManagement::uninstallPackage(QString id) {
+  if (m_busy || b->kernelUpdating) return;
+  if (!extensionsCurrent()) {
+    m_status = "请先刷新当前工作区的扩展列表，再卸载扩展包";
+    emit changed();
+    emit b->toast(m_status);
+    return;
+  }
+  QVariantMap selected;
+  for (const auto &value : m_extensions)
+    if (value.toMap()["id"] == id) selected = value.toMap();
+  auto source = selected["source"].toString();
+  if (source.isEmpty() || source == "builtin" || source == "local" ||
+      b->store.data["agent"].toMap()["safeMode"].toBool()) {
+    emit b->toast("不能卸载此扩展；请刷新列表并退出恢复模式"); return;
+  }
+  const bool local = selected["scope"] == "project";
+  if (!QDir::isAbsolutePath(source) &&
+      !source.contains(QRegularExpression("^(npm:|git:|https?:|ssh:|git@)"))) {
+    const auto base = local ? b->view->workspace + "/.pi" : b->agentDir();
+    source = QDir::cleanPath(QDir(base).absoluteFilePath(source));
+  }
+  packageOperation(source, local, "remove");
+}
+void PiManagement::packageOperation(QString source, bool local, QString operation) {
   auto cwd = b->view->workspace.isEmpty() ? b->store.directory + "/workspace"
                                           : b->view->workspace;
   QDir().mkpath(cwd);
   const auto work = b->beginControlWork();
   m_busy = true;
   m_installState = "installing";
-  m_installMessage = "正在通过内嵌 Pi 安装扩展…";
+  m_installMessage = operation == "remove" ? "正在通过内嵌 Pi 卸载扩展包…" : "正在通过内嵌 Pi 安装扩展…";
   emit changed();
   auto p = new QProcess(this);
   U::hideConsole(p);
@@ -484,19 +621,19 @@ void PiManagement::installExtension(QString text, bool local) {
   p->setWorkingDirectory(cwd);
   QStringList args{
       b->release + "/node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
-      "install", source, local ? "--approve" : "--no-approve"};
+      operation, source, local ? "--approve" : "--no-approve"};
   if (local)
     args << "--local";
   auto settled = std::make_shared<bool>(false);
-  auto finish = [this, p, timer, settled, work](bool ok) {
+  auto finish = [this, p, timer, settled, work, operation](bool ok) {
     if (*settled)
       return;
     *settled = true;
     timer->stop();
     m_busy = false;
     m_installState = ok ? "succeeded" : "failed";
-    m_installMessage = ok ? "安装成功，已应用到 Pi 原生配置"
-                          : "安装失败，请检查扩展来源、依赖和网络";
+    m_installMessage = ok ? (operation == "remove" ? "卸载成功，已应用到 Pi 原生配置" : "安装成功，已应用到 Pi 原生配置")
+                          : (operation == "remove" ? "卸载失败，请检查扩展来源和配置" : "安装失败，请检查扩展来源、依赖和网络");
     p->readAllStandardError();
     p->readAllStandardOutput();
     emit changed();

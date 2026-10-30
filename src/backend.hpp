@@ -10,6 +10,7 @@
 #include <optional>
 
 class Backend;
+struct Session;
 class Providers : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantList rows READ rows NOTIFY changed)
@@ -61,24 +62,35 @@ class PiManagement : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
   Q_PROPERTY(QVariantList extensions READ extensions NOTIFY changed)
+  Q_PROPERTY(bool extensionsCurrent READ extensionsCurrent NOTIFY changed)
   Q_PROPERTY(QString status READ status NOTIFY changed)
   Q_PROPERTY(QString backupPath READ backupPath NOTIFY changed)
+  Q_PROPERTY(bool installCancellable READ installCancellable NOTIFY changed)
   Q_PROPERTY(QString installState READ installState NOTIFY changed)
   Q_PROPERTY(QString installMessage READ installMessage NOTIFY changed)
   Q_PROPERTY(QVariantMap npmConfig READ npmConfig NOTIFY changed)
   Q_PROPERTY(QString npmStatus READ npmStatus NOTIFY changed)
   Q_PROPERTY(QVariantMap extensionUpdate READ extensionUpdate NOTIFY changed)
+  Q_PROPERTY(QVariantMap extensionDetails READ extensionDetails NOTIFY changed)
+  Q_PROPERTY(QVariantMap extensionModes READ extensionModes NOTIFY changed)
 public:
   explicit PiManagement(Backend *backend);
   bool busy() const { return m_busy; }
   QVariantList extensions() const { return m_extensions; }
+  bool extensionsCurrent() const;
   QString status() const { return m_status; }
   QString backupPath() const { return m_backup; }
+  bool installCancellable() const { return m_installActive && !m_installCancelled; }
+  Q_INVOKABLE void cancelInstall();
   QString installState() const { return m_installState; }
   QString installMessage() const { return m_installMessage; }
   QVariantMap npmConfig() const;
   QString npmStatus() const { return m_npmStatus; }
   QVariantMap extensionUpdate() const { return m_extensionUpdate; }
+  QVariantMap extensionDetails() const { return m_extensionDetails; }
+  QVariantMap extensionModes() const;
+  Q_INVOKABLE void loadExtensionDetails(QString id);
+  Q_INVOKABLE void setExtensionMode(QString id, QString mode);
   Q_INVOKABLE void checkExtensionUpdate(QString id);
   Q_INVOKABLE bool saveNpmConfig(QString raw);
   Q_INVOKABLE void testNpmConfig();
@@ -88,6 +100,8 @@ public:
   Q_INVOKABLE void openCatalog();
   Q_INVOKABLE void resetInstall();
   Q_INVOKABLE void installExtension(QString command, bool local);
+  Q_INVOKABLE void installPackage(QString source, bool local);
+  Q_INVOKABLE void uninstallPackage(QString id);
   Q_INVOKABLE void addMcp(QString text, bool local);
   Q_INVOKABLE void openTerminal();
   Q_INVOKABLE void setRecoveryMode(bool enabled);
@@ -99,9 +113,15 @@ private:
   Backend *b;
   bool m_busy = false;
   QVariantList m_extensions;
-  QVariantMap m_extensionUpdate;
+  QVariantMap m_extensionUpdate, m_extensionDetails;
+  void saveModes(std::shared_ptr<Session> session);
+  QByteArray m_resourceContext;
   QString m_status, m_backup, m_installState = "idle", m_installMessage;
   void resource(QVariantMap action, bool invalidate = false);
+  void packageOperation(QString source, bool local, QString operation);
+  void resilientInstall(QString source, bool local);
+  QPointer<QProcess> m_installProcess;
+  bool m_installActive = false, m_installCancelled = false;
 signals:
   void changed();
 };
@@ -171,6 +191,7 @@ struct Session {
   QVariantList messages, attachments, queue, tree;
   QVariantList subagents;
   bool subagentsActive = false;
+  QVariantMap extensionModes;
   QString reasoningEffort = "off";
   QVariantMap resources{
       {"tools", QVariantList{}},       {"allTools", QVariantList{}},
@@ -472,6 +493,9 @@ private:
   friend class SessionPreview;
   friend class Subagents;
   friend class DesktopPlugins;
+  friend class WidgetHost;
+  QVariantMap confirmedWidgetInstall(QVariantMap arguments, QString callerKey);
+  QVariantMap umekoRequestImpl(QVariantMap request, QString callerKey, bool queue, QString jobId, bool widgetInstall);
   friend class WidgetChannel;
   friend class DesktopPet;
   friend class GlobalAgents;

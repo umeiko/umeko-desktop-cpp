@@ -4,6 +4,7 @@ class Backend;
 class WidgetChannel;
 class DesktopPet;
 class GlobalAgents;
+class WidgetHost;
 class DesktopPlugins : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantList rows READ rows NOTIFY changed)
@@ -15,6 +16,7 @@ class DesktopPlugins : public QObject {
   Q_PROPERTY(QVariantMap recentPlugin READ recentPlugin NOTIFY changed)
   Q_PROPERTY(QVariantList iconCatalog READ iconCatalog CONSTANT)
   Q_PROPERTY(QObject *pet READ pet CONSTANT)
+  Q_PROPERTY(QObject *hostServices READ hostServices CONSTANT)
 public:
   explicit DesktopPlugins(Backend *backend);
   ~DesktopPlugins() override;
@@ -37,6 +39,8 @@ public:
   QVariantList iconCatalog() const { return icons; }
   QObject *pet() const;
   GlobalAgents *globalAgents() const { return coordinators; }
+  QObject *hostServices() const;
+  Q_INVOKABLE QString requestHost(QString operation, QString arguments);
   QString callFor(QString id, QString method, QString raw, bool agent = false,
                   int timeout = 20000, QVariantMap session = {});
   QVariantMap execute(QString operation, QVariantMap args, QString callerKey);
@@ -54,6 +58,7 @@ signals:
   void response(QString request, QVariantMap result);
   void managed(QString token, QVariantMap result);
   void event(QString topic, QVariantMap data);
+  void hostResponse(QString widget, QString request, QVariantMap result);
   void openWithRequested(QString path);
 
 private:
@@ -61,6 +66,7 @@ private:
   friend class DesktopPet;
   friend class GlobalAgents;
   friend class NativeUiTests;
+  friend class WidgetHost;
   struct Worker {
     QPointer<QProcess> process;
     QByteArray buffer;
@@ -78,6 +84,7 @@ private:
   WidgetChannel *channel;
   DesktopPet *companion;
   GlobalAgents *coordinators;
+  WidgetHost *host;
   QVariantList icons;
   QSet<QString> failedServices;
   QString applicationToken, selection;

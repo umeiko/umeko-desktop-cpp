@@ -161,7 +161,7 @@ void Backend::sessionInfo(std::shared_ptr<Session> s, QVariantMap info) {
   if (!s->file.isEmpty() || s->action == "prompt")
     indexSession(s);
   if (!s->id.isEmpty())
-    setMetadata(s->id, {{"reasoningEffort", s->reasoningEffort}});
+    setMetadata(s->id, {{"reasoningEffort", s->reasoningEffort}, {"extensionModes",s->extensionModes}});
 }
 void Backend::saveSessions() { store.saveSessions(sessionIndex); }
 void Backend::newSession() {
@@ -180,6 +180,7 @@ void Backend::openSession(QString id) {
       return;
     s = fresh(saved["workspace"].toString());
     s->id = id;
+    s->extensionModes = metadata(id)["extensionModes"].toMap();
     auto effort =
         metadata(id).value("reasoningEffort", s->reasoningEffort).toString();
     s->reasoningEffort =
@@ -297,6 +298,10 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   values["sessionFile"] = s->file;
   values["models"] = modelCatalog();
   values["agent"] = store.data["agent"];
+  QVariantMap extensions;
+  for(auto it=s->extensionModes.cbegin();it!=s->extensionModes.cend();++it)
+    if(it.value()=="session" || it.value()=="disabled") extensions[it.key()]=it.value()=="session";
+  values["sessionExtensions"] = extensions;
   QVariantMap envValues;
   for (auto path : {agentDir() + "/mcp.json", s->workspace + "/.pi/mcp.json"}) {
     QFile f(path);

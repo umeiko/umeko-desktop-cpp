@@ -1,5 +1,7 @@
 #include "terminal_view.hpp"
 #include "widget_channel.hpp"
+#include "widget_host.hpp"
+#include <QDirIterator>
 #include "desktop_pet.hpp"
 #include "global_agents.hpp"
 #include "backend.hpp"
@@ -653,6 +655,305 @@ private slots:
     QVERIFY(
         window->grabWindow().save(root + "/build/screenshots/providers.png"));
     window->setProperty("page", "chat");
+  }
+  void toolCatalogViewport() {
+    auto manager = qobject_cast<PiManagement *>(backend->piManagement());
+    QVERIFY(manager);
+    const auto original = backend->store.data;
+    QDesktopServices::setUrlHandler("https",this,"recordOpenedUrl");
+    const auto previousPage = window->property("page"), previousTab = window->property("settingsTab");
+    const auto restore = qScopeGuard([&] {
+      QDesktopServices::unsetUrlHandler("https");
+      backend->store.data = original;
+      window->setProperty("page",previousPage); window->setProperty("settingsTab",previousTab);
+      backend->invalidate(); backend->notify();
+    });
+    configureAPI();
+    window->setProperty("page","settings"); window->setProperty("settingsTab",3); QTest::qWait(150);
+    if (find("openPiSettingsButton")->isVisible()) click("openPiSettingsButton");
+    find("piFold_kernel")->setProperty("expanded",false);
+    find("piFold_extensions")->setProperty("expanded",true);
+    find("piFold_tools")->setProperty("expanded",true);
+    manager->scan();
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(),15000);
+    QString coreId;
+    for (const auto &value : manager->extensions()) {
+      const auto row = value.toMap(), info = row["info"].toMap();
+      if (row["path"] != "builtin:codemode") continue;
+      coreId = row["id"].toString();
+      QCOMPARE(info["origin"].toString(),QString("pi"));
+      QCOMPARE(info["version"].toString(),backend->kernelVersion());
+      QVERIFY(info["repository"].toString().startsWith("https://github.com/"));
+    }
+    QVERIFY(!coreId.isEmpty());
+    QMetaObject::invokeMethod(find("openToolCatalogButton"),"clicked");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
+    QMetaObject::invokeMethod(find("toolCategory_native"),"clicked");
+    auto list = find("toolCatalogList");
+    QTRY_VERIFY_WITH_TIMEOUT(list->property("count").toInt() > 0,15000);
+    QTRY_VERIFY(list->width() > 300 && list->height() > 100);
+    QTRY_VERIFY(find("toolEntry_read"));
+    auto read = find("toolEntry_read");
+    const auto position = read->mapToItem(list,QPointF(read->width()/2,read->height()/2));
+    QVERIFY(read->isVisible() && read->width() > 100 && read->height() > 20);
+    QVERIFY(position.y() >= 0 && position.y() <= list->height());
+    QMetaObject::invokeMethod(read,"clicked"); QTest::qWait(100);
+    window->grabWindow().save(root+"/build/screenshots/tool-catalog-visible.png");
+    QMetaObject::invokeMethod(find("backToPiButton"),"clicked");
+  }
+  void piManagerIsOnlyACloseableWidget() {
+    auto widgets = qobject_cast<DesktopPlugins *>(backend->desktopPlugins());
+    auto host = qobject_cast<WidgetHost *>(widgets->hostServices());
+    const QString id="pi-manager";
+    QVERIFY(widgets->entries.contains(id));
+    QVERIFY(!widgets->workers.contains(id));
+    const auto originalAgent=backend->store.data["agent"];
+    const auto oldWidth=window->width(), oldHeight=window->height();
+    const auto cleanup=qScopeGuard([&] {
+      widgets->closePage();widgets->setEnabled(id,true);
+      backend->store.data["agent"]=originalAgent;
+      window->resize(oldWidth,oldHeight);window->setProperty("webPreferredWidth",0);
+    });
+    const auto agentDir=directory.filePath("widget-manager-agent"), workspace=directory.filePath("widget-manager-project");
+    QDir().mkpath(agentDir);QDir().mkpath(workspace);
+    auto agent=originalAgent.toMap();agent["safeMode"]=false;agent["agentDir"]=agentDir;
+    backend->store.data["agent"]=agent;
+    backend->newSession();backend->view->workspace=workspace;
+    backend->notify();
+    window->setProperty("page","settings");window->setProperty("settingsTab",3);QTest::qWait(100);
+    if(find("openPiSettingsButton")->isVisible())click("openPiSettingsButton");
+    QVERIFY(!find("piFold_packages"));
+    window->setProperty("page","chat");window->resize(1120,720);window->setProperty("webPreferredWidth",320);
+    widgets->setEnabled(id,true);
+    QVERIFY(widgets->openPage(id));
+    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerWidget"),10000);
+    auto page=find("piManagerWidget");
+    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerList")->property("count").toInt()>=7,20000);
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),10000);
+    QDir().mkpath(root+"/build/screenshots");
+    QVERIFY(window->grabWindow().save(root+"/build/screenshots/pi-widget-list.png"));
+    find("piManagerSearch")->setProperty("text","chatbox");
+    QTRY_COMPARE_WITH_TIMEOUT(find("piManagerList")->property("count").toInt(),1,10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),10000);
+    QVariantMap row;
+    for(const auto &value:backend->management->extensions())if(value.toMap()["path"]=="builtin:chatbox")row=value.toMap();
+    QVERIFY(!row.isEmpty());
+    // A bounded long Markdown fixture exercises the actual Widget scroll container.
+    backend->management->loadExtensionDetails(row["id"].toString());
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->management->busy(),10000);
+    click("piManagerEntry_"+row["id"].toString());
+    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerReadme")->property("text").toString().contains("submit_to_chatbox"),10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),10000);
+    auto scroll=find("piManagerDetailScroll"), readme=find("piManagerReadme");
+    QVERIFY(scroll->clip());
+    QVERIFY(readme->width()<=scroll->width());
+    QVERIFY(scroll->mapToItem(page,scroll->boundingRect().bottomRight()).y()<=page->height()+1);
+    page->setProperty("details",QVariantMap{{"markdown",QString("# Local Markdown\n\n## Section\n\nText within the viewport.\n\n").repeated(150)}});
+    QTest::qWait(200);
+    QVERIFY(scroll->property("contentHeight").toDouble()>scroll->height()*2);
+    QVERIFY(window->grabWindow().save(root+"/build/screenshots/pi-widget-detail-scroll.png"));
+    QVERIFY(row["info"].toMap()["required"].toBool());
+    QVERIFY(!find("piManagerActivation")->isEnabled());
+    QVERIFY(find("piManagerActivation")->property("displayText").toString().contains("固定启用"));
+    backend->management->setExtensionMode(row["id"].toString(),"disabled");
+    QVERIFY(backend->view->extensionModes.isEmpty());
+    click("piManagerBack");
+    find("piManagerSearch")->setProperty("text","mcp");
+    QTRY_COMPARE_WITH_TIMEOUT(find("piManagerList")->property("count").toInt(),1,10000);
+    for(const auto &value:backend->management->extensions())if(value.toMap()["path"]=="builtin:mcp")row=value.toMap();
+    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerEntry_"+row["id"].toString()),5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),5000);
+    click("piManagerEntry_"+row["id"].toString());
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),10000);
+    QVERIFY(find("piManagerActivation")->isEnabled());
+    click("piManagerActivation");QTest::keyClick(window,Qt::Key_Home);QTest::keyClick(window,Qt::Key_Down);QTest::keyClick(window,Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(host->pendingApproval().contains("id"),2000);
+    click("widgetHost_allowToolButton");
+    QTRY_COMPARE_WITH_TIMEOUT(backend->view->extensionModes.value("builtin:mcp").toString(),QString("session"),5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),10000);
+    QVERIFY(!QFile::exists(agentDir+"/settings.json"));
+    auto origin=backend->view;
+    click("piManagerBack");
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),5000);
+    click("piManagerInstall");
+    find("piManagerInstallCommand")->setProperty("text","pi install npm:fixture && whoami");
+    click("piManagerInstallConfirm");
+    QVERIFY(host->pendingApproval().isEmpty());QVERIFY(!backend->management->busy());
+    const auto package=directory.filePath("a quoted widget package");
+    QDir().mkpath(package+"/extensions");
+    {QFile file(package+"/extensions/local.ts");QVERIFY(file.open(QIODevice::WriteOnly));file.write("export default () => {};\n");}
+    find("piManagerInstallCommand")->setProperty("text","pi install \""+package+"\" --local");
+    QCOMPARE(find("piManagerInstallScope")->property("currentIndex").toInt(),1);
+    QVERIFY(!find("piManagerInstallScope")->isEnabled());
+    click("piManagerInstallConfirm");
+    QTRY_VERIFY_WITH_TIMEOUT(host->pendingApproval().contains("id"),2000);
+    click("widgetHost_allowToolButton");
+    QTRY_COMPARE_WITH_TIMEOUT(backend->management->installState(),QString("succeeded"),20000);
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),10000);
+    QVERIFY(QFile::exists(workspace+"/.pi/settings.json"));
+    // A deliberately stalled loopback registry exercises the real cancel UI.
+    QTcpServer registry;QVERIFY(registry.listen(QHostAddress::LocalHost,0));
+    QList<QTcpSocket*> sockets;int received=0;
+    connect(&registry,&QTcpServer::newConnection,this,[&] {
+      while(registry.hasPendingConnections()) {
+        auto socket=registry.nextPendingConnection();sockets<<socket;
+        connect(socket,&QTcpSocket::readyRead,socket,[&,socket]{socket->readAll();++received;});
+      }
+    });
+    const auto closeRegistry=qScopeGuard([&]{for(auto socket:sockets){socket->disconnect();socket->abort();}registry.close();});
+    const auto npmrc=directory.filePath("widget-empty.npmrc");
+    {QFile file(npmrc);QVERIFY(file.open(QIODevice::WriteOnly));}
+    auto networkAgent=backend->store.data["agent"].toMap();
+    networkAgent["npmRegistry"]=QString("http://127.0.0.1:%1").arg(registry.serverPort());networkAgent["npmUserconfig"]=npmrc;
+    backend->store.data["agent"]=networkAgent;
+    click("piManagerInstall");find("piManagerInstallCommand")->setProperty("text","npm:@fixture/waiting");
+    click("piManagerInstallConfirm");QTRY_VERIFY_WITH_TIMEOUT(host->pendingApproval().contains("id"),2000);click("widgetHost_allowToolButton");
+    QTRY_VERIFY_WITH_TIMEOUT(received>0,10000);
+    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerCancelInstall")->isVisible() && find("piManagerCancelInstall")->isEnabled(),5000);
+    QVERIFY(find("piManagerNotice")->property("text").toString().contains("正在安装"));
+    click("piManagerCancelInstall");
+    QTRY_COMPARE_WITH_TIMEOUT(backend->management->installState(),QString("cancelled"),5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),5000);
+    // Closing the owner Widget also cancels a later, still-running install.
+    const auto before=received;
+    click("piManagerInstall");click("piManagerInstallConfirm");
+    QTRY_VERIFY_WITH_TIMEOUT(host->pendingApproval().contains("id"),2000);click("widgetHost_allowToolButton");
+    QTRY_VERIFY_WITH_TIMEOUT(received>before,10000);
+    auto process=widgets->workers.value(id)->process;
+    click("closeWebPaneButton");
+    QTRY_VERIFY_WITH_TIMEOUT(!widgets->workers.contains(id),3000);
+    QTRY_COMPARE_WITH_TIMEOUT(backend->management->installState(),QString("cancelled"),5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!process || process->state()==QProcess::NotRunning,3000);
+    QVERIFY(widgets->openPage(id));
+    QTRY_VERIFY_WITH_TIMEOUT(widgets->workers.contains(id) && widgets->workers[id]->ready,10000);
+    auto restarted=widgets->workers.value(id)->process;
+    widgets->setEnabled(id,false);
+    QTRY_VERIFY_WITH_TIMEOUT(!widgets->workers.contains(id) && widgets->page().isEmpty(),3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!restarted || restarted->state()==QProcess::NotRunning,3000);
+    QVERIFY(!widgets->openPage(id));
+    backend->newSession();
+    QVERIFY(backend->view->extensionModes.isEmpty());
+    QCOMPARE(origin->extensionModes.value("builtin:mcp").toString(),QString("session"));
+  }
+  void widgetHostServicesAreScopedAndAsynchronous() {
+    backend->newSession();
+    auto manager = qobject_cast<DesktopPlugins *>(backend->desktopPlugins());
+    auto host = qobject_cast<WidgetHost *>(manager->hostServices());
+    QVERIFY(host);
+    QVERIFY(host->capabilities()["operations"].toMap().contains("pi.remove"));
+    const auto source = root + "/plugin-runtime/examples/pi-management";
+    const auto archive = directory.filePath("pi-management.zip");
+    mz_zip_archive zip{};
+    QVERIFY(mz_zip_writer_init_file(&zip, archive.toUtf8().constData(), 0));
+    QDirIterator files(source, QDir::Files, QDirIterator::Subdirectories);
+    while (files.hasNext()) {
+      const auto path = files.next();
+      const auto relative = QDir(source).relativeFilePath(path);
+      QVERIFY(mz_zip_writer_add_file(&zip, relative.toUtf8().constData(), path.toUtf8().constData(), nullptr, 0, MZ_BEST_COMPRESSION));
+    }
+    QVERIFY(mz_zip_writer_finalize_archive(&zip));
+    mz_zip_writer_end(&zip);
+    QVERIFY(!manager->importZip(QUrl::fromLocalFile(archive).toString()).isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(), 10000);
+    const QString id = "pi-management-example";
+    QVERIFY2(manager->entries.contains(id), qPrintable(manager->status()));
+    manager->setEnabled(id, true);
+    QVERIFY(manager->openPage(id));
+    QTRY_VERIFY_WITH_TIMEOUT(manager->workers.contains(id) && manager->workers[id]->ready, 10000);
+    QHash<QString,QVariantMap> results;
+    const auto listener = connect(manager, &DesktopPlugins::hostResponse, this,
+        [&results](QString,QString request,QVariantMap value) { results[request] = value; });
+    const auto cleanup = qScopeGuard([&] { disconnect(listener); });
+    auto request = [&](QString operation,QVariantMap arguments = {}) {
+      return host->requestFor(id, {{"operation", operation}, {"arguments", arguments}, {"session", manager->m_session}});
+    };
+    auto wait = [&](QString token) {
+      QDeadlineTimer deadline(5000);
+      while (!results.contains(token) && !deadline.hasExpired()) QTest::qWait(10);
+      return results.value(token);
+    };
+    auto token = request("providers.list");
+    QVERIFY(!wait(token)["ok"].toBool());
+    token = request("pi.status", {{"limit",true}});
+    QVERIFY(!wait(token)["ok"].toBool());
+    token = request("pi.scan");
+    auto accepted = wait(token);
+    QVERIFY(accepted["ok"].toBool());
+    QVERIFY(!accepted["jobId"].toString().isEmpty());
+    const auto job = accepted["jobId"].toString();
+    QTRY_VERIFY_WITH_TIMEOUT(backend->controlJobs[job].toMap()["status"] == "done", 20000);
+    token = request("pi.job", {{"id", job}});
+    const auto jobs = wait(token)["jobs"].toList();
+    QCOMPARE(jobs.size(), 1);
+    QCOMPARE(jobs[0].toMap()["status"].toString(), QString("done"));
+    token = request("pi.status", {{"limit", 2}});
+    const auto snapshot = wait(token);
+    QVERIFY(snapshot["ok"].toBool());
+    QVERIFY(snapshot["result"].toMap()["contextCurrent"].toBool());
+    QVERIFY(snapshot["result"].toMap()["extensions"].toList().size() <= 2);
+    token = request("pi.install", {{"source", "npm:fixture@1.0.0"}});
+    QTRY_VERIFY(host->pendingApproval().contains("id"));
+    QVERIFY(!results.contains(token));
+    click("widgetHost_denyToolButton");
+    QCOMPARE(wait(token)["status"].toString(), QString("declined"));
+    token = request("pi.enable", {{"id", "fixture"}, {"enabled", false}});
+    QTRY_VERIFY(host->pendingApproval().contains("id"));
+    const auto session = manager->m_session;
+    manager->m_session["workspace"] = "/changed";
+    host->respondApproval(true);
+    QVERIFY(!wait(token)["ok"].toBool());
+    manager->m_session = session;
+    // Exercise a confirmed native install/remove, not just mocked dispatch.
+    const auto originalAgent = backend->store.data["agent"];
+    auto testAgent = originalAgent.toMap(); testAgent["safeMode"] = false;
+    backend->store.data["agent"] = testAgent;
+    const auto restoreAgent = qScopeGuard([&] { backend->store.data["agent"] = originalAgent; });
+    const auto package = directory.filePath("widget package");
+    QVERIFY(!backend->umekoRequest({{"operation","extensions.install"},{"arguments",QVariantMap{{"source",package}}}}, backend->view->key)["ok"].toBool());
+    QVERIFY(!backend->umekoRequest({{"operation","extensions.install"},{"origin","widget"},{"arguments",QVariantMap{{"source",package}}}}, backend->view->key)["ok"].toBool());
+    QVERIFY(QDir().mkpath(package + "/extensions"));
+    { QFile file(package + "/extensions/example.ts"); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("export default () => {};\n"); }
+    token = request("pi.install", {{"source", package}});
+    QTRY_VERIFY(host->pendingApproval().contains("id"));
+    host->respondApproval(true);
+    accepted = wait(token);
+    QVERIFY2(accepted["ok"].toBool(), qPrintable(accepted["error"].toString()));
+    auto installJob = accepted["jobId"].toString();
+    QVERIFY(!installJob.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(backend->controlJobs[installJob].toMap()["status"] == "done", 20000);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->management->busy(), 20000);
+    QString extension;
+    for (const auto &item : backend->management->extensions())
+      if (item.toMap()["path"] == package + "/extensions/example.ts") extension = item.toMap()["id"].toString();
+    QVERIFY2(!extension.isEmpty(), qPrintable(backend->management->status() + "\n" + QString::fromUtf8(QJsonDocument::fromVariant(backend->management->extensions()).toJson())));
+    token = request("pi.remove", {{"id", extension}});
+    QTRY_VERIFY(host->pendingApproval().contains("id"));
+    host->respondApproval(true);
+    accepted = wait(token);
+    QVERIFY2(accepted["ok"].toBool(), qPrintable(accepted["error"].toString()));
+    const auto removeJob = accepted["jobId"].toString();
+    QVERIFY(!removeJob.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(backend->controlJobs[removeJob].toMap()["status"] == "done", 20000);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->management->busy(), 20000);
+    for (const auto &item : backend->management->extensions()) QVERIFY(item.toMap()["id"].toString() != extension);
+    QVERIFY(QFile::exists(package + "/extensions/example.ts"));
+    backend->store.data["agent"] = originalAgent;
+    click("piWidgetScan");
+    QTRY_VERIFY_WITH_TIMEOUT(find("piWidgetSummary")->property("text").toString().contains("共 "), 20000);
+    QTest::qWait(200);
+    QDir().mkpath(root + "/build/screenshots");
+    QVERIFY(window->grabWindow().save(root + "/build/screenshots/widget-host-sdk.png"));
+    if (qEnvironmentVariableIsSet("UMEKO_WIDGET_SDK_REVIEW")) {
+      window->setTitle("Umeko C++ · Widget SDK 验收");
+      QEventLoop loop;
+      connect(window, &QWindow::visibleChanged, &loop, [&loop](bool visible) { if (!visible) loop.quit(); });
+      loop.exec();
+    }
+    manager->closePage();
+    const auto process = manager->workers.value(id)->process;
+    manager->setEnabled(id, false);
+    QTRY_VERIFY_WITH_TIMEOUT(!process || process->state() == QProcess::NotRunning, 3000);
+    QVERIFY(manager->uninstall(id));
   }
   void historyFoldsAndSelection() {
     backend->injectDemo();
@@ -2877,88 +3178,6 @@ def create_provider(context): return Interactive(context)
                  fixture.first.first());
     }
   }
-  void toolCatalogViewportAndExtensionDetails() {
-    auto manager = qobject_cast<PiManagement *>(backend->piManagement());
-    QVERIFY(manager);
-    const auto original = backend->store.data;
-    QDesktopServices::setUrlHandler("https",this,"recordOpenedUrl");
-    const auto previousPage = window->property("page"), previousTab = window->property("settingsTab");
-    const auto restore = qScopeGuard([&] {
-      QDesktopServices::unsetUrlHandler("https");
-      if (find("closeExtensionDetailsButton")) QMetaObject::invokeMethod(find("closeExtensionDetailsButton"),"clicked");
-      backend->store.data = original;
-      window->setProperty("page",previousPage); window->setProperty("settingsTab",previousTab);
-      backend->invalidate(); backend->notify();
-    });
-    configureAPI();
-    window->setProperty("page","settings"); window->setProperty("settingsTab",3); QTest::qWait(150);
-    if (find("openPiSettingsButton")->isVisible()) click("openPiSettingsButton");
-    find("piFold_kernel")->setProperty("expanded",false);
-    find("piFold_extensions")->setProperty("expanded",true);
-    find("piFold_packages")->setProperty("expanded",true);
-    find("piFold_tools")->setProperty("expanded",true);
-    manager->scan();
-    QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(),15000);
-    QString coreId;
-    for (const auto &value : manager->extensions()) {
-      const auto row = value.toMap(), info = row["info"].toMap();
-      if (row["path"] != "builtin:codemode") continue;
-      coreId = row["id"].toString();
-      QCOMPARE(info["origin"].toString(),QString("pi"));
-      QCOMPARE(info["version"].toString(),backend->kernelVersion());
-      QVERIFY(info["repository"].toString().startsWith("https://github.com/"));
-    }
-    QVERIFY(!coreId.isEmpty());
-    QMetaObject::invokeMethod(find("openToolCatalogButton"),"clicked");
-    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
-    QMetaObject::invokeMethod(find("toolCategory_native"),"clicked");
-    auto list = find("toolCatalogList");
-    QTRY_VERIFY_WITH_TIMEOUT(list->property("count").toInt() > 0,15000);
-    QTRY_VERIFY(list->width() > 300 && list->height() > 100);
-    QTRY_VERIFY(find("toolEntry_read"));
-    auto read = find("toolEntry_read");
-    const auto position = read->mapToItem(list,QPointF(read->width()/2,read->height()/2));
-    QVERIFY(read->isVisible() && read->width() > 100 && read->height() > 20);
-    QVERIFY(position.y() >= 0 && position.y() <= list->height());
-    QMetaObject::invokeMethod(read,"clicked"); QTest::qWait(100);
-    window->grabWindow().save(root+"/build/screenshots/tool-catalog-visible.png");
-    QMetaObject::invokeMethod(find("backToPiButton"),"clicked");
-    QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(),15000);
-    QMetaObject::invokeMethod(find("agentExtensionsDetails_"+coreId),"clicked");
-    QTRY_VERIFY(find("extensionDetailsName")->isVisible());
-    QTRY_VERIFY_WITH_TIMEOUT(find("extensionDetailsToolList")->property("count").toInt() >= 1,15000);
-    QTRY_VERIFY(find("extensionDetailsToolList")->height() > 100);
-    const int before = openedUrls.size();
-    QMetaObject::invokeMethod(find("extensionRepositoryButton"),"clicked");
-    QCOMPARE(openedUrls.size(),before+1);
-    QVERIFY(openedUrls.last().host() == "github.com");
-    QTcpServer registry;
-    QVERIFY(registry.listen(QHostAddress::LocalHost,0));
-    connect(&registry,&QTcpServer::newConnection,this,[&] {
-      while (registry.hasPendingConnections()) {
-        auto socket = registry.nextPendingConnection();
-        connect(socket,&QTcpSocket::disconnected,socket,&QObject::deleteLater);
-        connect(socket,&QTcpSocket::readyRead,this,[socket] {
-          auto raw = socket->property("request").toByteArray()+socket->readAll(); socket->setProperty("request",raw);
-          if (!raw.contains("\r\n\r\n")) return;
-          const QByteArray body = R"({"name":"@earendil-works/pi-coding-agent","dist-tags":{"latest":"99.0.0"},"versions":{"99.0.0":{"name":"@earendil-works/pi-coding-agent","version":"99.0.0"}}})";
-          socket->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "+QByteArray::number(body.size())+"\r\nConnection: close\r\n\r\n"+body);
-          socket->disconnectFromHost();
-        });
-      }
-    });
-    auto agent = backend->store.data["agent"].toMap();
-    agent["npmRegistry"] = QString("http://127.0.0.1:%1").arg(registry.serverPort());
-    backend->store.data["agent"] = agent;
-    QMetaObject::invokeMethod(find("checkExtensionUpdateButton"),"clicked");
-    QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(),20000);
-    QCOMPARE(manager->extensionUpdate()["id"].toString(),coreId);
-    QCOMPARE(manager->extensionUpdate()["latest"].toString(),QString("99.0.0"));
-    QCOMPARE(manager->extensionUpdate()["status"].toString(),QString("available"));
-    QTRY_VERIFY(find("extensionUpdateResult")->property("text").toString().contains("99.0.0"));
-    QCOMPARE(backend->kernelVersion(),QString("1.3.0"));
-    window->grabWindow().save(root+"/build/screenshots/extension-details.png");
-  }
   void extensionAndMcpManagement() {
     auto manager = qobject_cast<PiManagement *>(backend->piManagement());
     QVERIFY(manager);
@@ -3183,7 +3402,10 @@ def create_provider(context): return Interactive(context)
   }
   void desktopPluginPagesAndSessionBoundary() {
     auto manager=qobject_cast<DesktopPlugins*>(backend->desktopPlugins());
-    QVERIFY(manager);QCOMPARE(manager->rows().size(),5);
+    QVERIFY(manager);
+    QSet<QString> builtins;
+    for(const auto &row:manager->rows())builtins.insert(row.toMap()["id"].toString());
+    QCOMPARE(builtins,QSet<QString>({"file-tree","git-viewer","terminal","desktop-pet","global-agents","pi-manager"}));
     QTemporaryDir workspace;QVERIFY(workspace.isValid());
     QFile file(workspace.filePath("hello.md"));QVERIFY(file.open(QIODevice::WriteOnly));file.write("# Plugin fixture\n");file.close();
 #ifndef Q_OS_WIN

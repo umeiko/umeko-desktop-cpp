@@ -3,6 +3,7 @@
 #include "desktop_pet.hpp"
 #include "global_agents.hpp"
 #include "widget_channel.hpp"
+#include "widget_host.hpp"
 #include <QClipboard>
 #include <QDesktopServices>
 #include <QMimeData>
@@ -57,11 +58,21 @@ DesktopPlugins::DesktopPlugins(Backend *backend)
               .toList();
   applicationToken = "application:" + U::uuid();
   channel = new WidgetChannel(this);
+  host = new WidgetHost(this);
   companion = new DesktopPet(this);
   coordinators = new GlobalAgents(this);
   synchronize();
 }
 DesktopPlugins::~DesktopPlugins() { close(); }
+QObject *DesktopPlugins::hostServices() const { return host; }
+QString DesktopPlugins::requestHost(QString operation, QString raw) {
+  if (raw.toUtf8().size() > 16384) return {};
+  QJsonParseError error;
+  const auto document = QJsonDocument::fromJson(raw.toUtf8(), &error);
+  if (error.error != QJsonParseError::NoError || !document.isObject()) return {};
+  return host->requestFor(m_page, {{"operation", operation},
+      {"arguments", document.object().toVariantMap()}, {"session", m_session}});
+}
 QVariantMap DesktopPlugins::entry(QString id) const {
   return entries.value(id).toMap();
 }
@@ -341,6 +352,7 @@ void DesktopPlugins::closePage() {
   emit dismissed();
 }
 void DesktopPlugins::stop(QString id) {
+  host->stop(id);
   channel->stopNotifications(id);
   auto w = workers.take(id);
   if (!w)
@@ -417,6 +429,8 @@ void DesktopPlugins::start(QString id) {
          QVariantMap{{"path", packagePath(id)},
                      {"config", config},
                      {"session", m_session},
+                     {"hostCapabilities", host->capabilities()},
+                     {"runtimes", QVariantMap{{"node", QVariantMap{{"executable", U::node()}}}}},
                      {"stateDir",
                       root + "/state/" + id + "/" +
                           (application(id) ? QString("application")
@@ -427,6 +441,7 @@ void DesktopPlugins::start(QString id) {
     if (workers.value(id) != w)
       return;
     workers.remove(id);
+    host->stop(id);
     if (w->process)
       w->process->deleteLater();
     if (application(id))
@@ -580,6 +595,14 @@ void DesktopPlugins::receive(QString id, std::shared_ptr<Worker> w) {
   }
 }
 void DesktopPlugins::hostEvent(QString id, QVariantMap event) {
+  if (event["event"] == "host.request") {
+    if (event["arguments"].metaType().id() == QMetaType::QVariantMap) {
+      const auto args = event["arguments"].toMap();
+      if (host->requestFor(id, args).isEmpty() && QRegularExpression("^[a-f0-9]{32}$").match(args["id"].toString()).hasMatch())
+        send(id, {{"id",U::uuid()},{"operation","event"},{"arguments",QVariantMap{{"name","host.response"},{"data",QVariantMap{{"requestId",args["id"]},{"operation",args["operation"]},{"ok",false},{"error","Host request queue is full or unavailable"}}}}}});
+    }
+    return;
+  }
   auto kind = event["event"].toString();
   const auto args = event["arguments"].toMap();
   auto perms = entry(id)["permissions"].toList();
@@ -956,4 +979,5 @@ QVariantMap DesktopPlugins::execute(QString operation, QVariantMap args,
 void DesktopPlugins::observe(QString key, QVariantMap value) {
   channel->observe(key, value);
   coordinators->observe(key, value);
+  host->observe(key, value);
 }
