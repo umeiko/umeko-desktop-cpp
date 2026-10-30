@@ -8,6 +8,8 @@
 #include "update_network_fixture.hpp"
 #include <QDesktopServices>
 #include <QImageReader>
+#include <QAbstractItemModel>
+#include <QJSValue>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
@@ -3329,14 +3331,35 @@ def create_provider(context): return Interactive(context)
     auto project=backend->ensureProject(workspace);backend->renameProject(project["id"].toString(),"总线验收项目");
     QVERIFY(QMetaObject::invokeMethod(find("globalAgentsPage"),"openAgent",Q_ARG(QVariant,QString{})));QTest::qWait(750);
     QCOMPARE(find("globalSubagentsHeading")->property("text").toString(),QString("全局子智能体"));
-    click("agentBusTabButton");auto folder="agentBusProject_"+workspace;
-    auto toggle="agentBusSwitch_"+g->identity(backend->view);
+    click("agentBusTabButton");QTRY_COMPARE(find("globalAgentsPage")->property("section").toString(),QString("bridge"));
+    // The full suite leaves many projects in the virtualized list. Locate the
+    // owned fixture through the same project search available to the user.
+    find("agentBusSearch")->setProperty("text","总线验收项目");QTRY_COMPARE(find("agentBusProjectTree")->property("count").toInt(),2);
+    auto folder="agentBusProject_"+workspace;
+    auto toggle="agentBusCheckbox_"+g->identity(backend->view);
     QTRY_VERIFY(find(folder));QTRY_VERIFY(find(toggle));QVERIFY(find(toggle)->property("checked").toBool());
+    find("agentBusSearch")->setProperty("text","");
+    auto tree=find("agentBusProjectTree");
+    auto treeModel=qobject_cast<QAbstractItemModel*>(tree->property("model").value<QObject*>());QVERIFY(treeModel);
+    auto role=treeModel->roleNames().key("rowData",-1);QVERIFY(role>=0);int projectIndex=-1;
+    for(int i=0;i<treeModel->rowCount();++i){auto value=treeModel->data(treeModel->index(i,0),role);auto row=value.metaType().id()==qMetaTypeId<QJSValue>()?value.value<QJSValue>().toVariant().toMap():value.toMap();if(row["key"]==workspace){projectIndex=i;break;}}
+    QVERIFY(projectIndex>=0);QVERIFY(QMetaObject::invokeMethod(tree,"forceLayout"));
+    QVERIFY(QMetaObject::invokeMethod(tree,"positionViewAtIndex",Q_ARG(int,projectIndex),Q_ARG(int,0)));QTest::qWait(200);
+    QTRY_VERIFY(find(folder));
     click(folder);QTRY_VERIFY(!find(toggle));QVERIFY(g->allowed(backend->view));
     click(folder);QTRY_VERIFY(find(toggle));
     find("agentBusSearch")->setProperty("text","总线验收项目");QTRY_COMPARE(find("agentBusProjectTree")->property("count").toInt(),2);
     window->grabWindow().save(root+"/build/global-agents-ui/native-agent-bus.png");
-    find("agentBusSearch")->setProperty("text","");
+    click("globalSubagentsHelpButton");QTRY_VERIFY(find("globalSubagentsHelpText"));
+    QCOMPARE(find("globalSubagentsHelpTitle")->property("text").toString(),QString("Agent Bus（智能体总线）"));
+    QVERIFY(find("globalSubagentsHelpText")->property("text").toString().contains("勾选"));
+    QTest::keyClick(window,Qt::Key_Escape);QTest::qWait(200);
+    click("agentBusRequestsTabButton");click("globalSubagentsHelpButton");QTRY_VERIFY(find("globalSubagentsHelpText"));
+    QCOMPARE(find("globalSubagentsHelpTitle")->property("text").toString(),QString("请求"));
+    QVERIFY(find("globalSubagentsHelpText")->property("text").toString().contains("返回结果"));
+    QVERIFY(find("globalSubagentsHelpText")->property("text").toString().contains("不会撤销"));
+    window->grabWindow().save(root+"/build/global-agents-ui/native-requests-help.png");
+    QTest::keyClick(window,Qt::Key_Escape);
 
     auto queued=backend->umekoRequest({{"operation","agent_bus.dispatch"},{"arguments",QVariantMap{{"targetId",g->identity(backend->view)},{"text","cancel this request"}}}},coordinator->key);QVERIFY(queued["ok"].toBool());
     QVERIFY(g->ui("setBridge",{{"id",g->identity(backend->view)},{"enabled",false}})["ok"].toBool());QCOMPARE(g->requests.last().toMap()["status"].toString(),QString("cancelled"));
