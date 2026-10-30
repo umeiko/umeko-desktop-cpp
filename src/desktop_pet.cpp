@@ -10,6 +10,7 @@
 namespace {
 const QStringList states{"idle",    "thinking", "working",
                          "waiting", "done",     "error"};
+const QStringList builtinAppearances{"yanami", "komari", "whale-girl"};
 const QVariantMap defaults{{"visible", false},      {"appearance", "yanami"},
                            {"size", 192},           {"alwaysOnTop", true},
                            {"paused", false},       {"sampleIntervalMs", 1500},
@@ -211,7 +212,7 @@ QString unzip(QString source, QString stage) {
   }
   return stage;
 }
-QVariantMap importPack(QString source, QString destination, QSet<QString> reserved) {
+QVariantMap importPack(QString source, QString destination) {
   try {
     need(QFileInfo(source).isFile(), "请选择本机形象 ZIP、pet.json 或动画文件");
     need(QDir().mkpath(destination), "无法创建形象目录");
@@ -249,7 +250,7 @@ QVariantMap importPack(QString source, QString destination, QSet<QString> reserv
     }
     auto pack = readPack(stage, true);
     auto id = pack["id"].toString();
-    need(!reserved.contains(id) && !QFileInfo::exists(destination + "/" + id),
+    need(!builtinAppearances.contains(id) && !QFileInfo::exists(destination + "/" + id),
          "该形象 id 已存在，请修改 pet.json 中的 id 后再导入");
     QSet<QString> keep{"pet.json"};
     for (auto value : pack["states"].toMap())
@@ -287,12 +288,13 @@ DesktopPet::DesktopPet(DesktopPlugins *manager) : QObject(manager), m(manager) {
 }
 void DesktopPet::loadPacks() {
   packs.clear();
-  const auto assets = m->b->root + "/umeko-plugins/desktop-pet/assets";
   QStringList folders;
-  QSet<QString> builtins;
-  for (const auto &name : QDir(assets).entryList(QDir::Dirs | QDir::NoDotAndDotDot))
-    if (!name.startsWith('.')) folders << assets + "/" + name;
-  builtins = QSet<QString>(folders.cbegin(), folders.cend());
+  QSet<QString> builtinFolders;
+  for (const auto &id : builtinAppearances) {
+    const auto folder = m->b->root + "/umeko-plugins/desktop-pet/assets/" + id;
+    folders << folder;
+    builtinFolders.insert(folder);
+  }
   for (auto name :
        QDir(packDirectory).entryList(QDir::Dirs | QDir::NoDotAndDotDot))
     if (!name.startsWith('.'))
@@ -300,8 +302,8 @@ void DesktopPet::loadPacks() {
   for (auto folder : folders)
     try {
       auto pack = readPack(folder);
-      bool builtin = builtins.contains(folder);
-      if (packs.contains(pack["id"].toString()))
+      bool builtin = builtinFolders.contains(folder);
+      if (!builtin && builtinAppearances.contains(pack["id"].toString()))
         continue;
       pack["directory"] = folder;
       pack["builtin"] = builtin;
@@ -578,10 +580,7 @@ QVariantMap DesktopPet::handle(QString method, QVariantMap args) {
                 emit imported(token, result);
               }
             });
-    QSet<QString> reserved;
-    for (const auto &pack : packs)
-      if (pack.toMap()["builtin"].toBool()) reserved.insert(pack.toMap()["id"].toString());
-    watcher->setFuture(QtConcurrent::run(importPack, source, packDirectory, reserved));
+    watcher->setFuture(QtConcurrent::run(importPack, source, packDirectory));
     emit changed();
     return {{"status", "importing"}, {"importId", token}};
   }
