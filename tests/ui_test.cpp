@@ -3160,7 +3160,7 @@ def create_provider(context): return Interactive(context)
   }
   void desktopPluginPagesAndSessionBoundary() {
     auto manager=qobject_cast<DesktopPlugins*>(backend->desktopPlugins());
-    QVERIFY(manager);QCOMPARE(manager->rows().size(),4);
+    QVERIFY(manager);QCOMPARE(manager->rows().size(),5);
     QTemporaryDir workspace;QVERIFY(workspace.isValid());
     QFile file(workspace.filePath("hello.md"));QVERIFY(file.open(QIODevice::WriteOnly));file.write("# Plugin fixture\n");file.close();
 #ifndef Q_OS_WIN
@@ -3205,6 +3205,112 @@ def create_provider(context): return Interactive(context)
 
     backend->setFontScale(2);window->setProperty("settingsTab",3);window->setProperty("page","settings");QTest::qWait(100);click("openDesktopPluginsButton");QTest::qWait(250);
     QVERIFY(find("desktopPluginSearch")->isVisible());backend->setFontScale(1);window->setProperty("settingsTab",0);window->setProperty("page","chat");
+  }
+  void loopChangeReviewWidget() {
+    auto m=qobject_cast<DesktopPlugins*>(backend->desktopPlugins());QVERIFY(m);
+    QVERIFY(!m->enabled("change-review"));QVERIFY(!m->workers.contains("change-review"));
+    configureAPI();backend->newSession();QTemporaryDir workspace;
+    backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());
+    QFile file(workspace.filePath("native-proof.txt"));QVERIFY(file.open(QIODevice::WriteOnly));file.write("existing dirty content\n");file.close();
+    m->setEnabled("change-review",true);window->setProperty("page","chat");window->resize(1700,1050);
+    auto cleanup=qScopeGuard([&]{nativeTool=false;releaseReplies();m->setEnabled("change-review",false);});
+    nativeTool=true;nativeCalls=0;backend->send("Update the proof for review");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),45000);
+    QTRY_COMPARE_WITH_TIMEOUT(m->page().value("id").toString(),QString("change-review"),10000);
+    QTRY_VERIFY_WITH_TIMEOUT(find("changeReviewWidget"),10000);
+    QTRY_VERIFY_WITH_TIMEOUT(find("changeReviewFiles")&&find("changeReviewFiles")->property("count").toInt()==1,10000);
+    auto widget=find("changeReviewWidget");QVERIFY(widget);widget->setProperty("selected","native-proof.txt");
+    QVERIFY(QMetaObject::invokeMethod(widget,"show",Q_ARG(QVariant,"native-proof.txt")));
+    QTRY_VERIFY_WITH_TIMEOUT(widget->property("diff").toString().contains("-existing dirty content"),10000);
+    QVERIFY(widget->property("diff").toString().contains("+native tool result"));
+    QTRY_VERIFY(!find("webPane")->property("moving").toBool());
+    QDir().mkpath(root+"/build/screenshots");window->grabWindow().save(root+"/build/screenshots/change-review-widget.png");
+    m->closePage();QVERIFY(m->workers.contains("change-review"));
+    // Hold the provider response, modify while it is running, then use the real
+    // user stop path. The native agent_end must still finalize its snapshot.
+    nativeTool=false;holdReplies=true;const auto before=requests.size();
+    backend->send("A cancellable turn");QTRY_VERIFY_WITH_TIMEOUT(requests.size()>before,15000);
+    QVERIFY(file.open(QIODevice::WriteOnly|QIODevice::Truncate));file.write("changed before user stopped\n");file.close();
+    backend->stop();QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);releaseReplies();
+    QTRY_COMPARE_WITH_TIMEOUT(m->page().value("id").toString(),QString("change-review"),10000);
+    QTRY_VERIFY(find("changeReviewWidget"));widget=find("changeReviewWidget");
+    QTRY_COMPARE_WITH_TIMEOUT(widget->property("report").toMap().value("reason").toString(),QString("cancelled"),10000);
+    // Hidden application's results remain session-bound and closing does not
+    // stop this opt-in service. Disable does stop it.
+    auto worker=m->workers.value("change-review");m->closePage();backend->newSession();
+    QCOMPARE(m->workers.value("change-review"),worker);
+    QVERIFY(m->openPage("change-review"));QTRY_VERIFY(find("changeReviewWidget"));
+    QTRY_VERIFY(find("changeReviewWidget")->property("report").toMap().value("empty").toBool());
+    auto process=worker->process;
+    m->setEnabled("change-review",false);QVERIFY(!m->workers.contains("change-review"));
+    QTRY_VERIFY(process.isNull() || process->state()==QProcess::NotRunning);
+    QVERIFY(m->page().isEmpty());
+  }
+  void changeReviewTreeNavigationAndEphemeralRecord() {
+    auto m=qobject_cast<DesktopPlugins*>(backend->desktopPlugins());QVERIFY(m);
+    backend->newSession();QTemporaryDir workspace;QVERIFY(workspace.isValid());
+    backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());
+    window->setProperty("page","chat");window->resize(1700,1050);
+    m->setEnabled("change-review",true);
+    auto cleanup=qScopeGuard([&]{m->setEnabled("change-review",false);});
+    QVERIFY(m->openPage("change-review"));
+    QTRY_VERIFY_WITH_TIMEOUT(find("changeReviewEmpty"),10000);
+    QTRY_VERIFY(find("changeReviewWidget")->property("loading").toInt()==0);
+    QCOMPARE(find("changeReviewEmpty")->property("text").toString(),QString("暂无变更"));
+    QVERIFY(find("changeReviewEmpty")->isVisible());
+    QVERIFY(!find("changeReviewHelp")->isVisible());QVERIFY(!find("changeReviewBack")->isVisible());
+    QVERIFY(!find("changeReviewCopy")->isVisible());QVERIFY(find("changeReviewRefresh")->isVisible());
+    QTRY_VERIFY(!find("webPane")->property("moving").toBool());
+    QDir().mkpath(root+"/build/screenshots");window->grabWindow().save(root+"/build/screenshots/change-review-empty.png");
+    QSignalSpy publishes(m,&DesktopPlugins::event);
+    m->hostEvent("change-review",{{"event","widget.event"},{"arguments",QVariantMap{{"topic","review.changed"},{"data",QVariantMap{}}}}});
+    QCOMPARE(publishes.size(),1);
+    m->hostEvent("change-review",{{"event","widget.event"},{"arguments",QVariantMap{{"topic","review.changed"},{"data",QVariantMap{}},{"session",QVariantMap{{"token","other-chat"}}}}}});
+    QCOMPARE(publishes.size(),1);
+    QSignalSpy replies(m,&DesktopPlugins::response);
+    auto await=[&](QString request){QVariantMap result;QElapsedTimer timer;timer.start();while(timer.elapsed()<10000){QCoreApplication::processEvents();for(auto row:replies)if(row[0].toString()==request)return row[1].toMap();QTest::qWait(10);}return result;};
+    auto write=[&](QString path,QByteArray text){QDir().mkpath(QFileInfo(workspace.filePath(path)).absolutePath());QFile file(workspace.filePath(path));if(!file.open(QIODevice::WriteOnly|QIODevice::Truncate))return false;return file.write(text)==text.size();};
+    QVERIFY(write("src/core.py","print('before')\n"));QVERIFY(write("docs/readme.md","# Before\n"));
+    QVERIFY(await(m->callFor("change-review","begin","{\"loopId\":\"tree-loop\"}"))["ok"].toBool());
+    QVERIFY(write("src/core.py","print('after')\n"));QVERIFY(write("src/new file.py","print('new')\n"));
+    QVERIFY(QFile::remove(workspace.filePath("docs/readme.md")));
+    QVERIFY(await(m->callFor("change-review","finish","{\"loopId\":\"tree-loop\",\"reason\":\"completed\"}"))["ok"].toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(find("changeReviewFiles")->property("count").toInt()==2,10000);
+    click("changeReviewRow_src");
+    QTRY_VERIFY(find("changeReviewRow_src/core.py"));
+    click("changeReviewRow_docs");QTRY_VERIFY(find("changeReviewRow_docs/readme.md"));
+    window->grabWindow().save(root+"/build/screenshots/change-review-tree.png");
+    auto row=find("changeReviewRow_src/core.py");QVERIFY(row);
+    QTest::mouseClick(window,Qt::RightButton,Qt::NoModifier,point(row));
+    auto menu=find("changeReviewWidget")->findChild<QObject*>("gitFileContextMenu");QVERIFY(menu);
+    QTRY_VERIFY(menu->property("visible").toBool());QVERIFY(menu->property("readOnly").toBool());
+    auto discard=menu->findChild<QObject*>("gitContextDiscard");QVERIFY(discard);QVERIFY(!discard->property("visible").toBool());
+    QTRY_VERIFY(find("gitContextOpenChanges"));
+    window->grabWindow().save(root+"/build/screenshots/change-review-context.png");
+    click("gitContextOpenChanges");
+    QTRY_VERIFY(find("changeReviewWidget")->property("diff").toString().contains("+print('after')"));
+    QVERIFY(!find("changeReviewFiles")->isVisible());QVERIFY(find("changeReviewDiff")->isVisible());
+    QCOMPARE(m->page()["id"].toString(),QString("change-review"));
+    QCOMPARE(find("webPane")->property("mode").toString(),QString("plugin"));
+    window->grabWindow().save(root+"/build/screenshots/change-review-diff.png");
+    click("changeReviewBack");QVERIFY(find("changeReviewFiles")->isVisible());
+    QVERIFY(!find("changeReviewDiff")->isVisible());QVERIFY(find("changeReviewRow_src/core.py"));
+    click("changeReviewRow_src/core.py");
+    QTRY_VERIFY(find("changeReviewWidget")->property("diff").toString().contains("-print('before')"));
+    click("changeReviewBack");
+    // A second loop replaces the sole result, and restarting the worker does
+    // not restore either it or its private Git object directory.
+    QVERIFY(await(m->callFor("change-review","begin","{\"loopId\":\"replacement\"}"))["ok"].toBool());
+    QTRY_VERIFY(find("changeReviewEmpty")->isVisible());
+    QVERIFY(await(m->callFor("change-review","finish","{\"loopId\":\"replacement\"}"))["ok"].toBool());
+    QTRY_VERIFY(find("changeReviewWidget")->property("report").toMap().value("total").toInt()==0);
+    auto process=m->workers.value("change-review")->process;
+    m->setEnabled("change-review",false);QTRY_VERIFY(process.isNull()||process->state()==QProcess::NotRunning);
+    m->setEnabled("change-review",true);QVERIFY(m->openPage("change-review"));
+    QTRY_VERIFY(find("changeReviewWidget"));
+    QTRY_VERIFY(find("changeReviewWidget")->property("report").toMap().value("empty").toBool());
+    auto latest=m->workers.value("change-review")->process;m->setEnabled("change-review",false);
+    QTRY_VERIFY(latest.isNull()||latest->state()==QProcess::NotRunning);
   }
   void desktopPluginZipLifecycle() {
     auto manager=qobject_cast<DesktopPlugins*>(backend->desktopPlugins());QVERIFY(manager);

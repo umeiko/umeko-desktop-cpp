@@ -57,6 +57,12 @@ DesktopPlugins::DesktopPlugins(Backend *backend)
   applicationToken = "application:" + U::uuid();
   channel = new WidgetChannel(this);
   companion = new DesktopPet(this);
+  connect(this, &DesktopPlugins::response, this, [this](QString request, QVariantMap) {
+    if (!reviewRequests.contains(request)) return;
+    auto target = reviewRequests.take(request);
+    auto record = b->records.value(target.first);
+    if (record) b->writePi(record, {{"type", "loop_review_response"}, {"id", target.second}});
+  });
   synchronize();
 }
 DesktopPlugins::~DesktopPlugins() { close(); }
@@ -585,7 +591,7 @@ void DesktopPlugins::hostEvent(QString id, QVariantMap event) {
       channel->notify(id, args);
     return;
   }
-  const auto target = args["session"].toMap();
+  const auto target = args.value("session").toMap();
   if (kind == "widget.event") {
     if (args.contains("session") &&
         (target["token"] != m_session["token"] ||
@@ -947,5 +953,31 @@ QVariantMap DesktopPlugins::execute(QString operation, QVariantMap args,
   return channel->execute(operation, args, callerKey);
 }
 void DesktopPlugins::observe(QString key, QVariantMap value) {
+  const auto type = value["type"].toString();
+  const QString id = "change-review";
+  auto record = b->records.value(key);
+  if (record && type == "exit") {
+    const auto loop = reviewLoops.take(key);
+    if (!loop.isEmpty() && enabled(id)) {
+      const auto args = frame({{"loopId", loop}, {"reason", "exited"}});
+      callFor(id, "finish", QString::fromUtf8(args), false, 10000,
+              {{"token", record->key}, {"id", record->id}, {"workspace", record->workspace}});
+    }
+  } else if (record && type == "loop_review") {
+    const auto phase = value["phase"].toString();
+    const auto loop = value["loopId"].toString();
+    if ((phase == "begin" || phase == "finish") && !loop.isEmpty()) {
+      if (phase == "begin") reviewLoops[key] = loop;
+      else reviewLoops.remove(key);
+      QString request;
+      if (enabled(id)) {
+        const auto args = frame({{"loopId", loop}, {"reason", value.value("reason", "completed")}});
+        request = callFor(id, phase, QString::fromUtf8(args), false, 10000,
+                         {{"token", record->key}, {"id", record->id}, {"workspace", record->workspace}});
+      }
+      if (request.isEmpty()) b->writePi(record, {{"type", "loop_review_response"}, {"id", value["id"]}});
+      else reviewRequests[request] = {key, value["id"].toString()};
+    }
+  }
   channel->observe(key, value);
 }

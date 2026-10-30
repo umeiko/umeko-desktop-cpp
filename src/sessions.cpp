@@ -290,6 +290,7 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   values["defaultCwd"] = fallback;
   values["agentDir"] = agentDir();
   values["webview"] = webviewConfiguration();
+  values["loopReview"] = true;
   values["sessionDir"] = store.directory + "/pi/sessions";
   values["docsDir"] = store.directory + "/agent-docs";
   values["sessionFile"] = s->file;

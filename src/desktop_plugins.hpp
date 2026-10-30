@@ -72,6 +72,8 @@ private:
   bool m_busy = false, m_closed = false;
   QVariantMap settings, entries, m_session;
   QHash<QString, std::shared_ptr<Worker>> workers;
+  QHash<QString, QString> reviewLoops;
+  QHash<QString, QPair<QString, QString>> reviewRequests;
   WidgetChannel *channel;
   DesktopPet *companion;
   QVariantList icons;
