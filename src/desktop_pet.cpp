@@ -123,9 +123,9 @@ QVariantMap readPack(QString folder, bool check = false) {
            value["dialogue"].typeId() == QMetaType::QVariantMap,
        "dialogue 必须为对象");
   for (auto it = dialogue.cbegin(); it != dialogue.cend(); ++it) {
-    need(QStringList{"tap", "hover", "drag"}.contains(it.key()) &&
+    need(QStringList{"tap", "hover", "drag", "done", "error"}.contains(it.key()) &&
              it.value().typeId() == QMetaType::QVariantList,
-         "dialogue 支持 tap、hover、drag");
+         "dialogue 支持 tap、hover、drag、done、error");
     auto lines = it.value().toList();
     need(!lines.isEmpty() && lines.size() <= 16, "每种互动台词需要 1–16 条");
     for (auto line : lines)
@@ -211,7 +211,7 @@ QString unzip(QString source, QString stage) {
   }
   return stage;
 }
-QVariantMap importPack(QString source, QString destination) {
+QVariantMap importPack(QString source, QString destination, QSet<QString> reserved) {
   try {
     need(QFileInfo(source).isFile(), "请选择本机形象 ZIP、pet.json 或动画文件");
     need(QDir().mkpath(destination), "无法创建形象目录");
@@ -249,7 +249,7 @@ QVariantMap importPack(QString source, QString destination) {
     }
     auto pack = readPack(stage, true);
     auto id = pack["id"].toString();
-    need(id != "yanami" && !QFileInfo::exists(destination + "/" + id),
+    need(!reserved.contains(id) && !QFileInfo::exists(destination + "/" + id),
          "该形象 id 已存在，请修改 pet.json 中的 id 后再导入");
     QSet<QString> keep{"pet.json"};
     for (auto value : pack["states"].toMap())
@@ -287,7 +287,12 @@ DesktopPet::DesktopPet(DesktopPlugins *manager) : QObject(manager), m(manager) {
 }
 void DesktopPet::loadPacks() {
   packs.clear();
-  QStringList folders{m->b->root + "/umeko-plugins/desktop-pet/assets/yanami"};
+  const auto assets = m->b->root + "/umeko-plugins/desktop-pet/assets";
+  QStringList folders;
+  QSet<QString> builtins;
+  for (const auto &name : QDir(assets).entryList(QDir::Dirs | QDir::NoDotAndDotDot))
+    if (!name.startsWith('.')) folders << assets + "/" + name;
+  builtins = QSet<QString>(folders.cbegin(), folders.cend());
   for (auto name :
        QDir(packDirectory).entryList(QDir::Dirs | QDir::NoDotAndDotDot))
     if (!name.startsWith('.'))
@@ -295,8 +300,8 @@ void DesktopPet::loadPacks() {
   for (auto folder : folders)
     try {
       auto pack = readPack(folder);
-      bool builtin = folder == folders.first();
-      if (!builtin && pack["id"] == "yanami")
+      bool builtin = builtins.contains(folder);
+      if (packs.contains(pack["id"].toString()))
         continue;
       pack["directory"] = folder;
       pack["builtin"] = builtin;
@@ -308,8 +313,8 @@ QVariantList DesktopPet::appearances() const {
   QVariantList rows;
   for (auto v : packs) {
     auto p = v.toMap();
-    rows << QVariantMap{
-        {"id", p["id"]}, {"name", p["name"]}, {"builtin", p["builtin"]}};
+    QVariantMap row{{"id", p["id"]}, {"name", p["name"]}, {"builtin", p["builtin"]}};
+    if (p["id"] == "yanami") rows.prepend(row); else rows << row;
   }
   return rows;
 }
@@ -320,7 +325,10 @@ QVariantMap DesktopPet::state() const {
                   .toMap()
                   .value(action, pack["states"].toMap()["idle"])
                   .toString();
+  auto top = pack["images"].toMap()[name].toMap()["contentTop"].toDouble();
+  top = qIsFinite(top) ? qBound(0., top, 1.) : 0.;
   return {{"action", action},
+          {"contentTop", top},
           {"source",
            name.isEmpty()
                ? ""
@@ -435,6 +443,7 @@ void DesktopPet::sample() {
         ++subagents;
   }
   observed = next;
+  const auto previousTarget = target;
   target = waiting     ? "waiting"
            : active    ? (working ? "working" : "thinking")
            : subagents ? "working"
@@ -445,15 +454,12 @@ void DesktopPet::sample() {
                            {"activeSubagents", subagents}};
   bool changedActivity = nextActivity != activity;
   activity = nextActivity;
+  if (target != previousTarget && (target == "done" || target == "error"))
+    speak(target);
   if (step() || changedActivity)
     emit changed();
 }
-void DesktopPet::interact(QString kind) {
-  auto now = clock.elapsed();
-  if (!running || (kind == lastKind && now - lastInteraction < 400))
-    return;
-  lastKind = kind;
-  lastInteraction = now;
+void DesktopPet::speak(QString kind) {
   auto lines = packs[options["appearance"].toString()]
                    .toMap()["dialogue"]
                    .toMap()[kind]
@@ -461,6 +467,14 @@ void DesktopPet::interact(QString kind) {
   if (!lines.isEmpty())
     emit reaction(lines[QRandomGenerator::global()->bounded(int(lines.size()))]
                       .toString());
+}
+void DesktopPet::interact(QString kind) {
+  auto now = clock.elapsed();
+  if (!running || (kind == lastKind && now - lastInteraction < 400))
+    return;
+  lastKind = kind;
+  lastInteraction = now;
+  speak(kind);
   if (QStringList{"tap", "hover", "drag"}.contains(kind) &&
       (kind != "hover" || target == "idle")) {
     interaction = kind == "tap" ? "done" : "waiting";
@@ -564,7 +578,10 @@ QVariantMap DesktopPet::handle(QString method, QVariantMap args) {
                 emit imported(token, result);
               }
             });
-    watcher->setFuture(QtConcurrent::run(importPack, source, packDirectory));
+    QSet<QString> reserved;
+    for (const auto &pack : packs)
+      if (pack.toMap()["builtin"].toBool()) reserved.insert(pack.toMap()["id"].toString());
+    watcher->setFuture(QtConcurrent::run(importPack, source, packDirectory, reserved));
     emit changed();
     return {{"status", "importing"}, {"importId", token}};
   }

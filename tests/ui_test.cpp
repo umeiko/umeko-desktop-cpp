@@ -3275,6 +3275,54 @@ def create_provider(context): return Interactive(context)
     terminal.applyFrame({{"revision",2},{"bracketedPaste",true}});QGuiApplication::clipboard()->setText("line1\nline2");terminal.paste();QCOMPARE(input.last()[0].toString(),QString("\x1b[200~line1\nline2\x1b[201~"));
     terminal.reset();QVERIFY(!terminal.hasSelection());
   }
+  void whalePetBuiltInAndPlayback() {
+    auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);
+    const auto original=pet->config();
+    const auto restore=qScopeGuard([&]{pet->ui("configure",original);});
+    bool found=false;
+    for (const auto &item:pet->appearances()) {
+      const auto row=item.toMap();
+      if(row["id"]=="whale-girl") {found=true;QVERIFY(row["builtin"].toBool());}
+    }
+    QVERIFY(found);
+    QVERIFY(!pet->ui("removeAppearance",{{"id","whale-girl"}})["ok"].toBool());
+    auto configured=pet->ui("configure",{{"appearance","whale-girl"},{"visible",true},{"paused",false}});
+    QVERIFY2(configured["ok"].toBool(),qPrintable(configured["error"].toString()));
+    const auto folder=root+"/umeko-plugins/desktop-pet/assets/whale-girl";
+    const auto manifest=U::readJson(folder+"/pet.json").toMap();
+    QCOMPARE(manifest["sourceCommit"].toString(),QString("53e9ab8e2c779f4c0feb902cfa940c098c83d228"));
+    for(const auto &state:QStringList{"idle","thinking","working","waiting","done","error"}) {
+      QImageReader reader(folder+"/"+manifest["states"].toMap()[state].toString());
+      QVERIFY(reader.canRead());QVERIFY(reader.imageCount()>1);
+      const auto image=reader.read();QVERIFY(!image.isNull());QVERIFY(image.hasAlphaChannel());
+      QCOMPARE(image.size(),QSize(360,360));
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(window->findChild<QObject*>("desktopPetWindow"),5000);
+    auto petWindow=qobject_cast<QQuickWindow*>(window->findChild<QObject*>("desktopPetWindow"));QVERIFY(petWindow);
+    QTRY_VERIFY(petWindow->isVisible());
+    QTRY_VERIFY(petWindow->findChild<QObject*>("desktopPetAnimation"));
+    auto animation=petWindow->findChild<QObject*>("desktopPetAnimation");
+    QTRY_VERIFY(animation->property("ready").toBool());
+    QVERIFY(animation->property("source").toUrl().toString().contains("/whale-girl/"));
+    const auto frame=animation->property("currentFrame").toInt();
+    QTRY_VERIFY(animation->property("currentFrame").toInt()!=frame);
+    QVERIFY(pet->ui("configure",{{"paused",true}})["ok"].toBool());
+    QTest::qWait(150);const auto frozen=animation->property("currentFrame");QTest::qWait(250);QCOMPARE(animation->property("currentFrame"),frozen);
+    pet->interact("drag");
+    QTRY_VERIFY(!petWindow->property("caption").toString().isEmpty());
+    QVERIFY(manifest["dialogue"].toMap()["drag"].toList().contains(petWindow->property("caption").toString()));
+    auto bubble=petWindow->findChild<QQuickItem*>("desktopPetSpeechBubble");QVERIFY(bubble);
+    auto art=petWindow->findChild<QQuickItem*>("desktopPetAnimationLoader");QVERIFY(art);
+    for (int size:{96,192,320}) {
+      QVERIFY(pet->ui("configure",{{"size",size}})["ok"].toBool());QTest::qWait(70);
+      const auto pictureTop=art->y()+art->height()-animation->property("paintedHeight").toReal()*(1-pet->state()["contentTop"].toReal());
+      const auto gap=pictureTop-bubble->y()-bubble->height();
+      QVERIFY2(gap>=0 && gap<=24,qPrintable(QString("Speech gap: %1").arg(gap)));
+    }
+    QDir().mkpath(root+"/build/screenshots");QVERIFY(petWindow->grabWindow().save(root+"/build/screenshots/whale-desktop-pet.png"));
+    QVERIFY(pet->ui("hide",{})["ok"].toBool());
+    QTRY_VERIFY(!window->findChild<QObject*>("desktopPetWindowLoader")->property("item").value<QObject*>());
+  }
   void desktopPetImportsDataWithoutCode() {
     auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);
     QTemporaryDir temp;QImage image(64,64,QImage::Format_ARGB32);image.fill(QColor("#4488ff"));auto source=temp.filePath("sample.png");QVERIFY(image.save(source));
@@ -3283,6 +3331,29 @@ def create_provider(context): return Interactive(context)
     QVERIFY(pet->ui("removeAppearance",{{"id",id}})["ok"].toBool());QCOMPARE(pet->config()["appearance"].toString(),"yanami");QVERIFY(!pet->ui("removeAppearance",{{"id","yanami"}})["ok"].toBool());
     auto zipPath=temp.filePath("unsafe.zip");mz_zip_archive zip{};QVERIFY(mz_zip_writer_init_file(&zip,zipPath.toUtf8().constData(),0));QVERIFY(mz_zip_writer_add_mem(&zip,"../escape.png","invalid",7,MZ_DEFAULT_COMPRESSION));QVERIFY(mz_zip_writer_finalize_archive(&zip));mz_zip_writer_end(&zip);
     imported.clear();QVERIFY(pet->ui("importAppearance",{{"path",zipPath}})["ok"].toBool());QTRY_VERIFY_WITH_TIMEOUT(!imported.isEmpty(),10000);QVERIFY(!imported.last()[1].toMap()["ok"].toBool());QVERIFY(!QFileInfo::exists(temp.filePath("escape.png")));
+  }
+  void whalePetDialogueUsesActualTaskOutcomes() {
+    auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);
+    const auto original=pet->config();
+    auto task=std::make_shared<Session>();task->id="whale-dialogue-fixture";
+    backend->records[task->key]=task;
+    const auto restore=qScopeGuard([&]{backend->records.remove(task->key);pet->ui("configure",original);pet->sample();});
+    QVERIFY(pet->ui("configure",{{"appearance","whale-girl"}})["ok"].toBool());
+    const auto dialogue=U::readJson(root+"/umeko-plugins/desktop-pet/assets/whale-girl/pet.json").toMap()["dialogue"].toMap();
+    QSet<QString> lines;for(auto group:dialogue)for(auto line:group.toList())lines.insert(line.toString());
+    QCOMPARE(lines,(QSet<QString>{"要米","米","饿，饿","米呢","好了米","有问题了","米？","没问题了米","米！"}));
+    QSignalSpy spoken(pet,&DesktopPet::reaction);
+    for(const auto &kind:QStringList{"tap","hover","drag"}) {
+      pet->interact(kind);QVERIFY(!spoken.isEmpty());
+      QVERIFY(dialogue[kind].toList().contains(spoken.last()[0]));
+    }
+    spoken.clear();pet->sample();QVERIFY(spoken.isEmpty());
+    task->phase="running";pet->sample();task->phase="idle";pet->sample();
+    QCOMPARE(spoken.count(),1);QVERIFY(dialogue["done"].toList().contains(spoken.first()[0]));
+    pet->sample();QCOMPARE(spoken.count(),1);
+    task->phase="running";pet->sample();task->phase="idle";task->failed=true;pet->sample();
+    QCOMPARE(spoken.count(),2);QCOMPARE(spoken.last()[0].toString(),QString("有问题了"));
+    pet->sample();QCOMPARE(spoken.count(),2);
   }
   void cleanup() {
     if (QTest::currentTestFailed() && window) {

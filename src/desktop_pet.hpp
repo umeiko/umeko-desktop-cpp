@@ -48,4 +48,5 @@ private:
   QVariantMap handle(QString method, QVariantMap args);
   QVariantMap status() const;
   bool step();
+  void speak(QString kind);
 };

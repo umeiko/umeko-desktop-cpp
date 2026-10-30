@@ -53,3 +53,7 @@ Windows notifications use WinToast 1.3.2 (MIT), pinned to commit 693efb90376809d
 ## Fcitx5 Qt input plugin
 
 Linux builds compile fcitx5-qt 5.1.13 from https://github.com/fcitx/fcitx5-qt (archive SHA-256 74b2c43ca865ec9ede257bcd3bdadafc20f571900cb2440a4488335e4d4e91cc) against the bundled Qt. DBusAddons is linked into the plugin. BSD-3-Clause and LGPL-2.1-or-later texts are included under licenses/fcitx5-qt. The pinned unmodified source can be downloaded using native/input-method/fetch.py; the build configuration is included in this repository.
+
+## Whale-girl desktop pet artwork
+
+Six community animation assets from [yanzwzz/dsh-whale-girl-pet](https://github.com/yanzwzz/dsh-whale-girl-pet), pinned at `53e9ab8e2c779f4c0feb902cfa940c098c83d228`, are distributed under the upstream MIT license. Copyright (c) 2026 dsh-whale-girl-pet contributors. The animations were transcoded from VP9 alpha WebM to looping animated WebP; the character artwork was not redesigned. The full license and per-file source URLs/checksums are shipped in `umeko-plugins/desktop-pet/assets/whale-girl/LICENSE.txt` and `source.json`. This community character is not an official DeepSeek endorsement.
