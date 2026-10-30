@@ -7,6 +7,7 @@
 #include "syntaxhighlighter.hpp"
 #include "update_network_fixture.hpp"
 #include <QDesktopServices>
+#include <QImageReader>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
@@ -3342,10 +3343,24 @@ def create_provider(context): return Interactive(context)
   }
   void desktopPetImportsDataWithoutCode() {
     auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);
+    QSet<QString> builtins;
+    for (const auto &row : pet->appearances()) if (row.toMap()["builtin"].toBool()) builtins.insert(row.toMap()["id"].toString());
+    QVERIFY(builtins.contains("yanami"));QVERIFY(builtins.contains("komari"));
+    QVERIFY(pet->ui("selectAppearance",{{"id","komari"}})["ok"].toBool());
+    QCOMPARE(pet->state()["appearance"].toString(),"komari");
+    QVERIFY(pet->state()["source"].toString().contains("/assets/komari/"));
+    QVERIFY(!pet->ui("removeAppearance",{{"id","komari"}})["ok"].toBool());
+    for (const auto &state : QStringList{"idle","thinking","working","waiting","done","error"}) {
+      QImageReader reader(root + "/umeko-plugins/desktop-pet/assets/komari/" + state + ".webp");
+      QVERIFY(reader.canRead());QVERIFY(reader.imageCount()>1);QCOMPARE(reader.size(),QSize(384,576));QVERIFY(!reader.read().isNull());
+    }
     QTemporaryDir temp;QImage image(64,64,QImage::Format_ARGB32);image.fill(QColor("#4488ff"));auto source=temp.filePath("sample.png");QVERIFY(image.save(source));
     QSignalSpy imported(pet,&DesktopPet::imported);auto result=pet->ui("importAppearance",{{"path",source}});QVERIFY(result["ok"].toBool());QTRY_VERIFY_WITH_TIMEOUT(!imported.isEmpty(),10000);
     auto actual=imported.last()[1].toMap();QVERIFY2(actual["ok"].toBool(),qPrintable(actual["error"].toString()));auto id=actual["result"].toMap()["appearance"].toString();QVERIFY(id.startsWith("custom-"));QVERIFY(pet->ui("selectAppearance",{{"id",id}})["ok"].toBool());QVERIFY(pet->state()["source"].toString().endsWith(".png"));QVERIFY(!pet->state()["animated"].toBool());
     QVERIFY(pet->ui("removeAppearance",{{"id",id}})["ok"].toBool());QCOMPARE(pet->config()["appearance"].toString(),"yanami");QVERIFY(!pet->ui("removeAppearance",{{"id","yanami"}})["ok"].toBool());
+    const auto shadow=temp.filePath("shadow");QVERIFY(QDir().mkpath(shadow));QVERIFY(QFile::copy(source,shadow+"/sample.png"));
+    QVERIFY(U::writeJson(shadow+"/pet.json",QVariantMap{{"format","umeko-pet"},{"version",1},{"id","komari"},{"name","Shadow"},{"states",QVariantMap{{"idle","sample.png"}}}}));
+    imported.clear();QVERIFY(pet->ui("importAppearance",{{"path",shadow+"/pet.json"}})["ok"].toBool());QTRY_VERIFY_WITH_TIMEOUT(!imported.isEmpty(),10000);QVERIFY(!imported.last()[1].toMap()["ok"].toBool());
     auto zipPath=temp.filePath("unsafe.zip");mz_zip_archive zip{};QVERIFY(mz_zip_writer_init_file(&zip,zipPath.toUtf8().constData(),0));QVERIFY(mz_zip_writer_add_mem(&zip,"../escape.png","invalid",7,MZ_DEFAULT_COMPRESSION));QVERIFY(mz_zip_writer_finalize_archive(&zip));mz_zip_writer_end(&zip);
     imported.clear();QVERIFY(pet->ui("importAppearance",{{"path",zipPath}})["ok"].toBool());QTRY_VERIFY_WITH_TIMEOUT(!imported.isEmpty(),10000);QVERIFY(!imported.last()[1].toMap()["ok"].toBool());QVERIFY(!QFileInfo::exists(temp.filePath("escape.png")));
   }
