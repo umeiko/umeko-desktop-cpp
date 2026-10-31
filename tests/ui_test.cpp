@@ -3145,7 +3145,7 @@ Item {
     QVERIFY(pet->state()["rareIdle"].toBool()); QVERIFY(pet->state()["animated"].toBool());
     QVERIFY(pet->state()["source"].toString().endsWith("/idle-rare.webp"));
     QTRY_VERIFY(window->findChild<QQuickWindow*>("desktopPetWindow"));
-    auto petWindow = window->findChild<QQuickWindow*>("desktopPetWindow");
+    QPointer<QQuickWindow> petWindow = window->findChild<QQuickWindow*>("desktopPetWindow");
     QTRY_VERIFY(petWindow->findChild<QObject*>("desktopPetAnimation"));
     auto animation = petWindow->findChild<QObject*>("desktopPetAnimation");
     QTRY_VERIFY(animation->property("ready").toBool());
@@ -3161,8 +3161,11 @@ Item {
     pet->drawIdleScene(0); QVERIFY(pet->state()["rareIdle"].toBool());
     pet->ui("hide", {}); QVERIFY(!pet->state()["rareIdle"].toBool());
     pet->drawIdleScene(0); QVERIFY(!pet->state()["rareIdle"].toBool());
-    auto loader = petWindow->findChild<QObject*>("desktopPetAnimationLoader");
+    // Hiding the pet unloads the whole window. Inspect its owning Loader;
+    // the old petWindow and animation can already have been destroyed here.
+    auto loader = find("desktopPetWindowLoader");
     QVERIFY(loader); QTRY_VERIFY(!loader->property("active").toBool());
+    QTRY_VERIFY(petWindow.isNull());
   }
   void characterArtworkAndDialogue() {
     const auto previousCharacter=backend->store.data.value("character","yanami");
