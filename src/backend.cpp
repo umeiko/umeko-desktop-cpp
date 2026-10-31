@@ -34,7 +34,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
     // The adapters belong to this desktop build, even when Pi itself was
     // upgraded separately. Keep web/queue fixes with the application update.
     QStringList adapters{"bridge.mjs", "package-install.mjs", "update-engine.mjs", "resources.mjs", "provider-policy.mjs", "chatbox.mjs",
-          "network-retry.mjs", "pi-commands.mjs", "umeko-control.mjs", "umeko-documents.mjs", "subagents.mjs", "subagent-sdk.mjs", "subagent-settings.mjs", "input-queue.mjs", "widget-messages.mjs", "rpc-ui.mjs", "umeko-operations.json", "webview-component.mjs", "webview-component.json"};
+          "tool-visibility.mjs", "network-retry.mjs", "pi-commands.mjs", "umeko-control.mjs", "umeko-documents.mjs", "subagents.mjs", "subagent-sdk.mjs", "subagent-settings.mjs", "input-queue.mjs", "widget-messages.mjs", "rpc-ui.mjs", "umeko-operations.json", "webview-component.mjs", "webview-component.json"};
     QDirIterator docs(root + "/runtime/umeko-docs", QDir::Files, QDirIterator::Subdirectories);
     while (docs.hasNext()) adapters << QDir(root + "/runtime").relativeFilePath(docs.next());
     for (const auto &name : adapters) {
