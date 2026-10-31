@@ -19,7 +19,7 @@ export class DefaultResourceLoader extends NativeResourceLoader {
 // Jiti and ESM can load separate module instances; the process-local symbol is
 // the narrow handoff between its SDK facade and the desktop extension.
 export async function createAgentSession(options) {
-  const result = await nativeCreateAgentSession(options);
+  const result = await nativeCreateAgentSession({...options, excludeTools: [...(options?.excludeTools || []), ...(globalThis[Symbol.for("umeko:tool-visibility-host")]?.getBlockedTools() || [])]});
   globalThis[Symbol.for("umeko:subagent-session")]?.(result.session, options);
   return result;
 }

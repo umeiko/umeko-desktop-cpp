@@ -826,7 +826,50 @@ private slots:
     window->grabWindow().save(root+"/build/screenshots/tool-catalog-visible.png");
     QMetaObject::invokeMethod(find("backToPiButton"),"clicked");
   }
+  void sessionToolVisibilityWidget() {
+    auto widgets=qobject_cast<DesktopPlugins *>(backend->desktopPlugins());
+    auto host=qobject_cast<WidgetHost *>(widgets->hostServices());
+    const auto oldAgent=backend->store.data["agent"];
+    const auto cleanup=qScopeGuard([&]{ widgets->closePage();backend->store.data["agent"]=oldAgent; });
+    const auto agentDir=directory.filePath("tool-visibility-agent"), workspace=directory.filePath("tool-visibility-workspace");
+    QDir().mkpath(agentDir);QDir().mkpath(workspace);
+    auto agent=oldAgent.toMap();agent["agentDir"]=agentDir;backend->store.data["agent"]=agent;
+    backend->newSession();auto origin=backend->view;origin->id="tool-visibility-owner";origin->workspace=workspace;
+    origin->resources["allTools"]=QVariantList{
+      QVariantMap{{"name","write"},{"source","builtin:write"},{"description","Write a file"},{"exposure","direct"}},
+      QVariantMap{{"name","read"},{"source","builtin:read"},{"description","Read a file"},{"exposure","direct"}},
+      QVariantMap{{"name","submit_to_chatbox"},{"source","builtin:chatbox"},{"description","Display an artifact"},{"exposure","direct"}}};
+    backend->setLanguage("zh");backend->notify();window->setProperty("page","chat");window->resize(1320,900);window->setProperty("webPreferredWidth",600);QTest::qWait(100);
+    widgets->setEnabled("pi-manager",true);QVERIFY(widgets->openPage("pi-manager"));
+    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerToolTag_write"),10000);
+    auto page=find("piManagerWidget");QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),10000);
+    click("piManagerEntry_builtin:pi-tools");
+    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerToolVisible_write"),10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),10000);
+    QVERIFY(find("piManagerToolVisible_write")->property("checked").toBool());
+    click("piManagerToolVisible_write");
+    QTRY_VERIFY_WITH_TIMEOUT(!host->pendingApproval().isEmpty(),2000);
+    QVERIFY(origin->blockedTools.isEmpty());
+    click("widgetHost_allowToolButton");
+    QTRY_COMPARE_WITH_TIMEOUT(origin->blockedTools,QStringList{"write"},5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),5000);
+    QVERIFY(!find("piManagerToolVisible_write")->property("checked").toBool());
+    QCOMPARE(backend->metadata(origin->id)["blockedTools"].toStringList(),QStringList{"write"});
+    Store saved(directory.path());QCOMPARE(saved.data["sessionMeta"].toMap()[origin->id].toMap()["blockedTools"].toStringList(),QStringList{"write"});
+    QDir().mkpath(root+"/build/screenshots");
+    QVERIFY(window->grabWindow().save(root+"/build/screenshots/session-tool-visibility-detail.png"));
+    click("piManagerBack");QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),5000);
+    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerToolTag_write") && find("piManagerToolTag_read"),5000);
+    QCOMPARE(find("piManagerToolTag_write")->property("ink").value<QColor>(),QColor("#ba3c42"));
+    QCOMPARE(find("piManagerToolTag_read")->property("ink").value<QColor>(),QColor("#287746"));
+    QVERIFY(window->grabWindow().save(root+"/build/screenshots/session-tool-visibility-list.png"));
+    backend->newSession();QVERIFY(backend->view->blockedTools.isEmpty());
+    backend->activate(origin);QCOMPARE(backend->view->blockedTools,QStringList{"write"});
+    origin->subagentsActive=true;QVERIFY_EXCEPTION_THROWN(backend->management->setToolVisible("write",true),std::runtime_error);origin->subagentsActive=false;
+    backend->management->setToolVisible("write",true);QVERIFY(origin->blockedTools.isEmpty());
+  }
   void piManagerIsOnlyACloseableWidget() {
+    backend->setLanguage("zh");
     auto widgets = qobject_cast<DesktopPlugins *>(backend->desktopPlugins());
     auto host = qobject_cast<WidgetHost *>(widgets->hostServices());
     const QString id="pi-manager";
@@ -3102,7 +3145,7 @@ Item {
     QVERIFY(pet->state()["rareIdle"].toBool()); QVERIFY(pet->state()["animated"].toBool());
     QVERIFY(pet->state()["source"].toString().endsWith("/idle-rare.webp"));
     QTRY_VERIFY(window->findChild<QQuickWindow*>("desktopPetWindow"));
-    auto petWindow = window->findChild<QQuickWindow*>("desktopPetWindow");
+    QPointer<QQuickWindow> petWindow = window->findChild<QQuickWindow*>("desktopPetWindow");
     QTRY_VERIFY(petWindow->findChild<QObject*>("desktopPetAnimation"));
     auto animation = petWindow->findChild<QObject*>("desktopPetAnimation");
     QTRY_VERIFY(animation->property("ready").toBool());
@@ -3118,8 +3161,11 @@ Item {
     pet->drawIdleScene(0); QVERIFY(pet->state()["rareIdle"].toBool());
     pet->ui("hide", {}); QVERIFY(!pet->state()["rareIdle"].toBool());
     pet->drawIdleScene(0); QVERIFY(!pet->state()["rareIdle"].toBool());
-    auto loader = petWindow->findChild<QObject*>("desktopPetAnimationLoader");
+    // Hiding the pet unloads the whole window. Inspect its owning Loader;
+    // the old petWindow and animation can already have been destroyed here.
+    auto loader = find("desktopPetWindowLoader");
     QVERIFY(loader); QTRY_VERIFY(!loader->property("active").toBool());
+    QTRY_VERIFY(petWindow.isNull());
   }
   void characterArtworkAndDialogue() {
     const auto previousCharacter=backend->store.data.value("character","yanami");

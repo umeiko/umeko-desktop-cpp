@@ -10,6 +10,7 @@ import { rpcCustom } from "./rpc-ui.mjs";
 import { createSubagentExtension, projectSubagents } from "./subagents.mjs";
 import { createWidgetMessages, createLoopReview } from "./widget-messages.mjs";
 import { createInputQueue } from "./input-queue.mjs";
+import { blockedToolNames, toolInventory } from "./tool-visibility.mjs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createInterface } from "node:readline";
 import { readFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync, copyFileSync, realpathSync } from "node:fs";
@@ -33,7 +34,7 @@ const { isRetryableAssistantError, isContextOverflow } = await import("@earendil
 const entry = import.meta.resolve("@earendil-works/pi-coding-agent");
 const { AuthStorage } = await import(new URL("./core/auth-storage.js", entry));
 const { loadMcpConfig } = await import(new URL("./extensions/mcp/config.js", entry));
-const { allToolNames } = await import(new URL("./core/tools/index.js", entry));
+const { allToolNames, createAllToolDefinitions } = await import(new URL("./core/tools/index.js", entry));
 const nativeTools = [...allToolNames, "codemode", "tool_search", CHATBOX_TOOL, PI_COMMAND_TOOL, UMEKO_TOOL];
 const version = JSON.parse(readFileSync(new URL("../package.json", entry), "utf8")).version;
 const emit = (event) => process.stdout.write(JSON.stringify(event) + "\n");
@@ -94,6 +95,8 @@ const ui = {
   getEditorText: () => "", addAutocompleteProvider: () => () => {},
   custom: rpcCustom,
 };
+
+globalThis[Symbol.for("umeko:tool-visibility-host")] = { getBlockedTools: () => blockedToolNames(config?.blockedTools) };
 
 async function bindSession(session) {
   unsubscribe?.();
@@ -246,7 +249,7 @@ async function restoreSubagentSession(child, context, customTools) {
   await loader.reload();
   const {session} = await Pi.createAgentSession({cwd:manager.getCwd(),agentDir:config.agentDir,sessionManager:manager,
     modelRuntime,model,settingsManager:policy,resourceLoader:loader,thinkingLevel:context?.thinkingLevel || "off",
-    customTools,excludeTools:["subagent","get_subagent_result","steer_subagent"],
+    customTools,excludeTools:["subagent","get_subagent_result","steer_subagent",...blockedToolNames(config.blockedTools)],
     tools:context?.tools || (readonly ? ["read","grep","find","ls"] : undefined)});
   await session.bindExtensions({uiContext:ui,mode:"rpc",abortHandler:()=>session.abort(),
     shutdownHandler:()=>session.abort(),onError:error=>emit({type:"notice",message:error.message})});
@@ -319,7 +322,7 @@ async function init(input) {
     // Keep native global/project resource scopes in the loader, while desktop
     // generation/compaction overrides stay in memory on the session itself.
     services.settingsManager = settings;
-    const result = await Pi.createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model: selectedModel });
+    const result = await Pi.createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model: selectedModel, excludeTools: blockedToolNames(input.blockedTools) });
     return { ...result, services, diagnostics: services.diagnostics };
   };
   let manager;
@@ -411,7 +414,7 @@ async function capabilities() {
   const allTools = session.getAllTools(), active = session.getActiveToolNames();
   return {
     tools: active,
-    allTools: allTools.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters, exposure: tool.exposure, active: active.includes(tool.name), source: tool.sourceInfo?.path || tool.sourceInfo?.kind || "Pi" })),
+    allTools: toolInventory(session, createAllToolDefinitions(session.sessionManager.getCwd()), config.blockedTools),
     skills: session.resourceLoader.getSkills().skills.map(s => ({ name: s.name, path: s.filePath, description: s.description })),
     extensions: session.resourceLoader.getExtensions().extensions.map(e => ({ name: extensionName(e.path, session.resourceLoader.resourceMetadataByPath?.get(e.path)), path: e.path })),
     prompts: session.resourceLoader.getPrompts().prompts.map(p => ({ name: p.name, description: p.description, path: p.filePath })),

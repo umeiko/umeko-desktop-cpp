@@ -92,6 +92,7 @@ public:
   QVariantMap extensionModes() const;
   Q_INVOKABLE void loadExtensionDetails(QString id);
   Q_INVOKABLE void setExtensionMode(QString id, QString mode);
+  void setToolVisible(QString name, bool visible);
   Q_INVOKABLE void checkExtensionUpdate(QString id);
   Q_INVOKABLE bool saveNpmConfig(QString raw);
   Q_INVOKABLE void testNpmConfig();
@@ -194,6 +195,7 @@ struct Session {
   QVariantList subagents;
   bool subagentsActive = false;
   QVariantMap extensionModes;
+  QStringList blockedTools;
   QString reasoningEffort = "off";
   QVariantMap resources{
       {"tools", QVariantList{}},       {"allTools", QVariantList{}},
