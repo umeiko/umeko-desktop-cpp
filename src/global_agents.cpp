@@ -159,14 +159,14 @@ QVariantMap GlobalAgents::overview(std::shared_ptr<Session> caller)const{
   for(auto value:targets){auto path=value.toMap()["workspace"].toString();if(!path.isEmpty())workspaces.insert(path);}
   for(auto it=agents.cbegin();it!=agents.cend();++it){auto id="agent:"+it.key();auto target=activity(it.key());target.insert({{"id",id},{"title",it.value().toMap()["name"]},{"workspace",""},{"bridge",true},{"kind","global"}});targets[id]=target;}
   QVariantList rows;for(auto value:targets){auto row=value.toMap();if(caller&&caller->globalAgent.isEmpty()&&row["kind"]=="global"&&!allowed(caller,row["id"].toString()))continue;if(caller){row["isSelf"]=row["id"]==identity(caller);if(!caller->globalAgent.isEmpty()&&row["kind"]=="session")row["bridge"]=row["bridgeAll"].toBool()||row["bridgeAgents"].toStringList().contains(caller->globalAgent);row["canDispatch"]=!row["isSelf"].toBool()&&(!caller->globalAgent.isEmpty()?row["bridge"].toBool():row["kind"]=="global"&&allowed(caller,row["id"].toString()));}rows<<row;}
-  QVariantList choices;for(auto value:b->characterPacks()){auto row=value.toMap();choices<<QVariantMap{{"id",row["id"]},{"name",row["name"]}};}
+  QVariantList choices;for(auto value:b->subagentCharacterPacks()){auto row=value.toMap();choices<<QVariantMap{{"id",row["id"]},{"name",row["name"]}};}
   const bool canCreate = caller && caller->globalAgent.isEmpty();
   QVariantMap result{{"targets",rows},{"workspaces",QVariant::fromValue(workspaces.values())},{"policy","Only opted-in sessions may receive bus tasks. Disabled targets cannot receive requests. Subagent progress is metadata; requests target the owning session."},{"creation",QVariantMap{{"canCreate",canCreate},{"policy","Only ordinary session Agents may create global subagents; global subagents cannot create other global subagents."},{"automaticAllowed",canCreate && allowAutomaticCreation},{"characters",choices},{"defaultModel",b->store.data["selectedModel"]}}}};
   if(caller)result["self"]=selfInfo(caller);
   return result;
 }
 QVariantMap GlobalAgents::snapshot(QString selected)const{
-  auto appearances=b->characterPacks();auto fallback=b->characterStyle()["id"].toString();QVariantMap portraits,replies;
+  auto appearances=b->subagentCharacterPacks();auto fallback=b->characterStyle()["id"].toString();QVariantMap portraits,replies;
   for(auto v:appearances){auto row=v.toMap();portraits[row["id"].toString()]=row["portrait"];replies[row["id"].toString()]=row.value("replyPortrait",row["portrait"]);}
   QVariantList rows;
   for(auto it=agents.cbegin();it!=agents.cend();++it){auto value=it.value().toMap();QVariantMap row;for(const auto &key:{"id","name","character","model","instructions"})row[key]=value[key];auto s=records.value(it.key());
@@ -184,7 +184,7 @@ QVariantMap GlobalAgents::ui(QString method,QVariantMap args,bool agent){
 }
 QPair<QString,int> GlobalAgents::automaticName(QString character,QString id){
   auto current=agents.value(id).toMap();if(current["autoName"].toBool()&&current["character"]==character)return {current["name"].toString(),current["autoNameIndex"].toInt()};
-  QString base;for(auto value:b->characterPacks())if(value.toMap()["id"]==character)base=value.toMap()["name"].toString().left(54);
+  QString base;for(auto value:b->subagentCharacterPacks())if(value.toMap()["id"]==character)base=value.toMap()["name"].toString().left(54);
   QStringList family;QSet<QString> used;for(auto it=agents.cbegin();it!=agents.cend();++it)if(it.key()!=id){auto row=it.value().toMap();used.insert(row["name"].toString());if(row["autoName"].toBool()&&row["character"]==character)family<<it.key();}
   if(family.isEmpty()&&!used.contains(base))return {base,0};
   int highest=0;
@@ -208,7 +208,7 @@ QVariantMap GlobalAgents::handle(QString method,QVariantMap args,bool agent){
   if(method=="create"||method=="update"){
     require(method!="create"||agents.size()<16,"最多保留 16 个全局子智能体");
     auto name=text(args,"name",60,false),character=args.value("character",b->characterStyle()["id"]).toString(),model=args.value("model",b->store.data["selectedModel"]).toString();
-    bool found=false;for(auto v:b->characterPacks())found|=v.toMap()["id"]==character;require(found,"请选择现有角色形象");
+    bool found=false;for(auto v:b->subagentCharacterPacks())found|=v.toMap()["id"]==character;require(found,"请选择现有角色形象");
     found=false;for(auto v:b->modelCatalog())found|=v.toMap()["id"]==model;require(found,"请先配置可用模型");
     auto id=method=="update"?text(args,"id",80):uid();auto instructions=text(args,"instructions",8000,false);auto row=agents.value(id).toMap();
     if(method=="update") {require(agents.contains(id),"全局子智能体不存在");require(!records.contains(id)||!records[id]->busy(),"请先停止代理再修改设置");save();row=agents[id].toMap();halt(id);if(auto old=records.take(id)){b->records.remove(old->key);b->lru.removeAll(old->key);}}
@@ -279,7 +279,7 @@ QVariantMap GlobalAgents::requestCreation(QVariantMap args,std::shared_ptr<Sessi
   for(auto value:creationRequests){auto row=value.toMap();if(ownsCreation(row,caller)&&row["requestKey"]==key){if(row["status"]=="awaiting_approval")require(m->openPage("global-agents"),"无法打开全局子智能体 Widget");return creationResult(row);}}
   require(agents.size()<16,"最多保留 16 个全局子智能体");int pending=0;for(auto value:creationRequests)pending+=value.toMap()["status"]=="awaiting_approval";require(allowAutomaticCreation||pending<8,"待确认的创建请求已满，请先处理已有表单");
   QVariantMap fields{{"name",text(args,"name",60,false)},{"instructions",text(args,"instructions",8000,false)}};
-  auto choices=b->characterPacks();auto character=text(args,"character",80,false);
+  auto choices=b->subagentCharacterPacks();auto character=text(args,"character",80,false);
   if(character.isEmpty()){require(!choices.isEmpty(),"没有可用人物形象");character=choices[QRandomGenerator::global()->bounded(int(choices.size()))].toMap()["id"].toString();}
   bool found=false;for(auto value:choices)found|=value.toMap()["id"]==character;require(found,"请选择现有角色形象");
   auto model=text(args,"model",200,false);if(model.isEmpty())model=caller->model.isEmpty()?b->store.data["selectedModel"].toString():caller->model;

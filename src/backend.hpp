@@ -236,6 +236,7 @@ class Backend : public QObject {
   Q_PROPERTY(QVariantMap themeStyle READ themeStyle NOTIFY changed)
   Q_PROPERTY(QVariantMap characterStyle READ characterStyle NOTIFY changed)
   Q_PROPERTY(QVariantList characterPacks READ characterPacks NOTIFY changed)
+  Q_PROPERTY(QVariantList subagentCharacterPacks READ subagentCharacterPacks NOTIFY changed)
   Q_PROPERTY(QStringList characterNames READ characterNames NOTIFY changed)
   Q_PROPERTY(QVariantList messages READ messages NOTIFY chatChanged)
   Q_PROPERTY(
@@ -265,6 +266,7 @@ class Backend : public QObject {
   Q_PROPERTY(QString kernelVersion READ kernelVersion NOTIFY changed)
   Q_PROPERTY(QString latestVersion READ latestVersion NOTIFY changed)
   Q_PROPERTY(QString activeSession READ activeSession NOTIFY chatChanged)
+  Q_PROPERTY(QString conversationToken READ conversationToken NOTIFY viewChanged)
   Q_PROPERTY(QString sessionTitle READ sessionTitle NOTIFY chatChanged)
   Q_PROPERTY(QString workspaceName READ workspaceName NOTIFY changed)
   Q_PROPERTY(QString toolStatus READ toolStatus NOTIFY chatChanged)
@@ -312,6 +314,9 @@ public:
   Q_INVOKABLE bool configureCharacter(QString raw);
   Q_INVOKABLE bool importCharacter(QString url);
   Q_INVOKABLE bool selectCharacter(QString id);
+  Q_INVOKABLE bool selectSubagentCharacter(int slot, QString id);
+  QVariantList subagentCharacterPacks() const;
+  QVariantList characterPacksFor(bool subagents) const;
   Q_INVOKABLE bool removeCharacter(QString id);
   Q_INVOKABLE bool exportCharacterSkill(QString url);
   Q_INVOKABLE bool importTheme(QString url);
@@ -358,6 +363,7 @@ public:
   QString kernelVersion() const;
   QString latestVersion() const { return latestKernel; }
   QString activeSession() const { return view->id; }
+  QString conversationToken() const { return view->key; }
   QString sessionTitle() const { return view->title; }
   QString workspaceName() const {
     return QFileInfo(store.data["workspace"].toString()).fileName();

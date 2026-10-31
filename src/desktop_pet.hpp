@@ -21,6 +21,7 @@ public:
   void sample();
   Q_INVOKABLE QVariantMap ui(QString method, QVariantMap arguments);
   Q_INVOKABLE void interact(QString kind);
+  Q_INVOKABLE void idleCycle();
   Q_INVOKABLE void savePosition(int x, int y);
   Q_INVOKABLE QVariantMap position() const;
   Q_INVOKABLE QVariantMap screenBounds(int x, int y) const;
@@ -33,6 +34,9 @@ signals:
   void imported(QString token, QVariantMap result);
 
 private:
+  friend class NativeUiTests;
+  void drawIdleScene(double draw);
+  bool rareIdleActive = false;
   DesktopPlugins *m;
   QTimer timer;
   QElapsedTimer clock;

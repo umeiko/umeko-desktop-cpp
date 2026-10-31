@@ -13,6 +13,7 @@
 #include <QAbstractItemModel>
 #include <QAbstractItemModelTester>
 #include <QJSValue>
+#include <QQmlExpression>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
@@ -2761,7 +2762,7 @@ Item {
     });
     window->setProperty("page","settings");
     window->setProperty("settingsTab",5);
-    for (const auto &character:QStringList{"yanami","komari","kaju"}) {
+    for (const auto &character:QStringList{"yanami","komari","kaju","tiara","whale-girl"}) {
       QVERIFY(backend->selectCharacter(character));
       QTest::qWait(250);
       for (const auto &theme:QStringList{"light","dark","yanami"}) {
@@ -2791,7 +2792,7 @@ Item {
       window->setProperty("page", previousPage);
       window->setProperty("settingsTab", previousTab);
     });
-    for (const auto &id : QStringList{"yanami", "komari", "kaju"})
+    for (const auto &id : QStringList{"yanami", "komari", "kaju", "tiara", "whale-girl"})
       QVERIFY(!backend->removeCharacter(id));
     QVERIFY(backend->selectCharacter("kaju"));
     QCOMPARE(backend->characterStyle()["name"].toString(), QString("温水佳树"));
@@ -2865,7 +2866,7 @@ Item {
                QString("zip-character"));
     }
     const auto installed = backend->characterStyle()["assets"].toMap();
-    for (const auto &id : QStringList{"yanami", "komari", "kaju"}) {
+    for (const auto &id : QStringList{"yanami", "komari", "kaju", "tiara", "whale-girl"}) {
       auto reserved = manifest;
       reserved["id"] = id;
       QVERIFY(
@@ -2923,6 +2924,202 @@ Item {
     QCOMPARE(backend->characterStyle()["id"].toString(), QString("yanami"));
     click("closeCharacterDialog");
     QTest::qWait(350);
+  }
+  void tiaraCharacterAcrossSurfaces() {
+    const auto previous = backend->characterStyle()["id"].toString();
+    const auto options = QJsonDocument::fromVariant(backend->characterConfiguration()["overrides"]).toJson();
+    const auto page = window->property("page"), tab = window->property("settingsTab");
+    auto pet = qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());
+    QVERIFY(pet);
+    const auto petConfig = pet->config();
+    const auto restore = qScopeGuard([&] {
+      backend->selectCharacter(previous);
+      backend->configureCharacter(QString::fromUtf8(options));
+      pet->ui("configure", petConfig);
+      window->setProperty("page", page); window->setProperty("settingsTab", tab);
+    });
+    QVERIFY(backend->configureCharacter("{}"));
+    QVERIFY(backend->selectCharacter("tiara"));
+    QCOMPARE(backend->characterStyle()["name"].toString(), QString("马剃天爱星"));
+    QCOMPARE(backend->characterStyle()["assets"].toMap().size(), 10);
+    for (auto url : backend->characterStyle()["assets"].toMap()) {
+      QImage image(QUrl(url.toString()).toLocalFile());
+      QVERIFY(!image.isNull()); QVERIFY(image.hasAlphaChannel());
+    }
+    const auto original = backend->characterStyle()["subagents"].toList();
+    QVERIFY(backend->selectSubagentCharacter(2, "tiara"));
+    auto roles = backend->characterStyle()["subagents"].toList();
+    QCOMPARE(roles.size(), 4); QCOMPARE(roles[2].toMap()["name"].toString(), QString("马剃天爱星"));
+    QCOMPARE(roles[0], original[0]);
+    for (auto key : {"avatar", "catch"})
+      QVERIFY(QFileInfo(QUrl(roles[2].toMap()[key].toString()).toLocalFile()).isFile());
+    QVERIFY(!backend->selectSubagentCharacter(-1, "tiara"));
+    QVERIFY(!backend->selectSubagentCharacter(4, "tiara"));
+    QVERIFY(!backend->selectSubagentCharacter(0, "missing"));
+    QCOMPARE(backend->characterStyle()["subagents"].toList(), roles);
+    QVERIFY(backend->selectSubagentCharacter(2, ""));
+    QCOMPARE(backend->characterStyle()["subagents"].toList(), original);
+    window->setProperty("page", "settings"); window->setProperty("settingsTab", 5);
+    QTest::qWait(250); click("chooseCharacterButton");
+    QTRY_VERIFY(find("character_tiara") && find("character_tiara")->isVisible());
+    QVERIFY(!find("deleteCharacter_tiara")->isVisible());
+    click("subagentCharacterTab");
+    QTRY_VERIFY(find("subagentCharacterSlot")->isVisible());
+    click("subagentCharacterSlot");
+    QTest::keyClick(window, Qt::Key_End);
+    QTest::keyClick(window, Qt::Key_Return);
+    QTRY_COMPARE(find("subagentCharacterSlot")->property("currentIndex").toInt(), 3);
+    click("character_tiara");
+    QCOMPARE(backend->characterStyle()["id"].toString(), QString("tiara"));
+    QCOMPARE(backend->characterNames()[3], QString("马剃天爱星"));
+    QDir().mkpath(root + "/build/screenshots");
+    QVERIFY(window->grabWindow().save(root + "/build/screenshots/tiara-subagent-picker.png"));
+    click("resetSubagentCharacter");
+    QCOMPARE(backend->characterStyle()["subagents"].toList(), original);
+    click("mainCharacterTab");
+    QVERIFY(window->grabWindow().save(root + "/build/screenshots/tiara-character-picker.png"));
+    click("closeCharacterDialog");
+    window->setProperty("page", "chat"); backend->newSession();
+    QTRY_VERIFY(find("welcomeMascot")->property("loaded").toBool()); QTest::qWait(400);
+    QVERIFY(window->grabWindow().save(root + "/build/screenshots/tiara-welcome.png"));
+    bool found = false;
+    for (auto value : pet->appearances()) if (value.toMap()["id"] == "tiara") {
+      found = true; QVERIFY(value.toMap()["builtin"].toBool());
+    }
+    QVERIFY(found); QVERIFY(!pet->ui("removeAppearance", {{"id", "tiara"}})["ok"].toBool());
+    const auto folder = root + "/umeko-plugins/desktop-pet/assets/tiara/";
+    for (const auto &state : QStringList{"idle", "thinking", "working", "waiting", "done", "error"}) {
+      QImageReader reader(folder + state + ".webp");
+      QCOMPARE(reader.imageCount(), 6); auto image = reader.read();
+      QVERIFY(!image.isNull()); QCOMPARE(image.size(), QSize(384, 576));
+      QVERIFY(image.hasAlphaChannel()); QCOMPARE(image.pixelColor(0,0).alpha(), 0);
+    }
+    QVERIFY(pet->ui("configure", {{"appearance", "tiara"}, {"visible", true}, {"paused", false}})["ok"].toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(window->findChild<QObject*>("desktopPetWindow"), 5000);
+    auto petWindow = qobject_cast<QQuickWindow*>(window->findChild<QObject*>("desktopPetWindow"));
+    QVERIFY(petWindow); QTRY_VERIFY(petWindow->isVisible());
+    auto animation = petWindow->findChild<QObject*>("desktopPetAnimation"); QVERIFY(animation);
+    QTRY_VERIFY(animation->property("ready").toBool());
+    QVERIFY(animation->property("source").toUrl().toString().contains("/tiara/"));
+    const auto frame = animation->property("currentFrame").toInt();
+    QTRY_VERIFY(animation->property("currentFrame").toInt() != frame);
+    QVERIFY(petWindow->grabWindow().save(root + "/build/screenshots/tiara-desktop-pet.png"));
+  }
+  void whaleGirlCharacterAcrossSurfaces() {
+    const auto previous = backend->characterStyle()["id"].toString();
+    const auto options = QJsonDocument::fromVariant(
+        backend->characterConfiguration()["overrides"]).toJson();
+    const auto previousPage = window->property("page");
+    const auto restore = qScopeGuard([&] {
+      backend->selectCharacter(previous);
+      backend->configureCharacter(QString::fromUtf8(options));
+      window->setProperty("page", previousPage);
+    });
+    QVERIFY(backend->selectCharacter("whale-girl"));
+    QCOMPARE(backend->characterStyle()["name"].toString(), QString("鲸鱼娘"));
+    const auto assets = backend->characterStyle()["assets"].toMap();
+    QCOMPARE(assets.size(), 10);
+    for (auto value : assets) {
+      const auto source = QUrl(value.toString());
+      const auto path = source.isLocalFile() ? source.toLocalFile()
+                                             : ":" + source.path();
+      QImage image(path);
+      QVERIFY2(!image.isNull(), qPrintable(path));
+      QCOMPARE(image.size(), QSize(768, 768));
+      QVERIFY(image.hasAlphaChannel());
+      QCOMPARE(image.pixelColor(0, 0).alpha(), 0);
+    }
+    QVERIFY(!backend->removeCharacter("whale-girl"));
+    window->setProperty("page", "chat"); backend->newSession();
+    QTRY_VERIFY(find("welcomeMascot")->property("loaded").toBool());
+    QDir().mkpath(root + "/build/screenshots");
+    QTest::qWait(200);
+    QVERIFY(window->grabWindow().save(root + "/build/screenshots/whale-girl-welcome.png"));
+    QVERIFY(QMetaObject::invokeMethod(find("welcomeMascot"), "tap"));
+    QVERIFY(find("welcomeMascot")->property("reactionText").toString().startsWith("人，"));
+    QVERIFY(QMetaObject::invokeMethod(find("welcomeMascot"), "reset"));
+    window->setProperty("page", "settings");
+    window->setProperty("settingsTab", 5); QTest::qWait(200);
+    click("chooseCharacterButton");
+    QTRY_VERIFY(find("character_whale-girl") && find("character_whale-girl")->isVisible());
+    QVERIFY(!find("deleteCharacter_whale-girl")->isVisible());
+    QVERIFY(window->grabWindow().save(root + "/build/screenshots/whale-girl-picker.png"));
+    click("closeCharacterDialog");
+    QVERIFY(backend->selectSubagentCharacter(3, "whale-girl"));
+    QVERIFY(backend->selectCharacter("tiara"));
+    QCOMPARE(backend->characterNames()[3], QString("鲸鱼娘"));
+  }
+  void kazuhikoAndRareScenes() {
+    const auto previous = backend->characterStyle()["id"].toString();
+    const auto options = QJsonDocument::fromVariant(backend->characterConfiguration()["overrides"]).toJson();
+    auto pet = qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());
+    QVERIFY(pet);
+    const auto petConfig = pet->config();
+    const auto restore = qScopeGuard([&] {
+      backend->selectCharacter(previous);
+      backend->configureCharacter(QString::fromUtf8(options));
+      pet->ui("configure", petConfig);
+    });
+    bool found = false;
+    for (auto value : backend->characterPacks()) QVERIFY(value.toMap()["id"] != "kazuhiko");
+    for (auto value : backend->subagentCharacterPacks())
+      if (value.toMap()["id"] == "kazuhiko") found = true;
+    QVERIFY(found); QVERIFY(!backend->selectCharacter("kazuhiko"));
+    QVERIFY(!backend->removeCharacter("kazuhiko"));
+    QVERIFY(backend->selectSubagentCharacter(0, "kazuhiko"));
+    QCOMPARE(backend->characterNames()[0], QString("温水和彦"));
+    for (auto key : {"avatar", "catch"})
+      QVERIFY(!QImage(QUrl(backend->characterStyle()["subagents"].toList()[0].toMap()[key].toString()).toLocalFile()).isNull());
+    QVERIFY(backend->selectCharacter("tiara"));
+    window->setProperty("page", "chat"); backend->newSession();
+    QVERIFY(!backend->characterStyle()["easterEgg"].toMap().isEmpty());
+    const auto token = backend->conversationToken();
+    QVERIFY(!token.isEmpty());
+    auto welcome = find("welcomeMascot"); QVERIFY(welcome);
+    const auto probe = [&](QString code) {
+      QQmlExpression expression(qmlContext(welcome), welcome, code);
+      auto result = expression.evaluate();
+      if (expression.hasError()) qWarning() << expression.error();
+      if (result.metaType() == QMetaType::fromType<QJSValue>())
+        result = result.value<QJSValue>().toVariant();
+      return result;
+    };
+    QVERIFY(probe("Character.rareCover('boundary-excluded', function(){return 0.005})").toMap().isEmpty());
+    QVERIFY(!probe("Character.rareCover('boundary-included', function(){return 0.004999})").toMap().isEmpty());
+    QVERIFY(!probe("Character.rareCover('boundary-included', function(){throw Error('Cache rerolled')})").toMap().isEmpty());
+    backend->newSession();
+    QVERIFY(backend->conversationToken() != token);
+    probe("Character.rareCoverCache = Object.assign({}, Character.rareCoverCache, "
+          "{[JSON.stringify([Character.id, backend.conversationToken])]: Character.style.easterEgg})");
+    QTRY_VERIFY(!welcome->property("rareGreeting").toString().isEmpty());
+    QTRY_VERIFY(welcome->property("loaded").toBool());
+    QTest::qWait(200);
+    QVERIFY(window->grabWindow().save(root + "/build/screenshots/tiara-rare-cover.png"));
+    probe("Character.rareCoverCache = ({})");
+    QVERIFY(pet->ui("configure", {{"appearance","tiara"},{"visible",true},{"paused",false}})["ok"].toBool());
+    pet->action = pet->target = "idle"; pet->interaction.clear();
+    pet->drawIdleScene(.004999);
+    QVERIFY(pet->state()["rareIdle"].toBool()); QVERIFY(pet->state()["animated"].toBool());
+    QVERIFY(pet->state()["source"].toString().endsWith("/idle-rare.webp"));
+    QTRY_VERIFY(window->findChild<QQuickWindow*>("desktopPetWindow"));
+    auto petWindow = window->findChild<QQuickWindow*>("desktopPetWindow");
+    QTRY_VERIFY(petWindow->findChild<QObject*>("desktopPetAnimation"));
+    auto animation = petWindow->findChild<QObject*>("desktopPetAnimation");
+    QTRY_VERIFY(animation->property("ready").toBool());
+    QTRY_VERIFY(animation->property("source").toUrl().toString().endsWith("/idle-rare.webp"));
+    auto frame = animation->property("currentFrame").toInt();
+    QTRY_VERIFY(animation->property("currentFrame").toInt() != frame);
+    QVERIFY(petWindow->grabWindow().save(root + "/build/screenshots/tiara-rare-pet.png"));
+    pet->ui("configure", {{"paused",true}});
+    QTRY_VERIFY(!animation->property("playing").toBool());
+    pet->drawIdleScene(.5); QVERIFY(pet->state()["rareIdle"].toBool());
+    pet->ui("configure", {{"paused",false}});
+    pet->drawIdleScene(.005); QVERIFY(!pet->state()["rareIdle"].toBool());
+    pet->drawIdleScene(0); QVERIFY(pet->state()["rareIdle"].toBool());
+    pet->ui("hide", {}); QVERIFY(!pet->state()["rareIdle"].toBool());
+    pet->drawIdleScene(0); QVERIFY(!pet->state()["rareIdle"].toBool());
+    auto loader = petWindow->findChild<QObject*>("desktopPetAnimationLoader");
+    QVERIFY(loader); QTRY_VERIFY(!loader->property("active").toBool());
   }
   void characterArtworkAndDialogue() {
     const auto previousCharacter=backend->store.data.value("character","yanami");

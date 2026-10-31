@@ -10,7 +10,7 @@
 namespace {
 const QStringList states{"idle",    "thinking", "working",
                          "waiting", "done",     "error"};
-const QStringList builtinAppearances{"yanami", "komari", "whale-girl"};
+const QStringList builtinAppearances{"yanami", "komari", "tiara", "whale-girl"};
 const QVariantMap defaults{{"visible", false},      {"appearance", "yanami"},
                            {"size", 192},           {"alwaysOnTop", true},
                            {"paused", false},       {"sampleIntervalMs", 1500},
@@ -85,13 +85,24 @@ QVariantMap readPack(QString folder, bool check = false) {
        "形象名称需要 1–48 个字符");
   auto map = value["states"].toMap();
   need(map.contains("idle"), "states 必须包含 idle");
+  for (auto it = map.cbegin(); it != map.cend(); ++it)
+    need(states.contains(it.key()) && it.value().typeId() == QMetaType::QString,
+         "形象状态无效");
+  if (value.contains("rareIdle")) {
+    const auto rare = value["rareIdle"].toMap();
+    need(value["rareIdle"].typeId() == QMetaType::QVariantMap &&
+             rare["image"].typeId() == QMetaType::QString &&
+             rare["line"].typeId() == QMetaType::QString &&
+             !rare["line"].toString().trimmed().isEmpty() &&
+             rare["line"].toString().size() <= 120,
+         "rareIdle 需要包内 image 和最多 120 字的 line");
+    map["rareIdle"] = rare["image"];
+  }
   QSet<QString> seen;
   QVariantMap info;
   qint64 total = 0, pixels = 0;
   const auto base = QFileInfo(folder).canonicalFilePath();
   for (auto it = map.cbegin(); it != map.cend(); ++it) {
-    need(states.contains(it.key()) && it.value().typeId() == QMetaType::QString,
-         "形象状态无效");
     auto name = relative(it.value().toString());
     if (seen.contains(name))
       continue;
@@ -226,7 +237,10 @@ QVariantMap importPack(QString source, QString destination) {
                                                   Qt::CaseInsensitive) == 0) {
       auto pack = readPack(QFileInfo(source).absolutePath());
       need(QFile::copy(source, stage + "/pet.json"), "无法复制形象清单");
-      for (auto item : pack["states"].toMap()) {
+      auto files = pack["states"].toMap().values();
+      if (pack.contains("rareIdle"))
+        files << pack["rareIdle"].toMap()["image"];
+      for (auto item : files) {
         auto name = relative(item.toString());
         auto path = stage + "/" + name;
         QDir().mkpath(QFileInfo(path).absolutePath());
@@ -255,6 +269,8 @@ QVariantMap importPack(QString source, QString destination) {
     QSet<QString> keep{"pet.json"};
     for (auto value : pack["states"].toMap())
       keep.insert(value.toString());
+    if (pack.contains("rareIdle"))
+      keep.insert(pack["rareIdle"].toMap()["image"].toString());
     QDirIterator it(stage, QDir::Files, QDirIterator::Subdirectories);
     while (it.hasNext()) {
       auto path = it.next();
@@ -327,9 +343,13 @@ QVariantMap DesktopPet::state() const {
                   .toMap()
                   .value(action, pack["states"].toMap()["idle"])
                   .toString();
+  const auto rare = pack["rareIdle"].toMap();
+  if (rareIdleActive)
+    name = rare["image"].toString();
   auto top = pack["images"].toMap()[name].toMap()["contentTop"].toDouble();
   top = qIsFinite(top) ? qBound(0., top, 1.) : 0.;
   return {{"action", action},
+          {"rareIdle", rareIdleActive},
           {"contentTop", top},
           {"source",
            name.isEmpty()
@@ -337,7 +357,7 @@ QVariantMap DesktopPet::state() const {
                : QUrl::fromLocalFile(pack["directory"].toString() + "/" + name)
                      .toString()},
           {"animated",
-           pack["images"].toMap()[name].toMap().value("animated", true)},
+           pack["images"].toMap()[name].toMap().value("animated", !rareIdleActive)},
           {"appearance", pack["id"]},
           {"name", pack["name"]},
           {"running", running},
@@ -382,6 +402,10 @@ QVariantMap DesktopPet::configure(QVariantMap patch, bool persist) {
       need(false, "桌宠设置保存失败");
     }
   }
+  if (value["appearance"] != options["appearance"] || !value["visible"].toBool()) {
+    if (rareIdleActive) emit reaction("");
+    rareIdleActive = false;
+  }
   options = value;
   timer.setInterval(value["sampleIntervalMs"].toInt());
   emit changed();
@@ -398,6 +422,8 @@ void DesktopPet::start() {
 }
 void DesktopPet::stop() {
   running = false;
+  rareIdleActive = false;
+  emit reaction("");
   timer.stop();
   emit changed();
 }
@@ -456,6 +482,11 @@ void DesktopPet::sample() {
                            {"activeSubagents", subagents}};
   bool changedActivity = nextActivity != activity;
   activity = nextActivity;
+  if (target != "idle" && rareIdleActive) {
+    rareIdleActive = false;
+    changedActivity = true;
+    emit reaction("");
+  }
   if (target != previousTarget && (target == "done" || target == "error"))
     speak(target);
   if (step() || changedActivity)
@@ -475,6 +506,10 @@ void DesktopPet::interact(QString kind) {
   if (!running || (kind == lastKind && now - lastInteraction < 400))
     return;
   lastKind = kind;
+  if (rareIdleActive) {
+    rareIdleActive = false;
+    emit changed();
+  }
   lastInteraction = now;
   speak(kind);
   if (QStringList{"tap", "hover", "drag"}.contains(kind) &&
@@ -484,6 +519,21 @@ void DesktopPet::interact(QString kind) {
             options["minimumStateMs"].toInt();
     if (step())
       emit changed();
+  }
+}
+void DesktopPet::idleCycle() {
+  drawIdleScene(QRandomGenerator::global()->generateDouble());
+}
+void DesktopPet::drawIdleScene(double draw) {
+  const auto rare = packs[options["appearance"].toString()].toMap()["rareIdle"].toMap();
+  if (!visible() || options["paused"].toBool() || action != "idle" ||
+      target != "idle" || !interaction.isEmpty() || rare.isEmpty())
+    return;
+  const bool previous = rareIdleActive;
+  rareIdleActive = draw < 0.005;
+  if (previous || rareIdleActive) {
+    emit reaction(rareIdleActive ? rare["line"].toString() : "");
+    emit changed();
   }
 }
 QVariantMap DesktopPet::ui(QString method, QVariantMap args) {

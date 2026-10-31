@@ -14,7 +14,7 @@ void requireCharacter(bool ok, const char *text) {
   if (!ok)
     throw std::runtime_error(text);
 }
-const QStringList builtInCharacters{"yanami", "komari", "kaju"};
+const QStringList builtInCharacters{"yanami", "komari", "kaju", "tiara", "whale-girl", "kazuhiko"};
 QString unpackCharacterZip(const QString &source, const QString &destination) {
   constexpr quint64 limit = 96 * 1024 * 1024 + 131072;
   QFile input(source);
@@ -295,7 +295,7 @@ QVariantMap defaultCharacter() {
           {"lines", QVariantMap{}},
           {"builtin", true}};
 }
-QVariantList characterLibrary(const QString &root, const QString &directory) {
+QVariantList characterLibrary(const QString &root, const QString &directory, bool subagents = false) {
   QVariantList rows{defaultCharacter()};
   const auto append = [&](const QString &file, bool builtIn) {
     try {
@@ -310,7 +310,9 @@ QVariantList characterLibrary(const QString &root, const QString &directory) {
     } catch (const std::exception &) {
     }
   };
-  for (const auto &id : QStringList{"komari", "kaju"}) {
+  auto identifiers = QStringList{"komari", "kaju", "tiara", "whale-girl"};
+  if (subagents) identifiers << "kazuhiko";
+  for (const auto &id : identifiers) {
     auto file =
         ":/qt/qml/Umeko/App/app/icons/characters/" + id + "/manifest.json";
     if (!QFileInfo::exists(file))
@@ -445,7 +447,7 @@ bool Backend::configureCharacter(QString raw) {
     for (auto &value : roles) {
       auto row = value.toMap();
       for (const auto &kind : QStringList{"avatar", "catch"}) {
-        if (row[kind].toString().isEmpty())
+        if (row.value(kind).toString().isEmpty())
           continue;
         const auto source = U::localPath(row[kind].toString());
         const auto info = QFileInfo(source);
@@ -494,8 +496,14 @@ bool Backend::configureCharacter(QString raw) {
   }
 }
 QVariantList Backend::characterPacks() const {
+  return characterPacksFor(false);
+}
+QVariantList Backend::subagentCharacterPacks() const {
+  return characterPacksFor(true);
+}
+QVariantList Backend::characterPacksFor(bool subagents) const {
   QVariantList rows;
-  for (const auto &value : characterLibrary(root, store.directory)) {
+  for (const auto &value : characterLibrary(root, store.directory, subagents)) {
     const auto row = value.toMap();
     const auto assets = row["assets"].toMap();
     QString path;
@@ -547,14 +555,87 @@ QVariantMap Backend::characterStyle() const {
       !packWelcome["greetings"].toList().isEmpty() ||
       !userWelcome["greetings"].toList().isEmpty() ||
       !selected["lines"].toMap()["greeting"].toString().isEmpty();
+  // Only bundled scenes participate; imported character packs cannot shadow them.
+  auto sceneDirectory = QString(":/qt/qml/Umeko/App/app/icons/characters/rare-scenes");
+  if (!QFileInfo::exists(sceneDirectory + "/catalog.json"))
+    sceneDirectory = root + "/app/icons/characters/rare-scenes";
+  static const auto scenes = U::readJson(sceneDirectory + "/catalog.json", QVariantMap{}).toMap();
+  auto easterEgg = scenes.value(selected["id"].toString()).toMap();
+  if (!easterEgg.isEmpty()) {
+    const auto path = sceneDirectory + "/" + selected["id"].toString() + ".png";
+    easterEgg["source"] = path.startsWith(':') ? "qrc" + path : QUrl::fromLocalFile(path).toString();
+  }
   return {{"id", selected["id"]},
           {"name", selected["name"]},
           {"assets", resolved},
           {"lines", selected["lines"]},
           {"animatedSources", animatedSources},
           {"customGreetings", customGreetings},
+          {"easterEgg", easterEgg},
           {"dialogue", characterConfig["scenes"]},
           {"subagents", characterConfig["subagents"]}};
+}
+bool Backend::selectSubagentCharacter(int slot, QString id) {
+  if (slot < 0 || slot >= 4)
+    return false;
+  if (id.isEmpty()) {
+    auto options = characterOptions;
+    auto roles = options["subagents"].toList();
+    while (roles.size() < 4)
+      roles << QVariantMap{};
+    roles[slot] = QVariantMap{};
+    options["subagents"] = roles;
+    return configureCharacter(QString::fromUtf8(QJsonDocument::fromVariant(options).toJson()));
+  }
+  QVariantMap selected;
+  for (const auto &value : characterLibrary(root, store.directory, true))
+    if (value.toMap()["id"] == id)
+      selected = value.toMap();
+  if (selected.isEmpty())
+    return false;
+  try {
+    const auto assets = selected["assets"].toMap();
+    const auto source = [&](QString key, QString fallback) {
+      const auto candidates = key == "avatarSmile" ? QStringList{"avatarSmile", "reply", "welcome"} : QStringList{key};
+      for (const auto &candidate : candidates)
+        if (assets.contains(candidate))
+          return selected["directory"].toString() + "/" + assets[candidate].toString();
+      const auto resource = ":/qt/qml/Umeko/App/app/icons/" + fallback;
+      return QFileInfo::exists(resource) ? resource : root + "/app/icons/" + fallback;
+    };
+    QVariantMap row{{"name", selected["name"]}};
+    const auto scenes = selected["_configuration"].toMap()["scenes"].toMap();
+    const auto reply = scenes["reply"].toMap();
+    for (const auto &key : QStringList{"tap", "celebration"})
+      row[key] = reply.value(key, characterDefaults["scenes"].toMap()["reply"].toMap()[key]);
+    row["fileDrop"] = scenes["files"].toMap().value("drop", QString("松开以添加附件"));
+    const auto directory = store.directory + "/character-assets";
+    requireCharacter(!QFileInfo(directory).isSymLink() && QDir().mkpath(directory), "无法创建角色资源目录");
+    const QMap<QString, QString> sources{{"avatar", source("avatarSmile", "avatars/smile.webp")},
+                                         {"catch", source("catch", "yanami-catch.png")}};
+    for (auto it = sources.cbegin(); it != sources.cend(); ++it) {
+      QFile input(it.value());
+      requireCharacter(input.open(QIODevice::ReadOnly) && input.size() <= 12 * 1024 * 1024, "无法读取角色头像或文件过大");
+      const auto bytes = input.readAll();
+      const auto digest = QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+      const auto target = directory + "/" + digest + "." + QFileInfo(it.value()).suffix().toLower();
+      if (!QFileInfo::exists(target)) {
+        QSaveFile output(target);
+        requireCharacter(output.open(QIODevice::WriteOnly) && output.write(bytes) == bytes.size() && output.commit(), "无法复制角色头像");
+      }
+      row[it.key()] = target;
+    }
+    auto options = characterOptions;
+    auto roles = options["subagents"].toList();
+    while (roles.size() < 4)
+      roles << QVariantMap{};
+    roles[slot] = row;
+    options["subagents"] = roles;
+    return configureCharacter(QString::fromUtf8(QJsonDocument::fromVariant(options).toJson()));
+  } catch (const std::exception &error) {
+    emit toast("角色配置失败：" + QString::fromUtf8(error.what()));
+    return false;
+  }
 }
 bool Backend::selectCharacter(QString id) {
   bool exists = false;
