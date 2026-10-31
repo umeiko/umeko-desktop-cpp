@@ -3536,7 +3536,7 @@ def create_provider(context): return Interactive(context)
     QVERIFY(manager);
     QSet<QString> builtins;
     for(const auto &row:manager->rows())builtins.insert(row.toMap()["id"].toString());
-    QCOMPARE(builtins,QSet<QString>({"file-tree","git-viewer","terminal","desktop-pet","global-agents","pi-manager"}));
+    QCOMPARE(builtins,QSet<QString>({"file-tree","git-viewer","terminal","desktop-pet","global-agents","pi-manager","change-review"}));
     QTemporaryDir workspace;QVERIFY(workspace.isValid());
     QFile file(workspace.filePath("hello.md"));QVERIFY(file.open(QIODevice::WriteOnly));file.write("# Plugin fixture\n");file.close();
 #ifndef Q_OS_WIN
