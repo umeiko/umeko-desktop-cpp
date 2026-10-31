@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "markdown.js" as Markdown
 
 Column {
     id: root
@@ -82,7 +83,15 @@ Column {
             InlineScrollView {
                 visible: (root.about.release.notes || "") !== ""
                 Layout.fillWidth: true; Layout.preferredHeight: 160; clip: true
-                TextArea { objectName: "appReleaseNotes"; text: root.about.release.notes || ""; textFormat: TextEdit.PlainText; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; color: Theme.ink; font.pixelSize: Theme.font(12); padding: 12
+                TextArea {
+                    objectName: "appReleaseNotes"
+                    text: Markdown.forQt(root.about.release.notes || "")
+                    textFormat: TextEdit.MarkdownText
+                    readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap
+                    color: Theme.ink; palette.link: Theme.accent
+                    selectionColor: Theme.selectionBg; selectedTextColor: Theme.selectionText
+                    font.pixelSize: Theme.font(12); padding: 12
+                    onLinkActivated: link => { if (/^https?:\/\//i.test(link)) Qt.openUrlExternally(link) }
                     background: Rectangle { radius: 8; color: Theme.bg; border.color: Theme.line }
                 }
             }
