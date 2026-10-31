@@ -453,6 +453,38 @@ void PiManagement::saveModes(std::shared_ptr<Session> session) {
   if(!session->busy() && !session->subagentsActive) b->retire(session);
   emit changed(); emit b->chatChanged();
 }
+void PiManagement::setToolVisible(QString name, bool visible) {
+  auto s=b->view;
+  if(s->busy() || s->subagentsActive || m_busy || b->kernelBusy())
+    throw std::runtime_error("请等待当前任务和子代理结束后修改工具可见性");
+  bool found=false;
+  for(const auto &value:s->resources["allTools"].toList()) {
+    const auto tool=value.toMap();
+    found |= tool["name"]==name && tool["exposure"]!="hidden";
+  }
+  if(!found) throw std::runtime_error("工具列表已变更，请刷新后重试");
+  if(!visible && !s->blockedTools.contains(name) && s->blockedTools.size()>=4096)
+    throw std::runtime_error("本会话工具可见性设置已达上限");
+  const auto previous=s->blockedTools;
+  s->blockedTools.removeAll(name);
+  if(!visible) s->blockedTools.append(name);
+  try {
+    if(!s->id.isEmpty()) { b->setMetadata(s->id,{{"blockedTools",s->blockedTools}}); if(!b->store.save()) throw std::runtime_error("工具可见性保存失败"); }
+  } catch(...) {
+    s->blockedTools=previous;
+    if(!s->id.isEmpty()) b->setMetadata(s->id,{{"blockedTools",previous}});
+    throw;
+  }
+  auto tools=s->resources["allTools"].toList();
+  for(auto &value:tools) {
+    auto tool=value.toMap(); if(tool["name"]!=name) continue;
+    tool["visible"]=visible;if(!visible)tool["active"]=false;value=tool;
+  }
+  s->resources["allTools"]=tools;
+  if(!visible) { auto names=s->resources["tools"].toList();names.removeAll(name);s->resources["tools"]=names; }
+  s->stale=true; b->retire(s);
+  emit changed(); emit b->chatChanged();
+}
 void PiManagement::setExtensionMode(QString id, QString mode) {
   if(m_busy || b->kernelBusy() || b->store.data["agent"].toMap()["safeMode"].toBool() || !QStringList{"global","session","disabled"}.contains(mode)) return;
   if(!extensionsCurrent()) { emit b->toast("请刷新当前对话的插件列表"); return; }

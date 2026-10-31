@@ -87,6 +87,7 @@ bool SessionPreview::activate(int token, bool readOnly) {
     auto s = b->fresh(saved["workspace"].toString());
     s->id = id;
     s->extensionModes = b->metadata(id)["extensionModes"].toMap();
+    s->blockedTools = b->metadata(id)["blockedTools"].toStringList();
     s->file = saved["file"].toString();
     s->title = saved["title"].toString();
     s->model = saved["model"].toString();
