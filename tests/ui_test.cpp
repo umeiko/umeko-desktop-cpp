@@ -3965,6 +3965,63 @@ def create_provider(context): return Interactive(context)
     QVERIFY(manager->openPage("change-review")); QTRY_VERIFY(find("changeReviewWidget"));
     QVERIFY(!QFileInfo::exists(workspace.filePath(".git")));
   }
+  void globalAgentEmptyStateCreation() {
+    configureAPI();
+    backend->newSession();
+    QTemporaryDir workspace;
+    QVERIFY(workspace.isValid());
+    backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());
+    window->setProperty("page", "chat");
+    window->resize(1640, 1040);
+    auto manager = backend->desktopExtensions;
+    auto g = manager->globalAgents();
+    QVERIFY(g);
+    QVERIFY(g->agents.isEmpty());
+    QString id;
+    auto cleanup = qScopeGuard([&] {
+      if (!id.isEmpty()) g->ui("delete", {{"id", id}});
+      manager->closePage();
+    });
+    QVERIFY(manager->openPage("global-agents"));
+    QTRY_VERIFY(find("globalAgentsPage"));
+    auto page = find("globalAgentsPage");
+    auto dialog = page->findChild<QObject *>("createGlobalAgentDialog");
+    QVERIFY(dialog);
+    QTRY_VERIFY(!page->property("state").value<QJSValue>()
+                     .property("defaultCharacter").toString().isEmpty());
+    QTRY_VERIFY(!find("webPane")->property("moving").toBool());
+    QVERIFY(find("globalAgentsList"));
+    QVERIFY(!find("globalAgentsList")->isVisible());
+    // Send a real pointer click, rather than invoking form() directly: an
+    // empty ListView used to sit above this button and swallow the press.
+    click("createFirstGlobalAgentButton");
+    QTRY_VERIFY(dialog->property("opened").toBool());
+    QDir().mkpath(root + "/build/global-agents-ui");
+    window->grabWindow().save(root + "/build/global-agents-ui/empty-state-create.png");
+    click("cancelGlobalCreation");
+    QTRY_VERIFY(!dialog->property("opened").toBool());
+    click("newGlobalAgentButton");
+    QTRY_VERIFY(dialog->property("opened").toBool());
+    click("confirmCreateGlobalAgent");
+    QTRY_COMPARE(g->agents.size(), 1);
+    id = g->agents.first().toMap()["id"].toString();
+    QTRY_COMPARE(page->property("selected").toString(), id);
+    QVERIFY(QMetaObject::invokeMethod(page, "openAgent", Q_ARG(QVariant, QString{})));
+    QTRY_VERIFY(find("globalAgentsList")->isVisible());
+    QCOMPARE(find("globalAgentsList")->property("count").toInt(), 1);
+    QVERIFY(!find("createFirstGlobalAgentButton")->isVisible());
+    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                      point(find("globalAgentsList"), 40, 44));
+    QTRY_COMPARE(page->property("selected").toString(), id);
+    QVERIFY(g->ui("delete", {{"id", id}})["ok"].toBool());
+    id.clear();
+    QVERIFY(QMetaObject::invokeMethod(page, "openAgent", Q_ARG(QVariant, QString{})));
+    QTRY_VERIFY(find("createFirstGlobalAgentButton")->isVisible());
+    QVERIFY(!find("globalAgentsList")->isVisible());
+    click("createFirstGlobalAgentButton");
+    QTRY_VERIFY(dialog->property("opened").toBool());
+    click("cancelGlobalCreation");
+  }
   void globalAgentCreationBoundary() {
     configureAPI(); backend->newSession();
     auto manager=backend->desktopExtensions;auto g=manager->globalAgents();
