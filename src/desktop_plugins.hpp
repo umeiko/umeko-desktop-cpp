@@ -100,5 +100,8 @@ private:
   void send(QString id, QVariantMap request);
   void receive(QString id, std::shared_ptr<Worker> worker);
   void hostEvent(QString id, QVariantMap event);
+  void reviewEvent(QString key, QVariantMap event);
+  QHash<QString, QString> reviewLoops;
+  QHash<QString, QPair<QString, QString>> reviewRequests;
   QString manage(QVariantMap request, std::function<bool(QVariantMap)> done);
 };

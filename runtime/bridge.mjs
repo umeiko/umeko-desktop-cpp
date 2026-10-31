@@ -8,7 +8,7 @@ import { PI_COMMAND_TOOL, DESKTOP_PI_PROMPT, createPiCommandController } from ".
 import { UMEKO_TOOL, UMEKO_PROMPT, createUmekoControl, configureUmekoDocs, coordinatorExtension } from "./umeko-control.mjs";
 import { rpcCustom } from "./rpc-ui.mjs";
 import { createSubagentExtension, projectSubagents } from "./subagents.mjs";
-import { createWidgetMessages } from "./widget-messages.mjs";
+import { createWidgetMessages, createLoopReview } from "./widget-messages.mjs";
 import { createInputQueue } from "./input-queue.mjs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createInterface } from "node:readline";
@@ -38,6 +38,7 @@ const nativeTools = [...allToolNames, "codemode", "tool_search", CHATBOX_TOOL, P
 const version = JSON.parse(readFileSync(new URL("../package.json", entry), "utf8")).version;
 const emit = (event) => process.stdout.write(JSON.stringify(event) + "\n");
 const umekoControl = createUmekoControl({ emit });
+const loopReview=createLoopReview({emit});
 const widgetMessages=createWidgetMessages({getSession:()=>runtime?.session,emit});
 const subagents = createSubagentExtension({ emit, restoreSession: restoreSubagentSession });
 const textOf = content => typeof content === "string" ? content : (content || []).filter(c => c.type === "text").map(c => c.text).join("\n");
@@ -297,6 +298,7 @@ async function init(input) {
           additionalExtensionPaths: builtins.map(name => "builtin:" + name) } : {}),
         appendSystemPrompt: [DESKTOP_PI_PROMPT + " " + UMEKO_PROMPT + " Reply in the user's language.", input.agent?.instructions || ""],
         extensionFactories: [
+          ...(input.loopReview ? [{name:"loop-review",hidden:true,replaceable:false,factory:loopReview.extension}] : []),
           ...(input.globalCoordinator ? [{name:"global-coordinator-boundary",hidden:true,replaceable:false,factory:coordinatorExtension}] : []),
           { name: "chatbox", builtin: true, replaceable: false, factory: pi => chatboxExtension(pi, () => config.webview || {}) },
           { name: "pi-commands", builtin: true, replaceable: false, factory: piCommands.extension },
@@ -394,6 +396,7 @@ async function state() {
     sessions: (config.globalCoordinator ? [] : list).map(s => ({ id: s.id, title: s.name || s.firstMessage.slice(0, 28) || "新会话", file: s.path, workspace: s.cwd })), messages: config.globalCoordinator ? messages.map(row=>({...row,text:row.text?.slice(0,6000),thinking:row.thinking?.slice(0,6000),tools:row.tools?.slice(0,8)})) : messages,
     resources: await capabilities(),
     contextUsage: contextUsage(session),
+    leafId: manager.getLeafId(),
     tree: paged || config.globalCoordinator ? [] : branch.filter(e => e.type === "message").map(e => ({ id: e.id, role: e.message.role, text: textOf(e.message.content).slice(0, 80) })),
     ...(paged ? {indexedHistory:{leafId:manager.getLeafId(), totalMessages:candidates.length}} : {}),
   });
@@ -440,6 +443,7 @@ async function promptWithInterrupts(first) {
 }
 
 async function execute(input) {
+  if (input.type === "loop_review_response") { loopReview.response(input); return; }
   if (input.type === "umeko_response") { umekoControl.response(input); return; }
   if(input.type==='widget-notify' && runtime && (executing || input.notification?.wake===false)) {
     try {await widgetMessages.deliver(input.notification);}catch(error){emit({type:'widget_delivery',id:input.notification?.id,status:'failed',error:error.message});}
@@ -526,6 +530,7 @@ let rl;
 async function shutdown() {
   if (closing) return;
   closing = true;
+  loopReview.clear();
   umekoControl.clear();
   subagents.dispose();
   piCommands.clear();

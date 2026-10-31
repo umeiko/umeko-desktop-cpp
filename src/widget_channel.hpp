@@ -12,6 +12,7 @@ public:
   void stopNotifications(QString id);
 
 private:
+  friend class DesktopPlugins;
   struct State {
     QString token, key;
     QVariantMap snapshot;

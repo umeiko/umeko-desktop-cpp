@@ -316,6 +316,7 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
     }
   }
   values["mcpEnv"] = envValues;
+  values["loopReview"] = true;
   if (!s->globalAgent.isEmpty()) { const auto extra=desktopExtensions->globalAgents()->runtimeConfig(s); for(auto it=extra.cbegin();it!=extra.cend();++it) values[it.key()]=it.value(); }
   auto p = new QProcess(this);
   U::hideConsole(p);
@@ -528,7 +529,17 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     sessionInfo(s, payload["session"].toMap());
   } else if (type == "session")
     sessionInfo(s, payload["session"].toMap());
-  else if (type == "delta" || type == "thinking_delta") {
+  else if (type == "history_checkpoint") {
+    s->searchLeaf = payload["leafId"].toString();
+  } else if (type == "native_entry") {
+    s->searchLeaf = payload["entryId"].toString();
+    for(int i=s->messages.size()-1;i>=0;--i){
+      auto row=s->messages[i].toMap();
+      if(row["role"]==payload["role"] && row["entryId"].toString().isEmpty()){
+        row["entryId"]=payload["entryId"];s->messages[i]=row;transcript=true;break;
+      }
+    }
+  } else if (type == "delta" || type == "thinking_delta") {
     if (s->messages.isEmpty() ||
         s->messages.last().toMap()["role"] != "assistant")
       s->messages << QVariantMap{
@@ -719,6 +730,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     if (visible)
       emit toast(payload["message"].toString());
   } else if (type == "state") {
+    s->searchLeaf = payload["leafId"].toString();
     sessionInfo(s, payload["session"].toMap());
     s->messages = payload["messages"].toList();
     children->sync(s);

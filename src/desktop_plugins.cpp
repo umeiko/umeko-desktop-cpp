@@ -61,6 +61,12 @@ DesktopPlugins::DesktopPlugins(Backend *backend)
   host = new WidgetHost(this);
   companion = new DesktopPet(this);
   coordinators = new GlobalAgents(this);
+  connect(this, &DesktopPlugins::response, this, [this](QString request, QVariantMap) {
+    if (!reviewRequests.contains(request)) return;
+    auto target = reviewRequests.take(request);
+    if (auto record = b->records.value(target.first))
+      b->writePi(record, {{"type", "loop_review_response"}, {"id", target.second}});
+  });
   synchronize();
 }
 DesktopPlugins::~DesktopPlugins() { close(); }
@@ -861,6 +867,11 @@ QString DesktopPlugins::saveConfig(QString id, QString raw) {
                     settings = old;
                     return false;
                   }
+                  if (entry(id)["liveConfig"].toBool()) {
+                    if (workers.contains(id)) send(id, {{"id", U::uuid()}, {"operation", "configure"}, {"arguments", QVariantMap{{"config", doc.toVariant()}}}});
+                    if (m_page == id) emit pageChanged();
+                    return true;
+                  }
                   if (m_page == id)
                     closePage();
                   stop(id);
@@ -977,7 +988,30 @@ QVariantMap DesktopPlugins::execute(QString operation, QVariantMap args,
   return channel->execute(operation, args, callerKey);
 }
 void DesktopPlugins::observe(QString key, QVariantMap value) {
+  reviewEvent(key, value);
   channel->observe(key, value);
   coordinators->observe(key, value);
   host->observe(key, value);
+}
+
+void DesktopPlugins::reviewEvent(QString key, QVariantMap value) {
+  const QString id = "change-review";
+  auto record = b->records.value(key);
+  if (!record) return;
+  const auto kind = value["type"].toString();
+  if (kind == "exit") {
+    const auto loop = reviewLoops.take(key);
+    if (!loop.isEmpty() && enabled(id))
+      callFor(id, "finish", QString::fromUtf8(frame({{"loopId", loop}, {"reason", "exited"}})), false, 10000, channel->snapshot(record));
+    return;
+  }
+  if (kind != "loop_review") return;
+  const auto phase = value["phase"].toString(), loop = value["loopId"].toString();
+  if ((phase != "begin" && phase != "finish") || loop.isEmpty()) return;
+  if (phase == "begin") reviewLoops[key] = loop; else reviewLoops.remove(key);
+  QString request;
+  if (entries.contains(id) && enabled(id))
+    request = callFor(id, phase, QString::fromUtf8(frame({{"loopId", loop}, {"reason", value.value("reason", "completed")}})), false, 10000, channel->snapshot(record));
+  if (!request.isEmpty()) reviewRequests[request] = {key, value["id"].toString()};
+  else b->writePi(record, {{"type", "loop_review_response"}, {"id", value["id"]}});
 }

@@ -5,6 +5,7 @@ QVariantList ChatModel::project(const QVariantList &messages) {
   QVariantList out;
   for (auto v : messages) {
     auto m = v.toMap();
+    m["_entries"] = QStringList{m["entryId"].toString(),m["_searchId"].toString()};
     if (m["role"] == "user") {
       auto parsed = U::splitAttachments(m["text"].toString());
       m["text"] = parsed.first;
@@ -58,6 +59,10 @@ QVariantList ChatModel::project(const QVariantList &messages) {
         (continuing || !out.last().toMap()["tools"].toList().isEmpty() ||
          !m["tools"].toList().isEmpty())) {
       auto group = out.last().toMap();
+      auto entries = group["_entries"].toStringList();
+      entries.append(m["entryId"].toString());
+      entries.append(m["_searchId"].toString());
+      group["_entries"] = entries;
       if (m.contains("diagnosticId"))
         group["diagnosticId"] = m["diagnosticId"];
       auto activity = group["activity"].toList();
@@ -125,6 +130,10 @@ QVariantList ChatModel::project(const QVariantList &messages) {
     out[i] = m;
   }
   return out;
+}
+int ChatModel::rowForEntry(const QString &entry) const {
+  for(int i=0;i<rows.size();++i)if(rows[i].toMap()["_entries"].toStringList().contains(entry))return i;
+  return -1;
 }
 void ChatModel::update(const QVariantList &messages) {
   auto projected = project(messages);

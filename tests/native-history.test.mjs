@@ -45,6 +45,16 @@ test('native desktop receives the entire history beyond the Python paging thresh
     assert.equal(state.messages.at(-1).text, 'Answer 299');
     assert.equal(state.tree.length, 600);
     assert.equal(state.indexedHistory, undefined);
+    // Loading a session may append native model/settings entries. The reported
+    // leaf must exist on disk and contain the last visible message as ancestor.
+    const persisted = SessionManager.open(manager.getSessionFile());
+    let cursor = persisted.getEntry(state.leafId), found = false;
+    assert.ok(cursor, 'state reports a persisted branch leaf');
+    while (cursor) {
+      found ||= cursor.id === state.messages.at(-1).entryId;
+      cursor = cursor.parentId ? persisted.getEntry(cursor.parentId) : null;
+    }
+    assert.ok(found, 'search leaf contains the displayed conversation');
   } finally {
     if (child.exitCode === null) {
       child.stdin.write('{"type":"shutdown"}\n');

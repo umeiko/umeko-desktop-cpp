@@ -11,6 +11,7 @@
 #include <QDesktopServices>
 #include <QImageReader>
 #include <QAbstractItemModel>
+#include <QAbstractItemModelTester>
 #include <QJSValue>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
@@ -504,6 +505,129 @@ private slots:
     const auto out = root + "/build/screenshots";
     QDir().mkpath(out);
     window->grabWindow().save(out + "/subagent-native-queue.png");
+  }
+  void sidebarContextMenuPlacement() {
+    const auto previous=backend->view;const auto savedIndex=backend->sessionIndex;
+    const auto savedProjects=backend->store.data["projects"];
+    const auto scale=backend->fontScale();const auto language=backend->language();
+    const auto size=window->size();
+    const auto workspace=directory.filePath("menu-workspace");QDir().mkpath(workspace);
+    const auto project=backend->ensureProject(workspace);
+    backend->sessionIndex.clear();
+    for(int i=0;i<30;++i)backend->sessionIndex<<QVariantMap{{"id","menu-session-"+QString::number(i)},{"title",QString("Context menu fixture %1").arg(i,2,10,QChar('0'))},{"workspace",workspace}};
+    backend->activate(backend->fresh(workspace));
+    QTRY_VERIFY(find("sidebarRow_menu-session-0"));
+    // A preceding search may have just reopened the animated sidebar.
+    QTest::qWait(300); window->grabWindow();
+    auto menu=window->findChild<QObject*>("sessionContextMenu");
+    auto projectMenu=window->findChild<QObject*>("projectContextMenu");
+    QVERIFY(menu);QVERIFY(projectMenu);
+    const auto initial=menu->property("implicitHeight").toDouble();
+    const auto openRow=[&](QString name){auto row=find(name);const auto cursor=point(row);QTest::mouseClick(window,Qt::RightButton,Qt::NoModifier,cursor);return cursor;};
+    const auto verify=[&](QObject *popup,QPoint cursor,bool exact){
+      QTRY_VERIFY(popup->property("visible").toBool());QTest::qWait(140);
+      const auto x=popup->property("x").toDouble(),y=popup->property("y").toDouble();
+      const auto w=popup->property("width").toDouble(),h=popup->property("height").toDouble();
+      qInfo()<<popup->objectName()<<"cursor:"<<cursor<<"rect:"<<QRectF(x,y,w,h)<<"anchored:"<<popup->property("positionFromAnchor")<<"request:"<<popup->property("requestedPosition");
+      QVERIFY2(x>=9 && y>=9,"Context menu is outside the top/left window edge");
+      QVERIFY2(x+w<=window->width()-9 && y+h<=window->height()-9,"Context menu overflows the window");
+      if(exact){QVERIFY(qAbs(x-cursor.x())<2);QVERIFY2(qAbs(y-cursor.y())<2,"Cold popup lost the right-click anchor");}
+      else{QVERIFY(x<=cursor.x()+1 && cursor.x()-x<=w+12);QVERIFY(y<=cursor.y()+1 && cursor.y()-y<=h+12);}
+    };
+    const auto close=[&](QObject *popup){QVERIFY(QMetaObject::invokeMethod(popup,"close"));QTRY_VERIFY(!popup->property("visible").toBool());QTest::qWait(25);};
+    const auto cursor=openRow("sidebarRow_menu-session-0");verify(menu,cursor,true);close(menu);
+    verify(menu,openRow("sidebarRow_menu-session-0"),true);close(menu);
+    verify(projectMenu,openRow("sidebarRow_"+project["id"].toString()),true);close(projectMenu);
+    backend->setFontScale(2);backend->setLanguage("en");QTest::qWait(100);
+    verify(menu,openRow("sidebarRow_menu-session-0"),false);close(menu);
+    backend->setFontScale(1);backend->setLanguage("zh");QTest::qWait(100);
+    QVERIFY(QMetaObject::invokeMethod(find("projectList"),"positionViewAtEnd"));QTest::qWait(100);
+    QTRY_VERIFY(find("sidebarRow_menu-session-29"));verify(menu,openRow("sidebarRow_menu-session-29"),false);close(menu);
+    window->resize(1100,720);QTest::qWait(100);
+    auto owner=window->findChild<QObject*>("sidebarMenus");QVERIFY(owner);
+    const QVariant row=QVariantMap{{"id","edge"},{"kind","session"},{"title","Edge"}};
+    const QVariant edge=QPointF(1085,705);
+    QVERIFY(QMetaObject::invokeMethod(owner,"openFor",Q_ARG(QVariant,row),Q_ARG(QVariant,edge)));
+    verify(menu,QPoint(1085,705),false);close(menu);
+    qInfo()<<"Sidebar cold menu height before polish:"<<initial<<"click anchor verified:"<<cursor;
+    window->resize(size);backend->setFontScale(scale);backend->setLanguage(language);
+    backend->sessionIndex=savedIndex;backend->store.data["projects"]=savedProjects;backend->activate(previous);
+  }
+  void conversationSearchSidebar() {
+    auto modelTester=std::make_unique<QAbstractItemModelTester>(backend->conversationSearch,QAbstractItemModelTester::FailureReportingMode::QtTest,this);
+    const auto previous=backend->view;
+    const auto workspace=directory.filePath("search-workspace");QDir().mkpath(workspace);
+    const auto history=directory.filePath("search-history.jsonl");
+    QFile source(history);QVERIFY(source.open(QIODevice::WriteOnly));
+    for(const auto entry:QVariantList{
+      QVariantMap{{"type","session"},{"id","search-history"},{"cwd",workspace}},
+      QVariantMap{{"type","message"},{"id","search-u"},{"parentId",QVariant{}},{"message",QVariantMap{{"role","user"},{"content","marker original question"},{"timestamp",1700000000000LL}}}},
+      QVariantMap{{"type","message"},{"id","search-a"},{"parentId","search-u"},{"message",QVariantMap{{"role","assistant"},{"content","marker code answer"},{"timestamp",1700000001000LL}}}}})
+      source.write(QJsonDocument::fromVariant(entry).toJson(QJsonDocument::Compact)+'\n');
+    for(int i=0;i<1000;++i){
+      QVariantMap entry{{"type","message"},{"id","bulk-"+QString::number(i)},
+        {"parentId",i ? "bulk-"+QString::number(i-1) : "search-a"},
+        {"message",QVariantMap{{"role",i%2 ? "assistant" : "user"},{"content",QString("sample ").repeated(80)},{"timestamp",1700000002000LL+i}}}};
+      source.write(QJsonDocument::fromVariant(entry).toJson(QJsonDocument::Compact)+'\n');
+    }
+    source.close();
+    backend->sessionIndex<<QVariantMap{{"id","search-history"},{"file",history},{"workspace",workspace},{"title","Search fixture"}};
+    auto running=backend->fresh(workspace);running->id="search-running";running->phase="working";
+    running->draft="keep my draft";running->attachments<<QVariantMap{{"id","keep-file"},{"path",history},{"name","fixture"}};
+    backend->activate(running);
+    click("searchChatsButton");
+    QTRY_VERIFY(window->property("searchVisible").toBool());
+    auto pane=find("conversationSearch");auto input=find("conversationSearchInput");QVERIFY(pane);QVERIFY(input);
+    input->setProperty("text","marker");QVERIFY(QMetaObject::invokeMethod(pane,"execute"));
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->conversationSearch->busy(),10000);
+    QCOMPARE(backend->conversationSearch->count(),2);
+    modelTester.reset();
+    QTimer heartbeat;heartbeat.setInterval(10);QElapsedTimer clock;clock.start();qint64 lastTick=0,maxGap=0;int ticks=0;
+    connect(&heartbeat,&QTimer::timeout,this,[&]{const auto now=clock.elapsed();maxGap=qMax(maxGap,now-lastTick);lastTick=now;++ticks;});heartbeat.start();
+    input->setProperty("text","sample");QVERIFY(QMetaObject::invokeMethod(pane,"execute"));
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->conversationSearch->busy(),15000);heartbeat.stop();
+    QCOMPARE(backend->conversationSearch->count(),20000);QVERIFY(backend->conversationSearch->limitHit());
+    QVERIFY(ticks>=4);QVERIFY2(maxGap<1000,"Bulk results blocked the GUI thread");
+    qInfo()<<"20,000 native search hits, UI heartbeats:"<<ticks<<"maximum interval(ms):"<<maxGap;
+    input->setProperty("text","marker");QVERIFY(QMetaObject::invokeMethod(pane,"execute"));
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->conversationSearch->busy(),10000);QCOMPARE(backend->conversationSearch->count(),2);
+    QTest::keyClick(window,Qt::Key_Escape);
+    QTRY_VERIFY(!window->property("searchVisible").toBool());
+    QTest::keyClick(window,Qt::Key_K,Qt::ControlModifier);
+    QTRY_VERIFY(window->property("searchVisible").toBool());
+    QCOMPARE(input->property("text").toString(),QString("marker"));
+    QCOMPARE(backend->conversationSearch->count(),2);
+    // Switching focus outside the sidebar preserves the completed query.
+    QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,QPoint(window->width()-60,100));
+    QTRY_VERIFY(!window->property("searchVisible").toBool());
+    click("searchChatsButton");
+    QTRY_VERIFY(find("searchBackButton")->isEnabled());click("searchBackButton");
+    QTRY_VERIFY(!window->property("searchVisible").toBool());
+    QCOMPARE(input->property("text").toString(),QString());QCOMPARE(backend->conversationSearch->count(),0);
+    click("searchChatsButton");input->setProperty("text","marker");QVERIFY(QMetaObject::invokeMethod(pane,"execute"));
+    QTRY_COMPARE_WITH_TIMEOUT(backend->conversationSearch->count(),2,10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->conversationSearch->busy(),10000);
+    const auto out=qEnvironmentVariable("UMEKO_TEST_ARTIFACTS",root+"/artifacts/search-ui");QDir().mkpath(out);
+    window->grabWindow().save(out+"/search-sidebar.png");
+    const auto priorTheme=backend->store.data["theme"].toString();const auto priorScale=backend->fontScale();
+    backend->setTheme("dark");backend->setFontScale(2);QTest::qWait(200);
+    window->grabWindow().save(out+"/search-sidebar-dark-200.png");
+    QVERIFY(input->width()>0);QVERIFY(find("searchBackButton")->isVisible());
+    backend->setTheme(priorTheme);backend->setFontScale(priorScale);QTest::qWait(100);
+    QTRY_VERIFY(find("searchResult_1"));click("searchResult_1");
+    QTRY_COMPARE_WITH_TIMEOUT(backend->activeSession(),QString("search-history"),10000);
+    QTRY_VERIFY(!window->property("searchVisible").toBool());
+    QCOMPARE(running->phase,QString("working"));QCOMPARE(running->draft,QString("keep my draft"));QCOMPARE(running->attachments.size(),1);
+    QVERIFY(!backend->findSession("search-history")->process); // read-only: no Pi inspect
+    QCOMPARE(backend->conversationSearch->query(),QString("marker"));
+    QTRY_COMPARE(window->property("searchHighlightRow").toInt(),0);
+    // The shortcut can temporarily open a collapsed sidebar without changing preference.
+    window->setProperty("sidebarCollapsed",true);QTest::keyClick(window,Qt::Key_K,Qt::ControlModifier);
+    QTRY_VERIFY(window->property("searchVisible").toBool());
+    QTRY_VERIFY(input->hasActiveFocus());
+    QTest::keyClick(window,Qt::Key_Escape);QTRY_VERIFY(!window->property("searchVisible").toBool());
+    QVERIFY(window->property("sidebarCollapsed").toBool());window->setProperty("sidebarCollapsed",false);
+    running->phase="idle";backend->activate(previous);
   }
   void welcomeAndEggs() {
     auto mascot = find("welcomeMascot");
@@ -1111,7 +1235,7 @@ Item {
       QVERIFY(!restored.messages().isEmpty());
       QCOMPARE(restored.messages().first().toMap()["text"].toString(), QString("Preserved migrated question"));
       QTRY_VERIFY(!restoredWindow->property("sidebarSwitching").toBool());
-      QVERIFY(clickRestored("newChatButton"));
+      QTest::keyClick(restoredWindow, Qt::Key_N, Qt::ControlModifier);
       QTRY_VERIFY(restored.activeSession().isEmpty());
     }
     restored.close();
@@ -3601,6 +3725,66 @@ def create_provider(context): return Interactive(context)
     QInputMethodEvent ime;ime.setCommitString("你好");QCoreApplication::sendEvent(&terminal,&ime);QCOMPARE(input.last()[0].toString(),QString("你好"));
     terminal.applyFrame({{"revision",2},{"bracketedPaste",true}});QGuiApplication::clipboard()->setText("line1\nline2");terminal.paste();QCOMPARE(input.last()[0].toString(),QString("\x1b[200~line1\nline2\x1b[201~"));
     terminal.reset();QVERIFY(!terminal.hasSelection());
+  }
+  void changeReviewLoopWidget() {
+    backend->newSession(); window->setProperty("page", "chat");
+    QTemporaryDir workspace; QVERIFY(workspace.isValid());
+    backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());
+    auto file = workspace.filePath("example.py");
+    auto write = [&](QByteArray text) { QFile f(file); if (!f.open(QIODevice::WriteOnly)) return false; return f.write(text) == text.size(); };
+    QVERIFY(write("before = 1\n"));
+    auto manager = backend->desktopExtensions;
+    QVERIFY(manager->entries.contains("change-review"));
+    auto oldEnabled = manager->enabled("change-review");
+    auto oldConfig = manager->settings["config"];
+    auto cleanup = qScopeGuard([&] {manager->closePage(); manager->setEnabled("change-review",false); manager->settings["config"]=oldConfig; manager->save(); manager->setEnabled("change-review",oldEnabled); backend->newSession();});
+    manager->setEnabled("change-review",true);
+    QSignalSpy responses(manager,&DesktopPlugins::response), managed(manager,&DesktopPlugins::managed);
+    auto await = [&](QString request) {QElapsedTimer elapsed;elapsed.start();while(elapsed.elapsed()<15000){QCoreApplication::processEvents();for(auto row:responses)if(row[0].toString()==request)return row[1].toMap();QTest::qWait(10);}return QVariantMap{};};
+    auto session = backend->view;
+    manager->observe(session->key,{{"type","loop_review"},{"phase","begin"},{"loopId","native-review-fixture"},{"id","begin-fixture"}});
+    QTRY_VERIFY_WITH_TIMEOUT(manager->reviewRequests.isEmpty(),15000);
+    QVERIFY(write("after = 2\n"));
+    manager->observe(session->key,{{"type","loop_review"},{"phase","finish"},{"loopId","native-review-fixture"},{"reason","cancelled"},{"id","finish-fixture"}});
+    QTRY_VERIFY_WITH_TIMEOUT(manager->reviewRequests.isEmpty(),15000);
+    QTRY_COMPARE(manager->m_page,QString("change-review"));
+    QTRY_VERIFY(find("changeReviewWidget"));
+    auto diff=await(manager->callFor("change-review","diff",R"({"path":"example.py"})"));
+    QVERIFY2(diff["ok"].toBool(),qPrintable(diff["error"].toString()));
+    auto text=diff["result"].toMap()["text"].toString();
+    QVERIFY(text.contains("-before = 1")); QVERIFY(text.contains("+after = 2"));
+    auto worker=manager->workers.value("change-review");
+    auto configRequest=manager->saveConfig("change-review",R"({"autoOpen":false})"); QVERIFY(!configRequest.isEmpty());
+    QTRY_VERIFY(!manager->busy()); QTRY_VERIFY(!managed.isEmpty());
+    QCOMPARE(manager->workers.value("change-review"),worker);
+    auto status=await(manager->callFor("change-review","status","{}"));
+    QCOMPARE(status["result"].toMap()["total"].toInt(),1);
+    manager->closePage();
+    manager->observe(session->key,{{"type","loop_review"},{"phase","begin"},{"loopId","native-manual"},{"id","begin-manual"}});
+    QTRY_VERIFY_WITH_TIMEOUT(manager->reviewRequests.isEmpty(),15000);
+    QVERIFY(write("manual = 3\n"));
+    manager->observe(session->key,{{"type","loop_review"},{"phase","finish"},{"loopId","native-manual"},{"id","finish-manual"}});
+    QTRY_VERIFY_WITH_TIMEOUT(manager->reviewRequests.isEmpty(),15000); QVERIFY(manager->m_page.isEmpty());
+    QVERIFY(manager->openPage("change-review")); QTRY_VERIFY(find("changeReviewWidget"));
+    QVERIFY(!QFileInfo::exists(workspace.filePath(".git")));
+  }
+  void globalAgentCreationBoundary() {
+    configureAPI(); backend->newSession();
+    auto manager=backend->desktopExtensions;auto g=manager->globalAgents();
+    auto preference=g->allowAutomaticCreation;auto count=g->agents.size();
+    auto enabled=manager->enabled("global-agents");manager->setEnabled("global-agents",true);
+    auto created=g->ui("create",{{"name","Boundary fixture"}});QVERIFY(created["ok"].toBool());
+    auto id=created["result"].toMap()["id"].toString();
+    auto cleanup=qScopeGuard([&]{g->ui("delete",{{"id",id}});g->allowAutomaticCreation=preference;g->save();manager->setEnabled("global-agents",enabled);});
+    g->allowAutomaticCreation=true;auto caller=g->ensure(id);
+    auto overview=g->execute("agent_bus.overview",{},caller->key);
+    QVERIFY(!overview["creation"].toMap()["canCreate"].toBool());
+    QVERIFY(!overview["creation"].toMap()["automaticAllowed"].toBool());
+    auto guide=backend->umekoRequest({{"operation","help"},{"arguments",QVariantMap{{"topic","agents"}}}},caller->key);
+    QVERIFY2(guide["document"].toString().contains("agent_bus.create"),qPrintable(guide["error"].toString()));
+    QVERIFY_EXCEPTION_THROWN(g->execute("agent_bus.create",{{"requestKey","recursive-fixture"}},caller->key), std::runtime_error);
+    QCOMPARE(g->agents.size(),count+1);
+    QVERIFY(g->execute("agent_bus.overview",{},backend->view->key)["creation"].toMap()["canCreate"].toBool());
   }
   void globalAgentDefaultsAndIdentity() {
     configureAPI();

@@ -187,8 +187,13 @@ QVariantMap Backend::umekoRequestImpl(QVariantMap request, QString callerKey, bo
       const auto directory = QFileInfo::exists(store.directory + "/agent-docs/README.md") ? store.directory + "/agent-docs" : release + "/umeko-docs";
       const QVariantMap topics{{"plugins",directory+"/plugins.md"},{"provider",directory+"/provider-plugins.md"},{"widget",directory+"/widget-plugins.md"},{"agents",directory+"/global-agents.md"}};
       const auto topic=args["topic"].toString();
-      require(topic.isEmpty() || topics.contains(topic),"topic 请选择 plugins、provider 或 widget");
+      require(topic.isEmpty() || topics.contains(topic),"topic 请选择 plugins、provider、widget 或 agents");
       QVariantMap result{{"docsRoot",directory},{"entry",topic.isEmpty()?directory+"/README.md":topics[topic].toString()},{"topics",topics}};
+      if(topic=="agents") {
+        QFile guide(topics[topic].toString());
+        require(guide.open(QIODevice::ReadOnly),"无法读取全局子智能体指南");
+        result["document"]=QString::fromUtf8(guide.read(65536));
+      }
       if(topic=="widget"||topic=="plugins")result["activeWidgets"]=desktopExtensions->execute("widgets.list",{{"activeOnly",true}},callerKey)["widgets"];
       return finish(result);
     }

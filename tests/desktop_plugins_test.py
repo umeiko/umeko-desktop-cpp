@@ -32,7 +32,7 @@ class DesktopPluginSdkTests(unittest.TestCase):
             thread=threading.Thread(target=send);thread.start();thread.join()
             self.assertEqual(seen,['',str(Path(name).resolve())]);self.assertEqual(events[0]['arguments']['session'],captured);self.assertEqual(events[0]['arguments']['requestId'],'')
     def test_builtin_icon_catalog_and_custom_asset_validation(self):
-        icons=json.loads((ROOT/'plugin-runtime/umeko_plugin_sdk/icons.json').read_text(encoding='utf-8'));self.assertEqual(len(icons),21)
+        icons=json.loads((ROOT/'plugin-runtime/umeko_plugin_sdk/icons.json').read_text(encoding='utf-8'));self.assertEqual(len(icons),22)
         for icon in icons:self.assertTrue((ROOT/'app/icons'/(icon['glyph']+'.svg')).is_file())
         with tempfile.TemporaryDirectory() as name:
             folder=Path(name)/'widget';shutil.copytree(ROOT/'umeko-plugins/file-tree',folder);file=folder/'manifest.json';manifest=json.loads(file.read_text(encoding='utf-8'))

@@ -74,6 +74,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
   management = new PiManagement(this);
   about = new AppAbout(this);
   previewLoader = new SessionPreview(this);
+  conversationSearch = new ConversationSearch(this);
   documents = new DocumentPreview(this, &store);
   children = new Subagents(this);
   desktopExtensions = new DesktopPlugins(this);
@@ -1115,6 +1116,7 @@ void Backend::gatewayEvent(QVariantMap payload) {
   }
 }
 void Backend::close() {
+  if (conversationSearch) conversationSearch->close();
   if(management) management->cancelInstall();
   desktopExtensions->close();
   if (documents) documents->cancel();

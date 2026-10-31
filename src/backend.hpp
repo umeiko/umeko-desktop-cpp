@@ -1,4 +1,5 @@
 #pragma once
+#include "conversation_search.hpp"
 #include "chatmodel.hpp"
 #include "store.hpp"
 #include "webview_support.hpp"
@@ -184,6 +185,7 @@ private:
 };
 
 struct Session {
+  QString searchLeaf;
   QString globalAgent;
   std::optional<std::chrono::steady_clock::time_point> promptStarted;
   QString key = U::uuid(), id, file, workspace, model, provider,
@@ -213,7 +215,7 @@ class SessionPreview : public QObject {
 public:
   explicit SessionPreview(Backend *backend);
   Q_INVOKABLE void prepare(QString id, int token);
-  Q_INVOKABLE bool activate(int token);
+  Q_INVOKABLE bool activate(int token, bool readOnly = false);
   Q_INVOKABLE void cancel();
 signals:
   void ready(int token, bool ok);
@@ -242,6 +244,7 @@ class Backend : public QObject {
   Q_PROPERTY(QObject *providerPlugins READ providerPlugins CONSTANT)
   Q_PROPERTY(QObject *piManagement READ piManagement CONSTANT)
   Q_PROPERTY(QObject *sessionPreview READ sessionPreview CONSTANT)
+  Q_PROPERTY(QObject *chatSearch READ chatSearch CONSTANT)
   Q_PROPERTY(QObject *appAbout READ appAbout CONSTANT)
   Q_PROPERTY(QVariantList commonProviders READ commonProviders CONSTANT)
   Q_PROPERTY(QString language READ language NOTIFY appearanceChanged)
@@ -320,6 +323,7 @@ public:
   QObject *providerPlugins() { return providers; }
   QObject *piManagement() { return management; }
   QObject *sessionPreview() { return previewLoader; }
+  QObject *chatSearch() { return conversationSearch; }
   QObject *appAbout() { return about; }
   QString language() const {
     return store.data["ui"].toMap()["language"].toString();
@@ -491,6 +495,7 @@ private:
   friend class PiManagement;
   friend class AppAbout;
   friend class SessionPreview;
+  friend class ConversationSearch;
   friend class Subagents;
   friend class DesktopPlugins;
   friend class WidgetHost;
@@ -504,6 +509,7 @@ private:
   PiManagement *management;
   AppAbout *about;
   SessionPreview *previewLoader;
+  ConversationSearch *conversationSearch;
   DocumentPreview *documents;
   Subagents *children;
   DesktopPlugins *desktopExtensions;

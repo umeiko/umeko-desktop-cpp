@@ -72,7 +72,7 @@ void SessionPreview::start() {
     return result;
   }));
 }
-bool SessionPreview::activate(int token) {
+bool SessionPreview::activate(int token, bool readOnly) {
   if (prepared.isEmpty() || request != token ||
       prepared["token"].toInt() != token)
     return false;
@@ -95,6 +95,7 @@ bool SessionPreview::activate(int token) {
     s->tree = prepared["tree"].toList();
   }
   cancel();
-  b->openSession(id);
+  if (readOnly) b->activate(b->findSession(id));
+  else b->openSession(id);
   return true;
 }

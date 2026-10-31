@@ -21,6 +21,7 @@ public:
     return {{MessageRole, "modelData"}};
   }
   void update(const QVariantList &messages);
+  int rowForEntry(const QString &entry) const;
   static QVariantList project(const QVariantList &messages);
 signals:
   void questionsChanged();
