@@ -3987,6 +3987,9 @@ def create_provider(context): return Interactive(context)
     configureAPI();
     auto g=backend->desktopExtensions->globalAgents();QVERIFY(g);QStringList owned;
     auto cleanup=qScopeGuard([&]{for(const auto &id:owned)g->ui("delete",{{"id",id}});});
+    auto kazuhiko=g->ui("create",{{"character","kazuhiko"}});QVERIFY(kazuhiko["ok"].toBool());
+    const auto kazuhikoId=kazuhiko["result"].toMap()["id"].toString();owned<<kazuhikoId;
+    QCOMPARE(g->agents[kazuhikoId].toMap()["name"].toString(),QString("温水和彦"));
     backend->selectCharacter("kaju");auto base=backend->characterStyle()["name"].toString();
     auto first=g->ui("create",{{"name"," "}});QVERIFY(first["ok"].toBool());auto id=first["result"].toMap()["id"].toString();owned<<id;
     QCOMPARE(g->agents[id].toMap()["name"].toString(),base);
@@ -4035,7 +4038,7 @@ def create_provider(context): return Interactive(context)
     click("allowAutomaticGlobalCreation");QTRY_VERIFY(g->allowAutomaticCreation);
     auto automatic=call("agent_bus.create",{{"requestKey","native-direct"}});QVERIFY2(automatic["ok"].toBool(),qPrintable(automatic["error"].toString()));auto autoResult=automatic;owned<<autoResult["id"].toString();
     QCOMPARE(autoResult["status"].toString(),QString("created"));QVERIFY(!autoResult["name"].toString().isEmpty());
-    bool valid=false;for(auto value:backend->characterPacks())valid|=value.toMap()["id"]==autoResult["character"];QVERIFY(valid);
+    bool valid=false;for(auto value:backend->subagentCharacterPacks())valid|=value.toMap()["id"]==autoResult["character"];QVERIFY(valid);
     QCOMPARE(call("agent_bus.create",{{"requestKey","native-direct"}})["id"],autoResult["id"]);QCOMPARE(g->agents.size(),before+2);
     QVERIFY(g->allowed(caller,autoResult["targetId"].toString()));QVERIFY(!g->allowed(other,autoResult["targetId"].toString()));QVERIFY(g->records.isEmpty()||!g->records.contains(autoResult["id"].toString()));
     QTest::qWait(800);QVERIFY(page->property("proposalId").toString().isEmpty());window->grabWindow().save(root+"/build/global-agents-ui/native-automatic-creation.png");
