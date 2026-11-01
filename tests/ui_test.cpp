@@ -826,6 +826,30 @@ private slots:
     window->grabWindow().save(root+"/build/screenshots/tool-catalog-visible.png");
     QMetaObject::invokeMethod(find("backToPiButton"),"clicked");
   }
+  void piManagerColdToolInventory() {
+    const auto restoreFocus=qScopeGuard([&] {window->requestActivate();QTest::qWait(100);});
+    QQmlEngine fixtureEngine;
+    QQmlComponent component(&fixtureEngine, QUrl::fromLocalFile(root+"/tests/fixtures/PiManagerColdStart.qml"));
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    for (bool failed : {false, true}) {
+      std::unique_ptr<QObject> fixture(component.createWithInitialProperties({{"failInventory",failed}}));
+      QVERIFY2(fixture, qPrintable(component.errorString()));
+      QTRY_COMPARE_WITH_TIMEOUT(fixture->property("inventoryRequests").toInt(),1,5000);
+      auto page=fixture->property("page").value<QObject *>();
+      QVERIFY(page);
+      if (failed) {
+        QTRY_VERIFY_WITH_TIMEOUT(fixture->property("registryFailed").toBool() && page->property("notice").toString().contains("失败"),5000);
+      } else {
+        QTRY_VERIFY_WITH_TIMEOUT(fixture->property("tagsReady").toBool(),5000);
+        QVERIFY(page->property("selected").isNull());
+      }
+      QVERIFY(!page->property("inventoryLoading").toBool());
+      const auto requests=fixture->property("statusRequests").toInt();
+      QTest::qWait(900);
+      QCOMPARE(fixture->property("statusRequests").toInt(),requests);
+      QCOMPARE(fixture->property("inventoryRequests").toInt(),1);
+    }
+  }
   void sessionToolVisibilityWidget() {
     auto widgets=qobject_cast<DesktopPlugins *>(backend->desktopPlugins());
     auto host=qobject_cast<WidgetHost *>(widgets->hostServices());

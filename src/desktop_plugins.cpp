@@ -314,6 +314,9 @@ void DesktopPlugins::setSessionEnabled(QString id, bool value) {
   emit changed();
 }
 bool DesktopPlugins::openPage(QString id) {
+  if (m_closed) return false;
+  // Do not bind a new page to a context waiting in the debounce timer.
+  synchronize();
   if (!enabled(id) || !sessionEnabled(id) ||
       entry(id)["page"].toString().isEmpty())
     return false;

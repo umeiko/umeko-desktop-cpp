@@ -329,7 +329,8 @@ void WidgetHost::execute(Task request) {
     for(const auto &value:page) { const auto path=value.toMap()["path"].toString(); paths.insert(path); if(b->view->extensionModes.contains(path))modes[path]=b->view->extensionModes[path]; }
     QVariantMap result{{"busy",b->management->busy()},{"status",current ? b->management->status() : QString()},
       {"extensions",page},{"total",rows.size()},{"catalogTotal",all.size()},{"hasMore",offset+limit<rows.size()},
-      {"contextCurrent",current},{"inventoryReady",!b->view->resources["allTools"].toList().isEmpty()},{"agentBusy",b->view->busy() || b->view->subagentsActive},{"workspace",request->session["workspace"]},{"activationModes",modes},
+      {"contextCurrent",current},{"inventoryReady",!b->view->resources["allTools"].toList().isEmpty()},
+      {"inventoryFailed",b->view->action=="load" && !b->view->busy() && (b->view->failed || b->view->cancelled)},{"agentBusy",b->view->busy() || b->view->subagentsActive},{"workspace",request->session["workspace"]},{"activationModes",modes},
       {"extensionUpdate",current ? b->management->extensionUpdate() : QVariantMap{}}};
     if(!detailId.isEmpty()) {
       const auto doc=b->management->extensionDetails(); result["details"]=current && doc["id"]==detailId ? doc : QVariantMap{};
