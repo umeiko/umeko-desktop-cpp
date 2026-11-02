@@ -10,7 +10,7 @@
 namespace {
 const QStringList states{"idle",    "thinking", "working",
                          "waiting", "done",     "error"};
-const QStringList builtinAppearances{"yanami", "komari", "tiara", "whale-girl"};
+const QStringList builtinAppearances{"yanami", "komari", "tiara", "whale-girl", "doubao"};
 const QVariantMap defaults{{"visible", false},      {"appearance", "yanami"},
                            {"size", 192},           {"alwaysOnTop", true},
                            {"paused", false},       {"sampleIntervalMs", 1500},

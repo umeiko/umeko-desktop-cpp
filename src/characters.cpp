@@ -5,6 +5,7 @@
 
 namespace {
 const QSet<QString> artworkSlots{
+    "picker",
     "welcome",        "avatarSmile",   "avatarWink",     "avatarHappy",
     "reply",          "loading",       "catch",          "push",
     "pull",           "background",    "subagent0",      "subagent1",
@@ -14,7 +15,7 @@ void requireCharacter(bool ok, const char *text) {
   if (!ok)
     throw std::runtime_error(text);
 }
-const QStringList builtInCharacters{"yanami", "komari", "kaju", "tiara", "whale-girl", "kazuhiko"};
+const QStringList builtInCharacters{"yanami", "komari", "kaju", "tiara", "whale-girl", "doubao", "kazuhiko"};
 QString unpackCharacterZip(const QString &source, const QString &destination) {
   constexpr quint64 limit = 96 * 1024 * 1024 + 131072;
   QFile input(source);
@@ -310,7 +311,7 @@ QVariantList characterLibrary(const QString &root, const QString &directory, boo
     } catch (const std::exception &) {
     }
   };
-  auto identifiers = QStringList{"komari", "kaju", "tiara", "whale-girl"};
+  auto identifiers = QStringList{"komari", "kaju", "tiara", "whale-girl", "doubao"};
   if (subagents) identifiers << "kazuhiko";
   for (const auto &id : identifiers) {
     auto file =
@@ -507,7 +508,10 @@ QVariantList Backend::characterPacksFor(bool subagents) const {
     const auto row = value.toMap();
     const auto assets = row["assets"].toMap();
     QString path;
-    for (const auto &key : QStringList{"avatarSmile", "reply", "welcome"})
+    const auto portraitSlots = subagents
+        ? QStringList{"avatarSmile", "reply", "welcome"}
+        : QStringList{"picker", "avatarSmile", "reply", "welcome"};
+    for (const auto &key : portraitSlots)
       if (assets.contains(key)) {
         path = row["directory"].toString() + "/" + assets[key].toString();
         break;

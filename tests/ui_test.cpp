@@ -2859,7 +2859,7 @@ Item {
       window->setProperty("page", previousPage);
       window->setProperty("settingsTab", previousTab);
     });
-    for (const auto &id : QStringList{"yanami", "komari", "kaju", "tiara", "whale-girl"})
+    for (const auto &id : QStringList{"yanami", "komari", "kaju", "tiara", "whale-girl", "doubao"})
       QVERIFY(!backend->removeCharacter(id));
     QVERIFY(backend->selectCharacter("kaju"));
     QCOMPARE(backend->characterStyle()["name"].toString(), QString("温水佳树"));
@@ -2905,7 +2905,8 @@ Item {
         {"version", 1},
         {"id", "zip-character"},
         {"name", "ZIP Character"},
-        {"assets", QVariantMap{{"welcome", "portrait.png"},
+        {"assets", QVariantMap{{"picker", "portrait.png"},
+                               {"welcome", "portrait.png"},
                                {"avatarSmile", "portrait.png"}}}};
     const auto archive = fixtures + "/character.zip";
     auto writeZip = [&](QList<QPair<QString, QByteArray>> entries) {
@@ -2933,7 +2934,7 @@ Item {
                QString("zip-character"));
     }
     const auto installed = backend->characterStyle()["assets"].toMap();
-    for (const auto &id : QStringList{"yanami", "komari", "kaju", "tiara", "whale-girl"}) {
+    for (const auto &id : QStringList{"yanami", "komari", "kaju", "tiara", "whale-girl", "doubao"}) {
       auto reserved = manifest;
       reserved["id"] = id;
       QVERIFY(
@@ -3071,6 +3072,140 @@ Item {
     const auto frame = animation->property("currentFrame").toInt();
     QTRY_VERIFY(animation->property("currentFrame").toInt() != frame);
     QVERIFY(petWindow->grabWindow().save(root + "/build/screenshots/tiara-desktop-pet.png"));
+  }
+  void doubaoCharacterAcrossSurfaces() {
+    const auto previous = backend->characterStyle()["id"].toString();
+    const auto options = QJsonDocument::fromVariant(
+        backend->characterConfiguration()["overrides"]).toJson();
+    const auto previousPage = window->property("page");
+    const auto previousTheme = backend->store.data.value("theme", "light").toString();
+    const auto restore = qScopeGuard([&] {
+      backend->selectCharacter(previous);
+      backend->configureCharacter(QString::fromUtf8(options));
+      backend->setTheme(previousTheme);
+      window->setProperty("page", previousPage);
+    });
+    QVERIFY(backend->selectCharacter("doubao"));
+    QCOMPARE(backend->characterStyle()["name"].toString(), QString("豆包"));
+    QVERIFY(!backend->removeCharacter("doubao"));
+    const auto assets = backend->characterStyle()["assets"].toMap();
+    QCOMPARE(assets.size(), 11);
+    QSet<QString> sources;
+    for (auto it = assets.cbegin(); it != assets.cend(); ++it) {
+      const auto source = QUrl(it.value().toString());
+      const auto path = source.isLocalFile() ? source.toLocalFile() : ":" + source.path();
+      QImage image(path);
+      QVERIFY2(!image.isNull(), qPrintable(path));
+      if (it.value() == assets["picker"]) {
+        QCOMPARE(image, QImage(root + "/art/characters/doubao-v1/source/picker-pretty.png"));
+      } else {
+        QCOMPARE(image.size(), QSize(768, 768));
+        QVERIFY(image.hasAlphaChannel());
+        QCOMPARE(image.pixelColor(0, 0).alpha(), 0);
+      }
+      sources.insert(path);
+    }
+    QCOMPARE(sources.size(), 7);
+    for (const auto &slot : QStringList{"avatarSmile", "avatarWink", "avatarHappy"})
+      QCOMPARE(assets[slot], assets["picker"]);
+    QVERIFY(assets["reply"] != assets["picker"]);
+    for (const auto &value : backend->characterPacks())
+      if (value.toMap()["id"] == "doubao")
+        QVERIFY(value.toMap()["portrait"].toString().endsWith("/picker.png"));
+    QVERIFY(backend->selectSubagentCharacter(1, "doubao"));
+    const auto role = backend->characterStyle()["subagents"].toList()[1].toMap();
+    QCOMPARE(role["name"].toString(), QString("豆包"));
+    for (const auto &key : QStringList{"avatar", "catch"}) {
+      const auto expected = QUrl(assets[key == "avatar" ? "avatarSmile" : "catch"].toString());
+      const auto path = expected.isLocalFile() ? expected.toLocalFile() : ":" + expected.path();
+      const auto actual = QImage(QUrl(role[key].toString()).toLocalFile());
+      QVERIFY(!actual.isNull());
+      QCOMPARE(actual, QImage(path));
+    }
+    bool offeredToGlobalAgents = false;
+    for (const auto &value : backend->subagentCharacterPacks())
+      if (value.toMap()["id"] == "doubao") {
+        offeredToGlobalAgents = true;
+        QVERIFY(value.toMap()["builtin"].toBool());
+        QVERIFY(value.toMap()["portrait"].toString().endsWith("/picker.png"));
+      }
+    QVERIFY(offeredToGlobalAgents);
+    backend->setTheme("light");
+    window->setProperty("page", "settings");
+    window->setProperty("settingsTab", 5);
+    QTest::qWait(200);
+    click("chooseCharacterButton");
+    QTRY_VERIFY(find("character_doubao") && find("character_doubao")->isVisible());
+    QVERIFY(!find("deleteCharacter_doubao")->isVisible());
+    QDir().mkpath(root + "/build/screenshots");
+    QTest::qWait(250);
+    QVERIFY(window->grabWindow().save(root + "/build/screenshots/doubao-picker.png"));
+    click("closeCharacterDialog");
+    window->setProperty("page", "chat");
+    backend->newSession();
+    QTRY_VERIFY(find("welcomeMascot")->property("loaded").toBool());
+    QTest::qWait(300);
+    QVERIFY(window->grabWindow().save(root + "/build/screenshots/doubao-welcome.png"));
+    QVERIFY(QMetaObject::invokeMethod(find("welcomeMascot"), "tap"));
+    const auto line = find("welcomeMascot")->property("reactionText").toString();
+    QVERIFY(backend->characterConfiguration()["config"].toMap()["scenes"].toMap()["welcome"].toMap()["tap"].toList().contains(line));
+    QVERIFY(QMetaObject::invokeMethod(find("welcomeMascot"), "reset"));
+  }
+  void doubaoPetAndRareScenes() {
+    QDir().mkpath(root + "/build/screenshots");
+    const auto previous = backend->characterStyle()["id"].toString();
+    auto pet = qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());
+    QVERIFY(pet);
+    const auto petConfig = pet->config();
+    const auto restore = qScopeGuard([&] {
+      backend->selectCharacter(previous);
+      pet->ui("configure", petConfig);
+    });
+    QVERIFY(backend->selectCharacter("doubao"));
+    const auto scene = backend->characterStyle()["easterEgg"].toMap();
+    QCOMPARE(scene["title"].toString(), QString("稳稳接住你"));
+    const auto sceneUrl = QUrl(scene["source"].toString());
+    const auto scenePath = sceneUrl.isLocalFile() ? sceneUrl.toLocalFile() : ":" + sceneUrl.path();
+    QImage sceneImage(scenePath);
+    QVERIFY(!sceneImage.isNull());
+    QVERIFY(sceneImage.hasAlphaChannel());
+    bool found = false;
+    for (const auto &value : pet->appearances()) if (value.toMap()["id"] == "doubao") {
+      found = true;
+      QVERIFY(value.toMap()["builtin"].toBool());
+    }
+    QVERIFY(found);
+    QVERIFY(!pet->ui("removeAppearance", {{"id", "doubao"}})["ok"].toBool());
+    const auto folder = root + "/umeko-plugins/desktop-pet/assets/doubao/";
+    for (const auto &state : QStringList{"idle", "thinking", "working", "waiting", "done", "error", "idle-rare"}) {
+      QImageReader reader(folder + state + ".webp");
+      QVERIFY2(reader.imageCount() > 1, qPrintable(state));
+      QCOMPARE(reader.size(), QSize(360, 360));
+      for (int index = 0; index < reader.imageCount(); ++index) {
+        const auto image = reader.read();
+        QVERIFY(!image.isNull());
+        QCOMPARE(image.pixelColor(0, 0).alpha(), 0);
+      }
+    }
+    QVERIFY(pet->ui("configure", {{"appearance", "doubao"}, {"visible", true}, {"paused", false}})["ok"].toBool());
+    QTRY_VERIFY(window->findChild<QQuickWindow*>("desktopPetWindow"));
+    auto petWindow = window->findChild<QQuickWindow*>("desktopPetWindow");
+    QTRY_VERIFY(petWindow->findChild<QObject*>("desktopPetAnimation"));
+    auto animation = petWindow->findChild<QObject*>("desktopPetAnimation");
+    QTRY_VERIFY(animation->property("ready").toBool());
+    QVERIFY(animation->property("source").toUrl().toString().contains("/doubao/"));
+    const auto frame = animation->property("currentFrame").toInt();
+    QTRY_VERIFY(animation->property("currentFrame").toInt() != frame);
+    QVERIFY(petWindow->grabWindow().save(root + "/build/screenshots/doubao-pet.png"));
+    pet->action = pet->target = "idle";
+    pet->interaction.clear();
+    pet->drawIdleScene(0);
+    QVERIFY(pet->state()["rareIdle"].toBool());
+    QTRY_VERIFY(animation->property("source").toUrl().toString().endsWith("/idle-rare.webp"));
+    QTRY_VERIFY(animation->property("ready").toBool());
+    QVERIFY(petWindow->grabWindow().save(root + "/build/screenshots/doubao-rare-pet.png"));
+    pet->ui("hide", {});
+    QTRY_VERIFY(!find("desktopPetWindowLoader")->property("active").toBool());
   }
   void whaleGirlCharacterAcrossSurfaces() {
     const auto previous = backend->characterStyle()["id"].toString();
