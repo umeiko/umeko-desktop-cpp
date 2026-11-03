@@ -11,7 +11,11 @@ const manifest = JSON.parse(await readFile(join(source, 'node_modules/@earendil-
 await mkdir(output, { recursive: true });
 let exists = false; try { await access(join(output, 'manifest.json')); exists = true; } catch { /* Initial projection. */ }
 let dependenciesReady=false;
-try { await access(join(output,'node_modules/@gotgenes/pi-subagents/package.json')); dependenciesReady=true; } catch { /* Upgrade the dependency projection. */ }
+const dependencies=['@gotgenes/pi-subagents','@alexlikevibe/pi-bg','marked','shell-quote'];
+try {
+  await Promise.all(dependencies.map(name=>access(join(output,'node_modules',name,'package.json'))));
+  dependenciesReady=true;
+} catch { /* Upgrade the dependency projection. */ }
 if (!exists || !dependenciesReady) {
   await cp(join(source, 'node_modules'), join(output, 'node_modules'), { recursive: true, dereference: true });
   const ai = join(output, 'node_modules/@earendil-works/pi-ai/dist');
@@ -29,7 +33,7 @@ if (!retrySource.includes(adaptedRetry)) {
   if (retrySource.split(originalRetry).length !== 2) throw new Error('Pi retry classifier changed; update the diagnostics adapter');
   await writeFile(retryPath, retrySource.replace(originalRetry, adaptedRetry));
 }
-for (const name of ['skills.mjs', 'recent-images.mjs', 'background-jobs.mjs', 'process-guard.mjs', 'tool-permissions.mjs', 'session-capabilities.mjs', 'markdown-preview.mjs', 'tool-visibility.mjs', 'bridge.mjs', 'package-install.mjs', 'update-engine.mjs', 'resources.mjs', 'provider-policy.mjs', 'chatbox.mjs', 'network-retry.mjs', 'pi-commands.mjs', 'umeko-control.mjs', 'umeko-documents.mjs', 'subagents.mjs', 'subagent-sdk.mjs', 'subagent-settings.mjs', 'input-queue.mjs', 'widget-messages.mjs', 'rpc-ui.mjs', 'umeko-operations.json', 'webview-component.mjs', 'webview-component.json']) await cp(join(root, 'runtime', name), join(output, name));
+for (const name of ['skills.mjs', 'recent-images.mjs', 'background-jobs.mjs', 'process-guard.mjs', 'tool-permissions.mjs', 'provider-errors.mjs', 'session-capabilities.mjs', 'markdown-preview.mjs', 'tool-visibility.mjs', 'bridge.mjs', 'package-install.mjs', 'update-engine.mjs', 'resources.mjs', 'provider-policy.mjs', 'chatbox.mjs', 'network-retry.mjs', 'pi-commands.mjs', 'umeko-control.mjs', 'umeko-documents.mjs', 'subagents.mjs', 'subagent-sdk.mjs', 'subagent-settings.mjs', 'input-queue.mjs', 'widget-messages.mjs', 'rpc-ui.mjs', 'umeko-operations.json', 'webview-component.mjs', 'webview-component.json']) await cp(join(root, 'runtime', name), join(output, name));
 await cp(join(root, 'runtime/umeko-docs'), join(output, 'umeko-docs'), {recursive:true});
 const factoryBin=join(root,'runtime/releases/coding-1.3.0/bin');
 if(resolve(output)!==resolve(join(root,'runtime/releases/coding-1.3.0'))) {

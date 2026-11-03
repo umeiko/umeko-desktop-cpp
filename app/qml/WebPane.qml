@@ -20,6 +20,7 @@ Rectangle {
     readonly property real animatedWidth: Math.max(0, motion.value.width - 1)
     readonly property bool moving: motion.moving && !resizing
     readonly property bool live: opened && !moving && !blocked && visible
+    readonly property bool pluginLive: opened && !blocked && visible && mode === "plugin"
     width: animatedWidth
     visible: animatedWidth > 0.5
     color: Theme.surface
@@ -176,7 +177,7 @@ Rectangle {
         active: pane.opened && (pane.mode === "plugin" || pane.mode === "document" && !!pane.previewWidget)
         visible: pane.mode === "plugin"
         source: active ? "DesktopPluginSurface.qml" : ""
-        onLoaded: item.live = Qt.binding(function() { return pane.live && pane.mode === "plugin" })
+        onLoaded: item.live = Qt.binding(function() { return pane.pluginLive })
     }
     Connections { target: backend.desktopPlugins; function onDismissed() { if (pane.mode === "plugin") { pane.opened = false } } }
     Loader {

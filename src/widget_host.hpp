@@ -12,6 +12,8 @@ public:
   QString requestFor(QString id, QVariantMap value);
   void stop(QString id);
   void observe(QString key, QVariantMap event);
+  bool workspaceLocked(QString workspace) const;
+  bool releaseCheckpoint(QString id, QString token, std::shared_ptr<DesktopPlugins::Worker> worker);
   Q_INVOKABLE void respondApproval(bool allowed);
 signals:
   void changed();
@@ -36,6 +38,12 @@ private:
     int dropped = 0;
   };
   QHash<QString, Activity> activity;
+  struct CheckpointLock {
+    QString widget;
+    std::shared_ptr<DesktopPlugins::Worker> worker;
+    QString workspace;
+  };
+  QHash<QString, CheckpointLock> checkpointLocks;
   QTimer activityTimer;
   void flushActivity();
   void owner(Task request) const;

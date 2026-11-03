@@ -4724,6 +4724,130 @@ def create_provider(context): return Interactive(context)
     QCOMPARE(spoken.count(),2);QCOMPARE(spoken.last()[0].toString(),QString("有问题了"));
     pet->sample();QCOMPARE(spoken.count(),2);
   }
+  void checkpointLinearHistoryDemo() {
+    backend->newSession();
+    QTemporaryDir workspace; QVERIFY(workspace.isValid());
+    backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());
+    auto manager = backend->desktopExtensions;
+    const auto oldConfig = manager->settings["config"];
+    const auto oldEnabled = manager->enabled("change-review");
+    const auto cleanup = qScopeGuard([&] {manager->closePage();manager->settings["config"]=oldConfig;manager->save();manager->setEnabled("change-review",oldEnabled);backend->newSession();});
+    manager->setEnabled("change-review",true);
+    QVERIFY(manager->openPage("change-review"));
+    QTRY_VERIFY_WITH_TIMEOUT(manager->workers.value("change-review") && manager->workers.value("change-review")->ready,10000);
+    QSignalSpy managed(manager,&DesktopPlugins::managed), responses(manager,&DesktopPlugins::response);
+    auto configuration = manager->saveConfig("change-review",R"({"autoOpen":false,"checkpoints":true})");
+    QVERIFY(!configuration.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!managed.isEmpty(),10000);
+    QTRY_COMPARE_WITH_TIMEOUT(manager->busy(),false,10000);
+    QDir().mkpath(workspace.filePath("docs"));
+    auto write = [&](QByteArray code,QByteArray docs) {
+      QFile source(workspace.filePath("src.py"));QVERIFY(source.open(QIODevice::WriteOnly));QVERIFY(source.write(code)==code.size());source.close();
+      QFile guide(workspace.filePath("docs/usage.md"));QVERIFY(guide.open(QIODevice::WriteOnly));QVERIFY(guide.write(docs)==docs.size());
+    };
+    auto await = [&](QString id) {
+      QElapsedTimer elapsed;elapsed.start();
+      while(elapsed.elapsed()<20000) {QCoreApplication::processEvents();for(const auto &row:responses)if(row[0].toString()==id)return row[1].toMap();QTest::qWait(10);}
+      return QVariantMap{};
+    };
+    auto timeline = [&] {return await(manager->callFor("change-review","timeline","{}"))["result"].toMap();};
+    auto turn = [&](QString id,QString title,QByteArray code,QByteArray docs) {
+      manager->observe(backend->view->key,{{"type","loop_review"},{"phase","begin"},{"loopId",id},{"title",title},{"id","begin-"+id}});
+      QTRY_VERIFY_WITH_TIMEOUT(manager->reviewRequests.isEmpty(),15000);
+      write(code,docs);
+      manager->observe(backend->view->key,{{"type","loop_review"},{"phase","finish"},{"loopId",id},{"title",title},{"reason","completed"},{"id","finish-"+id}});
+      QTRY_VERIFY_WITH_TIMEOUT(manager->reviewRequests.isEmpty(),15000);
+      QVERIFY(await(manager->callFor("change-review","status","{}"))["ok"].toBool());
+    };
+    write("version = 'A'\n","# A\n");
+    turn("demo-b","实现配置加载并更新文档","version = 'B'\n","# B\n\nTwo files changed.\n");
+    turn("demo-c","增加请求重试并记录版本历史","version = 'C'\n","# C\n\nRetry and history.\n");
+    auto result = timeline();
+    QCOMPARE(result["entries"].toList().size(),3);
+    const auto c = result["entries"].toList()[0].toMap()["checkpointId"].toString();
+    const auto b = result["entries"].toList()[1].toMap()["checkpointId"].toString();
+    const auto a = result["entries"].toList()[2].toMap()["checkpointId"].toString();
+    QVERIFY(!a.isEmpty() && !b.isEmpty() && !c.isEmpty());
+    QCOMPARE(result["currentId"].toString(),c);
+    auto host = qobject_cast<WidgetHost *>(manager->hostServices());
+    QSignalSpy hostResponses(manager,&DesktopPlugins::hostResponse);
+    auto lock = [&](QString checkpoint) {
+      const auto id=U::uuid().remove('-');host->requestFor("change-review",{{"id",id},{"operation","checkpoints.acquire"},{"arguments",QVariantMap{{"id",checkpoint}}},{"session",manager->m_session}});
+      QElapsedTimer elapsed;elapsed.start();
+      while(elapsed.elapsed()<5000) {QCoreApplication::processEvents();for(const auto &row:hostResponses)if(row[1].toString()==id){if(!row[2].toMap()["ok"].toBool())return QString{};return row[2].toMap()["result"].toMap()["token"].toString();}QTest::qWait(10);}
+      return QString{};
+    };
+    auto release = [&](QString token) {host->requestFor("change-review",{{"id",U::uuid().remove('-')},{"operation","checkpoints.release"},{"arguments",QVariantMap{{"token",token}}},{"session",manager->m_session}});};
+    auto restore = [&](QString checkpoint) {
+      auto plan=await(manager->callFor("change-review","restorePreview",QJsonDocument::fromVariant(QVariantMap{{"checkpointId",checkpoint}}).toJson(QJsonDocument::Compact)));
+      QVERIFY(plan["ok"].toBool());QCOMPARE(plan["result"].toMap()["conflicts"].toInt(),0);
+      const auto token=lock(checkpoint);QVERIFY(!token.isEmpty());
+      auto restored=await(manager->callFor("change-review","restore",QJsonDocument::fromVariant(QVariantMap{{"checkpointId",checkpoint},{"lockToken",token}}).toJson(QJsonDocument::Compact)));
+      release(token);QVERIFY(restored["ok"].toBool());QVERIFY(restored["result"].toMap()["ok"].toBool());
+    };
+    restore(b);QCOMPARE(timeline()["currentId"].toString(),b);
+    QCOMPARE(timeline()["futureCount"].toInt(),1);
+    QVERIFY(window->grabWindow().save(root+"/build/screenshots/checkpoint-current-and-future.png"));
+    restore(c);QCOMPARE(timeline()["currentId"].toString(),c);
+    restore(b);
+    turn("demo-d","加入缓存和结构化日志","version = 'D'\n","# D\n\nCache and logs.\n");
+    result=timeline();QCOMPARE(result["currentId"].toString(),result["entries"].toList().first().toMap()["checkpointId"].toString());
+    QCOMPARE(result["entries"].toList().size(),3);
+    for(const auto &entry:result["entries"].toList())QVERIFY(entry.toMap()["checkpointId"].toString()!=c);
+    const auto current=result["currentId"].toString();
+    auto widget=find("changeReviewWidget");QVERIFY(widget);
+    QTRY_VERIFY_WITH_TIMEOUT(widget->property("timelineRows").toList().size()==3,15000);
+    click("changeReviewTimelineRow_"+current);
+    QTRY_VERIFY_WITH_TIMEOUT(find("changeReviewRow_src.py"),15000);
+    QVERIFY(find("changeReviewRow_docs"));click("changeReviewRow_docs");
+    QTRY_VERIFY_WITH_TIMEOUT(find("changeReviewRow_docs/usage.md"),5000);
+    click("changeReviewRow_src.py");
+    QTRY_VERIFY_WITH_TIMEOUT(widget->property("diff").toString().contains("-version = 'B'") && widget->property("diff").toString().contains("+version = 'D'"),15000);
+    QCOMPARE(widget->property("viewMode").toString(),QString("diff"));
+    QVERIFY(window->grabWindow().save(root+"/build/screenshots/checkpoint-linear-demo.png"));
+    manager->closePage();QVERIFY(manager->openPage("change-review"));
+    QTRY_COMPARE_WITH_TIMEOUT(timeline()["currentId"].toString(),current,15000);
+    QFile proof(workspace.filePath("src.py"));QVERIFY(proof.open(QIODevice::ReadOnly));QCOMPARE(proof.readAll(),QByteArray("version = 'D'\n"));
+  }
+  void checkpointHostLock() {
+    backend->newSession();
+    QTemporaryDir workspace; QVERIFY(workspace.isValid());
+    backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());
+    auto manager = backend->desktopExtensions;
+    const auto oldEnabled = manager->enabled("change-review");
+    const auto cleanup = qScopeGuard([&] {manager->closePage();manager->setEnabled("change-review",oldEnabled);backend->newSession();});
+    manager->setEnabled("change-review",true);
+    QVERIFY(manager->openPage("change-review"));
+    auto host = qobject_cast<WidgetHost *>(manager->hostServices());
+    QTRY_VERIFY_WITH_TIMEOUT(manager->workers.value("change-review") && manager->workers.value("change-review")->ready,10000);
+    QSignalSpy responses(manager,&DesktopPlugins::hostResponse);
+    auto call = [&](QString operation,QVariantMap args) {
+      const auto id = U::uuid().remove('-');
+      const auto request = host->requestFor("change-review",{{"id",id},{"operation",operation},{"arguments",args},{"session",manager->m_session}});
+      if (request.isEmpty()) return QVariantMap{};
+      QElapsedTimer elapsed;elapsed.start();
+      while(elapsed.elapsed()<5000) {QCoreApplication::processEvents();for(const auto &row:responses)if(row[0].toString()=="change-review" && row[1].toString()==id)return row[2].toMap();QTest::qWait(10);}
+      return QVariantMap{};
+    };
+    auto acquired = call("checkpoints.acquire",{{"id",U::uuid().remove('-')}});
+    QVERIFY(acquired["ok"].toBool());
+    const auto token = acquired["result"].toMap()["token"].toString();
+    QVERIFY(!token.isEmpty());
+    QVERIFY(manager->checkpointLocked(workspace.path()));
+    const auto before = backend->messages().size();
+    backend->send("must not start while restoring");
+    QCOMPARE(backend->messages().size(),before);
+    QVERIFY(!backend->lastSendError().isEmpty());
+    auto second = call("checkpoints.acquire",{{"id",U::uuid().remove('-')}});
+    QVERIFY(!second["ok"].toBool());
+    QVERIFY(call("checkpoints.release",{{"token",token}})["ok"].toBool());
+    QVERIFY(!manager->checkpointLocked(workspace.path()));
+    QVERIFY(!call("checkpoints.release",{{"token",token}})["ok"].toBool());
+    acquired = call("checkpoints.acquire",{{"id",U::uuid().remove('-')}});
+    QVERIFY(acquired["ok"].toBool());
+    host->stop("change-review");
+    QVERIFY(!manager->checkpointLocked(workspace.path()));
+  }
   void cleanup() {
     if (QTest::currentTestFailed() && window) {
       auto selection = find("chatSelection");

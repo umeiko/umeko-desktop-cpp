@@ -40,9 +40,10 @@ QVariantMap WidgetHost::capabilities() const {
   auto names = commands.keys();
   names << "pi.status" << "pi.job" << "pi.network" << "pi.cancel" << "pi.inventory" << "pi.toolVisibility" << "pi.preset" << "pi.tool" << "pi.plugin" << "pi.tools";
   names << "skills.list" << "skills.browse" << "skills.preview" << "skills.details" << "skills.job" << "skills.attach" << "skills.default" << "skills.importPreview" << "skills.import" << "skills.paste" << "skills.importLocal" << "skills.open" << "skills.copy" << "skills.insert" << "skills.rename" << "skills.delete";
+  names << "checkpoints.acquire" << "checkpoints.release";
   for (const auto &name : names)
     operations[name] =
-        QVariantMap{{"permission", name.startsWith("skills.") ? (name=="skills.insert" ? "session.write" : mutation(name) ? "skills.manage" : "skills.read") : mutation(name) || name=="pi.cancel" ? "pi.manage" : "pi.read"},
+        QVariantMap{{"permission", name.startsWith("checkpoints.") ? "workspace.write" : name.startsWith("skills.") ? (name=="skills.insert" ? "session.write" : mutation(name) ? "skills.manage" : "skills.read") : mutation(name) || name=="pi.cancel" ? "pi.manage" : "pi.read"},
                     {"confirmation", mutation(name)}};
   return {{"version", 1},
           {"operations", operations},
@@ -147,9 +148,14 @@ void WidgetHost::begin(Task request) {
         {"skills.list",{}},{"skills.browse",{}},{"skills.preview",{"id"}},{"skills.details",{"id"}},{"skills.job",{"id","offset","limit","wait"}},
         {"skills.attach",{"id","enabled"}},{"skills.default",{"id","enabled"}},
         {"skills.importPreview",{"source","project"}},{"skills.import",{"id","decisions"}},{"skills.paste",{"project"}},{"skills.importLocal",{"source","project"}},
-        {"skills.open",{"id","mode"}},{"skills.copy",{"id","kind"}},{"skills.insert",{"id"}},{"skills.rename",{"id","name"}},{"skills.delete",{"id"}}};
+        {"skills.open",{"id","mode"}},{"skills.copy",{"id","kind"}},{"skills.insert",{"id"}},{"skills.rename",{"id","name"}},{"skills.delete",{"id"}},
+        {"checkpoints.acquire", {"id"}}, {"checkpoints.release", {"token"}}};
     for (auto it = args.cbegin(); it != args.cend(); ++it)
       require(fields[operation].contains(it.key()), "Unknown host arguments");
+    if (operation == "checkpoints.acquire")
+      require(QRegularExpression("^[a-f0-9]{32}$").match(args["id"].toString()).hasMatch(), "A valid checkpoint id is required");
+    if (operation == "checkpoints.release")
+      require(QRegularExpression("^[a-f0-9]{32}$").match(args["token"].toString()).hasMatch(), "A valid checkpoint lock token is required");
     if(operation.startsWith("skills.")) {
       if(!QStringList{"skills.list","skills.browse","skills.paste","skills.importLocal","skills.importPreview"}.contains(operation))
         require(args["id"].metaType().id()==QMetaType::QString && !args["id"].toString().isEmpty() && args["id"].toString().size()<=4096,"A valid Skill id is required");
@@ -252,6 +258,26 @@ void WidgetHost::execute(Task request) {
   owner(request);
   const auto operation = request->operation;
   auto args = request->arguments.toMap();
+  if (operation.startsWith("checkpoints.")) {
+    require(request->widget == "change-review", "Checkpoint locks are owned by the change review Widget");
+    if (operation == "checkpoints.release") {
+      require(releaseCheckpoint(request->widget, args["token"].toString(), request->worker), "Checkpoint lock is invalid or expired");
+      reply(request, {{"ok", true}});
+      return;
+    }
+    const auto workspace = U::cleanPath(request->session["workspace"].toString());
+    require(!workspace.isEmpty(), "A workspace is required");
+    require(!workspaceLocked(workspace), "Another checkpoint restore owns this workspace");
+    QStringList running;
+    for (const auto &record : b->records)
+      if (record->busy() && U::cleanPath(record->workspace) == workspace) running << record->title;
+    require(running.isEmpty(), "同工作目录仍有运行中的任务：" + running.mid(0, 4).join("、"));
+    const auto token = U::uuid().remove('-');
+    checkpointLocks[token] = {request->widget, request->worker, workspace};
+    QTimer::singleShot(60000, this, [this, request, token] { releaseCheckpoint(request->widget, token, request->worker); });
+    reply(request, {{"ok", true}, {"result", QVariantMap{{"token", token}, {"expiresMs", 60000}}}});
+    return;
+  }
   if(operation.startsWith("skills.")) {
     if(operation=="skills.job") {
       const auto old=jobs.value(args["id"].toString());
@@ -409,7 +435,24 @@ void WidgetHost::execute(Task request) {
   reply(request, result);
 }
 
+bool WidgetHost::workspaceLocked(QString workspace) const {
+  const auto target = U::cleanPath(workspace);
+  if (target.isEmpty()) return false;
+  for (const auto &lock : checkpointLocks)
+    if (lock.workspace == target) return true;
+  return false;
+}
+
+bool WidgetHost::releaseCheckpoint(QString id, QString token, std::shared_ptr<DesktopPlugins::Worker> worker) {
+  const auto lock = checkpointLocks.value(token);
+  if (lock.workspace.isEmpty() || lock.widget != id || lock.worker != worker) return false;
+  checkpointLocks.remove(token);
+  return true;
+}
+
 void WidgetHost::stop(QString id) {
+  for (const auto &token : checkpointLocks.keys())
+    if (checkpointLocks[token].widget == id) releaseCheckpoint(id, token, checkpointLocks[token].worker);
   activity.remove(id);
   if(id=="skill-manager" && b->skills)b->skills->close();
   if (pending && pending->widget == id)

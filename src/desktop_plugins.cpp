@@ -71,6 +71,9 @@ DesktopPlugins::DesktopPlugins(Backend *backend)
 }
 DesktopPlugins::~DesktopPlugins() { close(); }
 QObject *DesktopPlugins::hostServices() const { return host; }
+bool DesktopPlugins::checkpointLocked(QString workspace) const {
+  return host->workspaceLocked(workspace);
+}
 QString DesktopPlugins::requestHost(QString operation, QString raw) {
   if (raw.toUtf8().size() > 16384) return {};
   QJsonParseError error;
@@ -1027,7 +1030,7 @@ void DesktopPlugins::reviewEvent(QString key, QVariantMap value) {
   if (phase == "begin") reviewLoops[key] = loop; else reviewLoops.remove(key);
   QString request;
   if (entries.contains(id) && enabled(id))
-    request = callFor(id, phase, QString::fromUtf8(frame({{"loopId", loop}, {"reason", value.value("reason", "completed")}})), false, 10000, channel->snapshot(record));
+    request = callFor(id, phase, QString::fromUtf8(frame({{"loopId", loop}, {"reason", value.value("reason", "completed")}, {"title", value.value("title", record->title)}})), false, 10000, channel->snapshot(record));
   if (!request.isEmpty()) reviewRequests[request] = {key, value["id"].toString()};
   else b->writePi(record, {{"type", "loop_review_response"}, {"id", value["id"]}});
 }

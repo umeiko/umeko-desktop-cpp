@@ -45,6 +45,7 @@ public:
   QString callFor(QString id, QString method, QString raw, bool agent = false,
                   int timeout = 20000, QVariantMap session = {});
   QVariantMap execute(QString operation, QVariantMap args, QString callerKey);
+  bool checkpointLocked(QString workspace) const;
   void observe(QString key, QVariantMap event);
   Q_INVOKABLE bool uninstall(QString id);
   Q_INVOKABLE bool exportSdk(QString url);

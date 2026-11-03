@@ -249,6 +249,7 @@ void Backend::writePi(std::shared_ptr<Session> s, QVariantMap payload) {
 }
 bool Backend::command(std::shared_ptr<Session> s, QString action,
                       QVariantMap values) {
+  if (desktopExtensions->checkpointLocked(s->workspace)) return false;
   if (s->busy() || kernelBusy()) {
     emit toast(gatewayPort ? "请等待当前任务结束"
                            : "模型网关尚未准备好，请检查 Node.js");
@@ -408,6 +409,10 @@ void Backend::sendText(QString text, bool steering) {
   auto s = view;
   text = text.trimmed();
   sendError.clear();
+  if (desktopExtensions->checkpointLocked(s->workspace)) {
+    sendError = "该工作目录正在恢复代码检查点，完成后即可发送消息。";
+    emit toast(sendError); emit changed(); return;
+  }
   if (kernelBusy()) {
     sendError = "Pi 内核检查或更新正在进行；完成后即可再次发送消息。";
     emit toast(sendError); emit changed(); return;

@@ -201,6 +201,7 @@ QProcessEnvironment U::environment(QVariantMap npm) {
       env.remove(key);
   }
   env.remove("PI_OFFLINE");
+  env.insert("PYTHONUTF8", "1");
   const auto overrides = npmOverrides(npm);
   for (auto it = overrides.begin(); it != overrides.end(); ++it) {
     for (auto key : env.keys())
