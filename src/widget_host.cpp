@@ -265,17 +265,7 @@ void WidgetHost::execute(Task request) {
       reply(request, {{"ok", true}});
       return;
     }
-    const auto workspace = U::cleanPath(request->session["workspace"].toString());
-    require(!workspace.isEmpty(), "A workspace is required");
-    require(!workspaceLocked(workspace), "Another checkpoint restore owns this workspace");
-    QStringList running;
-    for (const auto &record : b->records)
-      if (record->busy() && U::cleanPath(record->workspace) == workspace) running << record->title;
-    require(running.isEmpty(), "同工作目录仍有运行中的任务：" + running.mid(0, 4).join("、"));
-    const auto token = U::uuid().remove('-');
-    checkpointLocks[token] = {request->widget, request->worker, workspace};
-    QTimer::singleShot(60000, this, [this, request, token] { releaseCheckpoint(request->widget, token, request->worker); });
-    reply(request, {{"ok", true}, {"result", QVariantMap{{"token", token}, {"expiresMs", 60000}}}});
+    queryCheckpoint(request);
     return;
   }
   if(operation.startsWith("skills.")) {
@@ -435,6 +425,41 @@ void WidgetHost::execute(Task request) {
   reply(request, result);
 }
 
+void WidgetHost::queryCheckpoint(Task request) {
+  const auto workspace = U::cleanPath(request->session["workspace"].toString());
+  require(!workspace.isEmpty(), "A workspace is required");
+  require(!workspaceLocked(workspace), "Another checkpoint restore owns this workspace");
+  for (const auto &record : b->records) {
+    if (!record->process || !record->ready || record->stale || U::cleanPath(record->workspace) != workspace) continue;
+    ++request->backgroundPending;
+    const auto id = request->id + (request->backgroundPending > 1 ? "-" + record->key : "");
+    catalogRequests[id] = {request, record->key};
+    b->writePi(record, {{"type", "widget_catalog"}, {"kind", "background-jobs"}, {"id", id}});
+  }
+  if (!request->backgroundPending) finishCheckpoint(request);
+}
+
+void WidgetHost::finishCheckpoint(Task request) {
+  owner(request);
+  require(request->backgroundError.isEmpty(), request->backgroundError);
+  const auto workspace = U::cleanPath(request->session["workspace"].toString());
+  require(!workspaceLocked(workspace), "Another checkpoint restore owns this workspace");
+  QStringList running;
+  for (const auto &record : b->records)
+    if (record->busy() && U::cleanPath(record->workspace) == workspace) running << record->title;
+  require(running.isEmpty(), "同工作目录仍有运行中的任务：" + running.mid(0, 4).join("、"));
+  const auto token = U::uuid().remove('-');
+  checkpointLocks[token] = {request->widget, request->worker, workspace};
+  syncCheckpointLocks();
+  QTimer::singleShot(60000, this, [this, request, token] { releaseCheckpoint(request->widget, token, request->worker); });
+  reply(request, {{"ok", true}, {"result", QVariantMap{{"token", token}, {"expiresMs", 60000}}}});
+}
+
+void WidgetHost::syncCheckpointLocks() {
+  for (const auto &record : b->records)
+    b->writePi(record, {{"type", "checkpoint_lock"}, {"locked", workspaceLocked(record->workspace)}});
+}
+
 bool WidgetHost::workspaceLocked(QString workspace) const {
   const auto target = U::cleanPath(workspace);
   if (target.isEmpty()) return false;
@@ -447,6 +472,7 @@ bool WidgetHost::releaseCheckpoint(QString id, QString token, std::shared_ptr<De
   const auto lock = checkpointLocks.value(token);
   if (lock.workspace.isEmpty() || lock.widget != id || lock.worker != worker) return false;
   checkpointLocks.remove(token);
+  syncCheckpointLocks();
   return true;
 }
 
@@ -465,6 +491,10 @@ void WidgetHost::stop(QString id) {
     } else
       ++it;
   }
+  for (auto it = catalogRequests.begin(); it != catalogRequests.end();) {
+    if (it.value().first->widget == id) it = catalogRequests.erase(it);
+    else ++it;
+  }
   for (auto it = requests.begin(); it != requests.end();) {
     if (it.value()->widget == id)
       it = requests.erase(it);
@@ -474,6 +504,29 @@ void WidgetHost::stop(QString id) {
 }
 
 void WidgetHost::observe(QString key, QVariantMap event) {
+  if (event["type"] == "widget_catalog") {
+    const auto item = catalogRequests.take(event["id"].toString());
+    if (!item.first || item.second != key) return;
+    const auto request = item.first;
+    --request->backgroundPending;
+    if (!event["ok"].toBool()) request->backgroundError = event["error"].toString();
+    else {
+      const auto workspace = U::cleanPath(request->session["workspace"].toString());
+      for (const auto &value : event["value"].toMap()["jobs"].toList()) {
+        const auto job = value.toMap();
+        const auto relative = QDir(workspace).relativeFilePath(U::cleanPath(job["cwd"].toString()));
+        if (job["status"] == "running" && !relative.startsWith("../") && relative != ".." && !QDir::isAbsolutePath(relative)) {
+          request->backgroundError = "同工作目录仍有运行中的后台任务；请等待结束后再恢复";
+          break;
+        }
+      }
+    }
+    if (!request->backgroundPending) {
+      try { finishCheckpoint(request); }
+      catch (const std::exception &error) { reply(request, {{"ok", false}, {"error", QString::fromUtf8(error.what())}}); }
+    }
+    return;
+  }
   if (event["type"] != "tool" ||
       !QStringList{"done", "error", "interrupted"}.contains(
           event["state"].toString()))

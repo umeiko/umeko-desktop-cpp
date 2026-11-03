@@ -1188,7 +1188,7 @@ private slots:
     QVERIFY(!wait(token)["ok"].toBool());
     token = request("pi.scan");
     auto accepted = wait(token);
-    QVERIFY(accepted["ok"].toBool());
+    QVERIFY2(accepted["ok"].toBool(), qPrintable(QString::fromUtf8(QJsonDocument::fromVariant(accepted).toJson(QJsonDocument::Compact))));
     QVERIFY(!accepted["jobId"].toString().isEmpty());
     const auto job = accepted["jobId"].toString();
     QTRY_VERIFY_WITH_TIMEOUT(backend->controlJobs[job].toMap()["status"] == "done", 20000);
@@ -4808,6 +4808,48 @@ def create_provider(context): return Interactive(context)
     manager->closePage();QVERIFY(manager->openPage("change-review"));
     QTRY_COMPARE_WITH_TIMEOUT(timeline()["currentId"].toString(),current,15000);
     QFile proof(workspace.filePath("src.py"));QVERIFY(proof.open(QIODevice::ReadOnly));QCOMPARE(proof.readAll(),QByteArray("version = 'D'\n"));
+  }
+  void checkpointBackgroundJobsBlockLocks() {
+    backend->newSession();
+    QTemporaryDir workspace; QVERIFY(workspace.isValid());
+    backend->setWorkspace(QUrl::fromLocalFile(workspace.path()).toString());
+    auto manager = backend->desktopExtensions;
+    const auto oldEnabled = manager->enabled("change-review");
+    const auto cleanup = qScopeGuard([&] {manager->closePage();manager->setEnabled("change-review",oldEnabled);backend->newSession();});
+    manager->setEnabled("change-review",true);
+    QVERIFY(manager->openPage("change-review"));
+    auto host = qobject_cast<WidgetHost *>(manager->hostServices());
+    QTRY_VERIFY_WITH_TIMEOUT(manager->workers.value("change-review") && manager->workers.value("change-review")->ready,10000);
+    QSignalSpy responses(manager,&DesktopPlugins::hostResponse);
+    auto process = new QProcess(backend.get());
+    backend->view->process = process;
+    backend->view->ready = true;
+    backend->view->stale = false;
+    auto reply = [&](QVariantMap event) {
+      const auto id=U::uuid().remove('-');
+      host->requestFor("change-review",{{"id",id},{"operation","checkpoints.acquire"},{"arguments",QVariantMap{{"id",U::uuid().remove('-')}}},{"session",manager->m_session}});
+      QCoreApplication::processEvents();
+      event["type"]="widget_catalog";event["id"]=id;
+      host->observe(backend->view->key,event);
+      QElapsedTimer elapsed;elapsed.start();
+      while(elapsed.elapsed()<5000) {QCoreApplication::processEvents();for(const auto &row:responses)if(row[1].toString()==id)return row[2].toMap();QTest::qWait(10);}
+      return QVariantMap{};
+    };
+    auto result=reply({{"ok",true},{"value",QVariantMap{{"jobs",QVariantList{QVariantMap{{"cwd",workspace.filePath("nested")},{"status","running"}}}}}}});
+    QVERIFY(!result["ok"].toBool());
+    QVERIFY(result["error"].toString().contains("后台任务"));
+    QVERIFY(!manager->checkpointLocked(workspace.path()));
+    result=reply({{"ok",false},{"error","catalog failure"}});
+    QVERIFY(!result["ok"].toBool());
+    QVERIFY(!manager->checkpointLocked(workspace.path()));
+    result=reply({{"ok",true},{"value",QVariantMap{{"jobs",QVariantList{}}}}});
+    QVERIFY(result["ok"].toBool());
+    const auto token=result["result"].toMap()["token"].toString();
+    QVERIFY(!token.isEmpty());
+    QVERIFY(manager->checkpointLocked(workspace.path()));
+    const auto id=U::uuid().remove('-');
+    host->requestFor("change-review",{{"id",id},{"operation","checkpoints.release"},{"arguments",QVariantMap{{"token",token}}},{"session",manager->m_session}});
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->checkpointLocked(workspace.path()),5000);
   }
   void checkpointHostLock() {
     backend->newSession();
