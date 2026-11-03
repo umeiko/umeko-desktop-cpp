@@ -1,6 +1,9 @@
 #include "common.hpp"
 #include <QImageReader>
 #include <stdexcept>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
 
 QString U::uuid() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 QString U::stamp() {
@@ -32,9 +35,25 @@ QString U::processDirectory(QString path) {
   if(path.isEmpty())return {};
   auto native=QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath());
   const auto prefix=QStringLiteral(R"(\\?\)");
-  if(native.startsWith(prefix) || native.size()<248)return native;
-  return native.startsWith(QStringLiteral(R"(\\)"))
-      ? prefix+QStringLiteral("UNC\\")+native.mid(2) : prefix+native;
+  if(native.size()<248)return native;
+  const auto extended=native.startsWith(prefix) ? native :
+      native.startsWith(QStringLiteral(R"(\\)"))
+          ? prefix+QStringLiteral("UNC\\")+native.mid(2) : prefix+native;
+  // CreateProcessW still limits its cwd even in a longPathAware process.
+  // Resolve an existing 8.3 spelling rather than changing the user's cwd.
+  const auto input=reinterpret_cast<LPCWSTR>(extended.utf16());
+  const auto capacity=GetShortPathNameW(input,nullptr,0);
+  if(capacity>0 && capacity<=32768) {
+    std::wstring buffer(capacity,L'\0');
+    const auto count=GetShortPathNameW(input,buffer.data(),capacity);
+    if(count>0 && count<capacity) {
+      auto shortened=QString::fromWCharArray(buffer.data(),int(count));
+      if(shortened.startsWith(prefix+QStringLiteral("UNC\\")))shortened=QStringLiteral(R"(\\)")+shortened.mid(8);
+      else if(shortened.startsWith(prefix))shortened=shortened.mid(4);
+      if(shortened.size()<258)return shortened;
+    }
+  }
+  return extended;
 #else
   return path;
 #endif
