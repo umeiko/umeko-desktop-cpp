@@ -17,7 +17,7 @@ private slots:
     QCOMPARE(U::readJson(path+"/settings.json").toMap()["fixture"].toBool(),true);
     QString error;QVERIFY2(U::copyTree(path,temp.filePath("copied"),&error),qPrintable(error));
     QCOMPARE(U::readJson(temp.filePath("copied/settings.json")).toMap()["fixture"].toBool(),true);
-    QProcess node;node.setWorkingDirectory(path);U::hideConsole(&node);
+    QProcess node;node.setWorkingDirectory(U::processDirectory(path));U::hideConsole(&node);
     node.start(U::node(),{"-e","const fs=require('node:fs');process.stdout.write(fs.readFileSync('settings.json','utf8'));"});
     QVERIFY2(node.waitForStarted(15000),qPrintable(node.errorString()));QVERIFY(node.waitForFinished(30000));QCOMPARE(node.exitCode(),0);
     QCOMPARE(QJsonDocument::fromJson(node.readAllStandardOutput()).object()["fixture"].toBool(),true);

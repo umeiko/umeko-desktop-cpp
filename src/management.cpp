@@ -605,7 +605,7 @@ void PiManagement::resilientInstall(QString source, bool local) {
   m_installState="installing";m_installMessage="正在读取系统代理并准备安装…";emit changed();
   auto process=new QProcess(this);m_installProcess=process;U::hideConsole(process);
   auto environment=U::environment(agent);environment.remove("NODE_TLS_REJECT_UNAUTHORIZED");
-  process->setProcessEnvironment(environment);process->setWorkingDirectory(cwd);
+  process->setProcessEnvironment(environment);process->setWorkingDirectory(U::processDirectory(cwd));
   auto buffer=std::make_shared<QByteArray>();auto result=std::make_shared<QVariantMap>();auto settled=std::make_shared<bool>(false);
   const auto finish=[this,process,result,settled,work](bool exited) {
     if (*settled) return;
@@ -688,7 +688,7 @@ void PiManagement::packageOperation(QString source, bool local, QString operatio
   env.insert("PI_SKIP_VERSION_CHECK", "1");
   env.insert("NO_COLOR", "1");
   p->setProcessEnvironment(env);
-  p->setWorkingDirectory(cwd);
+  p->setWorkingDirectory(U::processDirectory(cwd));
   QStringList args{
       b->release + "/node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
       operation, source, local ? "--approve" : "--no-approve"};

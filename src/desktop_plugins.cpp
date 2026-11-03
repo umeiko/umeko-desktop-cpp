@@ -211,6 +211,10 @@ void DesktopPlugins::synchronize() {
     return;
   bool switched = false;
   auto v = b->view;
+  // A native Pi reply may spell the same Windows directory with backslashes
+  // or a long form. Keep Widget identity stable across that first reply.
+  if(!v->workspace.isEmpty() && (m_session.value("token").toString()!=v->key || m_session.value("workspace").toString()!=v->workspace))
+    v->workspace=U::cleanPath(v->workspace);
   auto key = v->id.isEmpty() ? "draft:" + v->key : v->id;
   if (m_session.value("token").toString() != v->key ||
       m_session.value("workspace").toString() != v->workspace) {

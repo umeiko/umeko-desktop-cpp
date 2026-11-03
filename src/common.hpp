@@ -11,6 +11,7 @@ QString uuid();
 QString stamp();
 QString cleanPath(QString path);
 QString localPath(QString url);
+QString processDirectory(QString path);
 QString node();
 QString python(QString configured = {});
 QByteArray random(int count);

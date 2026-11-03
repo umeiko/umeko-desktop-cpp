@@ -86,15 +86,15 @@ class NativeUiTests : public QObject {
     QTest::mouseMove(window, position);
   }
   void click(QString name) {
-    auto item = find(name);
-    QVERIFY2(item, qPrintable(name));
-    // Backend notifications can arrive before QML has polished a new delegate
-    // and moved its bottom-anchored composer. Click its settled geometry.
+    // Status replies can replace ListView delegates during an event-loop wait.
+    // Resolve again after each wait instead of retaining a destroyed item.
     QTest::qWait(150);
-    QVERIFY(item->isVisible() && item->width() > 0 && item->height() > 0);
-    movePointer(point(item));
-    QTest::qWait(40);
-    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, point(item));
+    auto item=find(name);QVERIFY2(item,qPrintable(name));
+    QVERIFY(item->isVisible() && item->width()>0 && item->height()>0);
+    movePointer(point(item));QTest::qWait(40);
+    item=find(name);QVERIFY2(item,qPrintable(name));
+    QVERIFY(item->isVisible() && item->width()>0 && item->height()>0);
+    QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point(item));
     QTest::qWait(100);
   }
   QString lastText() {
@@ -840,9 +840,9 @@ private slots:
     backend->newSession();backend->notify();window->setProperty("page","chat");window->resize(1320,900);window->setProperty("webPreferredWidth",600);
     widgets->setEnabled("skill-manager",true);widgets->setSessionEnabled("skill-manager",true);
     backend->slash->refresh();
-    auto hasSkill=[&]{for(const auto &v:backend->slash->entries())if(v.toMap()["path"]==folder+"/SKILL.md")return true;return false;};
+    auto hasSkill=[&]{for(const auto &v:backend->slash->entries())if(U::cleanPath(v.toMap()["path"].toString())==U::cleanPath(folder+"/SKILL.md"))return true;return false;};
     QTRY_VERIFY_WITH_TIMEOUT(hasSkill(),10000);
-    QString skillId;for(const auto &v:backend->slash->entries())if(v.toMap()["path"]==folder+"/SKILL.md")skillId=v.toMap()["id"].toString();
+    QString skillId,skillPath;for(const auto &v:backend->slash->entries())if(U::cleanPath(v.toMap()["path"].toString())==U::cleanPath(folder+"/SKILL.md")){skillId=v.toMap()["id"].toString();skillPath=v.toMap()["path"].toString();}
     QVERIFY(backend->slash->choose(skillId));QCOMPARE(backend->attachments().size(),1);QCOMPARE(backend->attachments().first().toMap()["kind"].toString(),QString("folder"));
     QCOMPARE(backend->messages().size(),0); // Selection attaches; it never sends.
     QVERIFY(widgets->openPage("skill-manager"));
@@ -854,8 +854,8 @@ private slots:
     QDir().mkpath(root+"/build/screenshots");QVERIFY(window->grabWindow().save(root+"/build/screenshots/native066-skills.png"));
     const auto rows=page->property("skills").toList();
     QMetaObject::invokeMethod(page,"setEnabled",Q_ARG(QVariant,rows.first()),Q_ARG(QVariant,false));
-    QTRY_VERIFY_WITH_TIMEOUT(backend->view->skillModes.contains(folder+"/SKILL.md"),5000);
-    QVERIFY(!backend->view->skillModes[folder+"/SKILL.md"].toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(backend->view->skillModes.contains(skillPath),5000);
+    QVERIFY(!backend->view->skillModes[skillPath].toBool());
     widgets->closePage();widgets->setSessionEnabled("skill-manager",false);backend->slash->invalidate();backend->slash->refresh();
     QVERIFY(!hasSkill());QVERIFY(QFile::exists(folder+"/SKILL.md"));
     QFile document(directory.filePath("native066-large.md"));QVERIFY(document.open(QIODevice::WriteOnly));
@@ -967,22 +967,23 @@ private slots:
     backend->newSession();auto record=backend->view;record->workspace=work;backend->notify();
     window->resize(1480,960);window->setProperty("webPreferredWidth",500);window->setProperty("page","chat");
     const auto before=requests.size();QVERIFY(widgets->openPage("pi-manager"));
-    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerWidget"),10000);auto page=find("piManagerWidget");
-    auto ready=[&]{return !record->busy() && !page->property("working").toBool() && !page->property("sessionBusy").toBool() && !page->property("inventoryLoading").toBool() && backend->management->extensionsCurrent() && record->resources.contains("toolCatalog");};
-    QTRY_VERIFY2_WITH_TIMEOUT(ready(),qPrintable(QString("busy=%1 working=%2 current=%3 catalog=%4 action=%5 failed=%6 status=%7 notice=%8 pending=%9").arg(record->busy()).arg(page->property("working").toBool()).arg(backend->management->extensionsCurrent()).arg(record->resources.contains("toolCatalog")).arg(record->action).arg(record->failed).arg(backend->management->status()).arg(page->property("notice").toString()).arg(QString::fromUtf8(QJsonDocument::fromVariant(page->property("pending")).toJson(QJsonDocument::Compact)))),15000);QCOMPARE(page->property("expandedId").toString(),QString());
+    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerWidget"),10000);QPointer<QQuickItem> page=find("piManagerWidget");
+    const auto pageValue=[&](const char *name){return page ? page->property(name) : QVariant();};
+    auto ready=[&]{return page && !record->busy() && !pageValue("working").toBool() && !pageValue("sessionBusy").toBool() && !pageValue("inventoryLoading").toBool() && backend->management->extensionsCurrent() && record->resources.contains("toolCatalog");};
+    QTRY_VERIFY2_WITH_TIMEOUT(ready(),qPrintable(QString("busy=%1 working=%2 current=%3 catalog=%4 action=%5 failed=%6 status=%7 notice=%8 pending=%9").arg(record->busy()).arg((page && pageValue("working").toBool())).arg(backend->management->extensionsCurrent()).arg(record->resources.contains("toolCatalog")).arg(record->action).arg(record->failed).arg(backend->management->status()).arg((page ? pageValue("notice").toString() : QString("Widget was destroyed"))).arg(QString::fromUtf8(QJsonDocument::fromVariant((page ? pageValue("pending") : QVariant())).toJson(QJsonDocument::Compact)))),15000);QCOMPARE(pageValue("expandedId").toString(),QString());QCOMPARE(record->workspace,U::cleanPath(work));QVERIFY(page->isVisible());
     QVariantMap row;for(const auto &value:backend->management->extensions())if(value.toMap()["path"].toString().endsWith("capability-fixture.mjs"))row=value.toMap();
     QVERIFY(!row.isEmpty());find("piManagerSearch")->setProperty("text","fixture_one");
     QTRY_COMPARE_WITH_TIMEOUT(find("piManagerList")->property("count").toInt(),1,5000);QTRY_VERIFY_WITH_TIMEOUT(ready(),5000);
-    find("piManagerSearch")->setProperty("text","capability-fixture");QTRY_VERIFY_WITH_TIMEOUT(page->property("query").toString()=="capability-fixture" && ready(),5000);
+    find("piManagerSearch")->setProperty("text","capability-fixture");QTRY_VERIFY_WITH_TIMEOUT(pageValue("query").toString()=="capability-fixture" && ready(),5000);
     click("piExtension_"+row["id"].toString());QTRY_VERIFY_WITH_TIMEOUT(find("piToolSwitch_fixture_one"),5000);QTRY_VERIFY_WITH_TIMEOUT(ready(),5000);
     click("piToolSwitch_fixture_one");QTRY_VERIFY_WITH_TIMEOUT(ready() && !record->resources["tools"].toStringList().contains("fixture_one"),10000);
     QVERIFY(record->resources["tools"].toStringList().contains("fixture_two"));
     QTRY_VERIFY_WITH_TIMEOUT(find("piPluginSwitch_"+row["id"].toString())->isEnabled(),5000);
-    click("piPluginSwitch_"+row["id"].toString());QTRY_VERIFY2_WITH_TIMEOUT(ready() && !record->resources["tools"].toStringList().contains("fixture_two"),qPrintable(QString("profile=%1 tools=%2 busy=%3 working=%4 uiBusy=%5 inventory=%6 notice=%7").arg(QString::fromUtf8(QJsonDocument::fromVariant(record->piCapabilities).toJson(QJsonDocument::Compact))).arg(record->resources["tools"].toStringList().join(",")).arg(record->busy()).arg(page->property("working").toBool()).arg(page->property("sessionBusy").toBool()).arg(page->property("inventoryLoading").toBool()).arg(page->property("notice").toString())),10000);
+    click("piPluginSwitch_"+row["id"].toString());QTRY_VERIFY2_WITH_TIMEOUT(ready() && !record->resources["tools"].toStringList().contains("fixture_two"),qPrintable(QString("profile=%1 tools=%2 busy=%3 working=%4 uiBusy=%5 inventory=%6 notice=%7").arg(QString::fromUtf8(QJsonDocument::fromVariant(record->piCapabilities).toJson(QJsonDocument::Compact))).arg(record->resources["tools"].toStringList().join(",")).arg(record->busy()).arg((page && pageValue("working").toBool())).arg(pageValue("sessionBusy").toBool()).arg(pageValue("inventoryLoading").toBool()).arg((page ? pageValue("notice").toString() : QString("Widget was destroyed")))),10000);
     QTRY_VERIFY_WITH_TIMEOUT(find("piToolSwitch_fixture_two"),5000); // Cached definitions survive unloading.
     click("piPluginSwitch_"+row["id"].toString());QTRY_VERIFY_WITH_TIMEOUT(ready() && record->resources["tools"].toStringList().contains("fixture_two"),10000);
     QVERIFY(!record->resources["tools"].toStringList().contains("fixture_one"));
-    find("piManagerSearch")->setProperty("text","");QTRY_VERIFY_WITH_TIMEOUT(page->property("query").toString().isEmpty() && ready(),5000);
+    find("piManagerSearch")->setProperty("text","");QTRY_VERIFY_WITH_TIMEOUT(pageValue("query").toString().isEmpty() && ready(),5000);
     click("piPreset_minimal");QTRY_VERIFY_WITH_TIMEOUT(ready() && record->piCapabilities["preset"]=="minimal",10000);
     const auto names=record->resources["tools"].toStringList();QVERIFY(names.contains("read") && names.contains("write"));QVERIFY(!names.contains("grep") && !names.contains("fixture_two"));QVERIFY(!names.contains("umeko_desktop"));
     click("piPreset_custom");QTRY_VERIFY_WITH_TIMEOUT(ready() && record->piCapabilities["preset"]=="custom",10000);

@@ -58,6 +58,7 @@ void Backend::markRead(std::shared_ptr<Session> s) {
     setMetadata(s->id, {{"unread", false}});
 }
 void Backend::activate(std::shared_ptr<Session> s) {
+  if(!s->workspace.isEmpty())s->workspace=U::cleanPath(s->workspace);
   streaming.stop();
   if(view && view!=s && !view->id.isEmpty())setMetadata(view->id,{{"viewport",QVariantMap{{"index",view->scrollIndex},{"offset",view->scrollY},{"follow",view->followTail}}}});
   view = s;
@@ -168,7 +169,7 @@ void Backend::sessionInfo(std::shared_ptr<Session> s, QVariantMap info) {
   if (!info["title"].toString().isEmpty())
     s->title = info["title"].toString();
   if (!info["workspace"].toString().isEmpty())
-    s->workspace = info["workspace"].toString();
+    s->workspace = U::cleanPath(info["workspace"].toString());
   if (!old.isEmpty() && old != s->id) {
     for (int i = sessionIndex.size() - 1; i >= 0; --i)
       if (sessionIndex[i].toMap()["id"] == old)

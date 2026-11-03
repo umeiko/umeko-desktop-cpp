@@ -51,7 +51,7 @@ void UpdateInstaller::finish() {
   for (auto v : job["restartArgs"].toList()) arguments << v.toString();
   QProcess launch;
   launch.setProgram(executable); launch.setArguments(arguments);
-  launch.setWorkingDirectory(job["installDir"].toString());
+  launch.setWorkingDirectory(U::processDirectory(job["installDir"].toString()));
   launch.setProcessEnvironment(U::environment());
   if (launch.startDetached()) {
     const auto resources = job["installDir"].toString() + "/" + job["resourceRelative"].toString();
@@ -62,7 +62,7 @@ void UpdateInstaller::finish() {
 #endif
     QProcess cleaner;
     cleaner.setProgram(node); cleaner.setArguments({resources + "/runtime/update-engine.mjs", "cleanup", jobFile});
-    cleaner.setWorkingDirectory(job["installDir"].toString()); cleaner.setProcessEnvironment(U::environment());
+    cleaner.setWorkingDirectory(U::processDirectory(job["installDir"].toString())); cleaner.setProcessEnvironment(U::environment());
     cleaner.startDetached();
     QCoreApplication::quit();
   }

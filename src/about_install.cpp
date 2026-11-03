@@ -67,7 +67,7 @@ void AppAbout::runUpdate() {
 void AppAbout::launchInstaller(QString executable) {
   QProcess helper;
   helper.setProgram(executable); helper.setArguments({"--install-update", updateJobFile});
-  helper.setWorkingDirectory(QFileInfo(executable).absolutePath()); helper.setProcessEnvironment(U::environment());
+  helper.setWorkingDirectory(U::processDirectory(QFileInfo(executable).absolutePath())); helper.setProcessEnvironment(U::environment());
   if (!helper.startDetached()) {
     m_busy = false; m_installation = {{"state", "error"}, {"message", "独立安装器启动失败，当前程序保持运行。"}}; emit changed(); return;
   }

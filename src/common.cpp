@@ -27,6 +27,18 @@ QString U::cleanPath(QString path) {
   return QDir::cleanPath(f.exists() ? f.canonicalFilePath()
                                     : f.absoluteFilePath());
 }
+QString U::processDirectory(QString path) {
+#ifdef Q_OS_WIN
+  if(path.isEmpty())return {};
+  auto native=QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath());
+  const auto prefix=QStringLiteral(R"(\\?\)");
+  if(native.startsWith(prefix) || native.size()<248)return native;
+  return native.startsWith(QStringLiteral(R"(\\)"))
+      ? prefix+QStringLiteral("UNC\\")+native.mid(2) : prefix+native;
+#else
+  return path;
+#endif
+}
 QString U::node() {
 #ifdef Q_OS_WIN
   auto bundled =
@@ -212,7 +224,7 @@ void U::run(QObject *owner, const QString &program, const QStringList &args,
   };
   process->setProcessEnvironment(environment(npm));
   if (!cwd.isEmpty())
-    process->setWorkingDirectory(cwd);
+    process->setWorkingDirectory(processDirectory(cwd));
   QObject::connect(process, &QProcess::started, process, [=] {
     if (!input.isNull())
       process->write(input);
