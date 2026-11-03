@@ -3938,9 +3938,26 @@ def create_provider(context): return Interactive(context)
     QVERIFY(scroll);
     auto flick = qobject_cast<QQuickItem *>(scroll->property("contentItem").value<QObject *>());
     QVERIFY(flick);
-    const auto center = button->mapToItem(flick, button->boundingRect().center());
-    flick->setProperty("contentY", qBound(0.0, flick->property("contentY").toDouble() + center.y() - flick->height() / 2,
-                                          qMax(0.0, flick->property("contentHeight").toDouble() - flick->height())));
+    scroll->forceActiveFocus();
+    QMetaObject::invokeMethod(flick, "cancelFlick");
+    bool revealed = false;
+    for (int attempt = 0; attempt < 12 && !revealed; ++attempt) {
+      QTest::qWait(100);
+      button = find("loginPlugin_" + id);
+      QVERIFY(button);
+      flick->ensurePolished();
+      button->ensurePolished();
+      const auto center = button->boundingRect().center();
+      const auto local = button->mapToItem(flick, center);
+      const auto scene = button->mapToScene(center);
+      if (flick->contains(local) && QRectF(0, 0, window->width(), window->height()).contains(scene)) {
+        revealed = true;
+        break;
+      }
+      const auto y = flick->property("contentY").toReal() + local.y() - flick->height() / 2;
+      flick->setProperty("contentY", qBound(0.0, y, qMax(0.0, flick->property("contentHeight").toReal() - flick->height())));
+    }
+    QVERIFY(revealed);
     click("loginPlugin_" + id);
     QTRY_VERIFY_WITH_TIMEOUT(!row(id)["busy"].toBool(), 5000);
     QCOMPARE(row(id)["status"].toString(), QString("Sign-in interrupted: ***"));
