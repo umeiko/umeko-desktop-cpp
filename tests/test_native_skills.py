@@ -48,6 +48,20 @@ class NativeSkills(unittest.TestCase):
         self.assertFalse(self.call('skills.delete',id=row['id'])['ok'])
         current = next(r for r in self.call('skills.browse')['skills'] if r['name']=='renamed')
         self.assertTrue(self.call('skills.delete',id=current['id'])['ok'])
+    @unittest.skipIf(os.name == 'nt', 'POSIX ancestor alias; Windows temp-path coverage uses the ordinary fixtures')
+    def test_browse_canonicalizes_ancestor_alias_before_pinning(self):
+        self.skill(self.agent/'skills')
+        self.skill(self.project/'.pi/skills','local-fixture')
+        alias=self.base/'ancestor-alias';alias.symlink_to(self.base,target_is_directory=True)
+        self.context.update(agentDir=str(alias/'agent'),cwd=str(alias/'project'))
+        result=self.call('skills.browse');self.assertTrue(result['ok'],result)
+        self.assertEqual(len(result['skills']),2)
+        for row in result['skills']:
+            self.assertNotIn('ancestor-alias',row['path'])
+            self.assertIn('Local fixture',self.call('skills.preview',id=row['id'])['details']['markdown'])
+        alias.unlink();alias.symlink_to(self.base/'different-target',target_is_directory=True)
+        self.assertFalse(self.call('skills.delete',id=result['skills'][0]['id'])['ok'])
+        self.assertTrue((self.agent/'skills/fixture/SKILL.md').is_file())
     def test_import_is_explicit_non_destructive_and_respects_scope(self):
         source = self.skill(self.base/'source')
         self.call('skills.browse')

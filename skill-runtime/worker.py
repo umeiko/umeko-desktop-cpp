@@ -34,6 +34,9 @@ def execute(request):
     global catalog, folders
     op, args, context = request['operation'], request.get('arguments', {}), request['context']
     agent_root, cwd = Path(context['agentDir']).resolve(), Path(context['cwd']).resolve()
+    # Keep Node discovery and Python's pinned filesystem authority on the same
+    # canonical paths (macOS /var aliases and Windows short temp paths differ).
+    context = {**context, 'agentDir': str(agent_root), 'cwd': str(cwd)}
     if op in ('skills.browse', 'skills.list'):
         result = node(context, action='browse' if op.endswith('browse') else 'list')
         roots = {'global': agent_root / 'skills'}
