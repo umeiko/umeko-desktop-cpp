@@ -3859,17 +3859,11 @@ def create_provider(context): return Interactive(context)
     const auto id = manager->rows().last().toMap()["id"].toString();
     const auto other = manager->addAccount("example-interactive", "0.1.0") ? manager->rows().last().toMap()["id"].toString() : QString();
     QVERIFY(!other.isEmpty() && other != id);
-    auto row = [manager](const QString &identifier) {
-      for (const auto &value : manager->rows())
-        if (value.toMap()["id"] == identifier)
-          return value.toMap();
-      return QVariantMap{};
-    };
     QSignalSpy notices(backend, &Backend::toast);
     manager->login(id, "{\"username\":\"fixture-secret\"}");
     manager->login(other, "{\"username\":\"other-secret\"}");
-    QTRY_COMPARE_WITH_TIMEOUT(row(id)["status"].toString(), QString("Waiting for browser confirmation"), 15000);
-    QVERIFY(row(id)["loggingIn"].toBool() && row(other)["loggingIn"].toBool());
+    QTRY_COMPARE_WITH_TIMEOUT(manager->rows().first().toMap()["status"].toString(), QString("Waiting for browser confirmation"), 15000);
+    QVERIFY(manager->rows().first().toMap()["loggingIn"].toBool() && manager->rows().last().toMap()["loggingIn"].toBool());
     bool bounded = false;
     for (auto process : manager->findChildren<QProcess *>())
       for (auto timer : process->findChildren<QTimer *>())
@@ -3877,15 +3871,15 @@ def create_provider(context): return Interactive(context)
     QVERIFY(bounded);
     const auto before = notices.count();
     manager->cancelLogin(id);
-    QTRY_VERIFY_WITH_TIMEOUT(!row(id)["busy"].toBool(), 5000);
-    QCOMPARE(row(id)["status"].toString(), QString("Sign-in interrupted: ***"));
-    QVERIFY(!row(id)["loggingIn"].toBool());
-    QVERIFY(row(other)["loggingIn"].toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->rows().first().toMap()["busy"].toBool(), 5000);
+    QCOMPARE(manager->rows().first().toMap()["status"].toString(), QString("Sign-in interrupted: ***"));
+    QVERIFY(!manager->rows().first().toMap()["loggingIn"].toBool());
+    QVERIFY(manager->rows().last().toMap()["loggingIn"].toBool());
     QVERIFY(backend->store.secret("account:" + id).isEmpty());
     QCOMPARE(notices.count(), before);
     QVERIFY(!QFileInfo::exists(directory.filePath("provider-plugins/state/" + U::sha(id.toUtf8()) + "/models-called"));
     manager->cancelLogin(other);
-    QTRY_VERIFY_WITH_TIMEOUT(!row(other)["busy"].toBool(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->rows().last().toMap()["busy"].toBool(), 5000);
     QCOMPARE(notices.count(), before);
     QVERIFY(manager->uninstall("example-interactive", "0.1.0"));
   }

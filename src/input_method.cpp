@@ -30,12 +30,20 @@ void InputMethodUpdates::update() {
     connections.clear();
     items = chain;
     for (auto *item : items) {
-      for (auto signal : {&QQuickItem::xChanged, &QQuickItem::yChanged,
-                          &QQuickItem::widthChanged, &QQuickItem::heightChanged,
-                          &QQuickItem::scaleChanged, &QQuickItem::rotationChanged,
-                          &QQuickItem::transformOriginChanged})
-        connections.append(QObject::connect(item, signal, this,
-                                            &InputMethodUpdates::schedule));
+      connections.append(QObject::connect(item, &QQuickItem::xChanged, this,
+                                          &InputMethodUpdates::schedule));
+      connections.append(QObject::connect(item, &QQuickItem::yChanged, this,
+                                          &InputMethodUpdates::schedule));
+      connections.append(QObject::connect(item, &QQuickItem::widthChanged, this,
+                                          &InputMethodUpdates::schedule));
+      connections.append(QObject::connect(item, &QQuickItem::heightChanged, this,
+                                          &InputMethodUpdates::schedule));
+      connections.append(QObject::connect(item, &QQuickItem::scaleChanged, this,
+                                          &InputMethodUpdates::schedule));
+      connections.append(QObject::connect(item, &QQuickItem::rotationChanged, this,
+                                          &InputMethodUpdates::schedule));
+      connections.append(QObject::connect(item, &QQuickItem::transformOriginChanged,
+                                          this, &InputMethodUpdates::schedule));
       connections.append(QObject::connect(item, &QQuickItem::parentChanged, this,
                                           &InputMethodUpdates::schedule));
     }
