@@ -24,6 +24,9 @@ private:
     std::shared_ptr<DesktopPlugins::Worker> worker;
     QVariantMap session;
     QVariant arguments;
+    int backgroundPending = 0;
+    int attempts = 0;
+    QString backgroundError;
   };
   using Task = std::shared_ptr<Request>;
   DesktopPlugins *m;
@@ -31,6 +34,7 @@ private:
   QVariantMap approval;
   Task pending;
   QHash<QString, Task> requests, jobs;
+  QHash<QString, QPair<Task, QString>> catalogRequests;
   QStringList jobOrder;
   struct Activity {
     std::shared_ptr<DesktopPlugins::Worker> worker;
@@ -50,4 +54,7 @@ private:
   void reply(Task request, QVariantMap value);
   void begin(Task request);
   void execute(Task request);
+  void queryCheckpoint(Task request);
+  void finishCheckpoint(Task request);
+  void syncCheckpointLocks();
 };
