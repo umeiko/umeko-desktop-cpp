@@ -582,11 +582,12 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
       {"proxy", proxy},
       {"method", method},
       {"params", params}};
-  connect(process, &QProcess::started, this, [process, input] {
+  connect(process, &QProcess::started, this, [process, input, method] {
     process->write(
         QJsonDocument::fromVariant(input).toJson(QJsonDocument::Compact) +
         '\n');
-    process->closeWriteChannel();
+    if (method != "login")
+      process->closeWriteChannel();
   });
   connect(process, &QProcess::readyReadStandardOutput, this, [=, this] {
     *buffer += process->readAllStandardOutput();
@@ -613,6 +614,10 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
         timeout->start();
         if (onEvent)
           onEvent(event["data"].toMap());
+      } else if (type == "cancelled") {
+        complete({{"cancelled", true},
+                  {"message", event.value("message", "登录已取消").toString()}});
+        return;
       } else if (type == "result") {
         complete(event["data"].toMap());
         return;
@@ -627,9 +632,12 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
   connect(process, &QProcess::readyReadStandardError, this,
           [process] { process->readAllStandardError(); });
   connect(process, &QProcess::finished, this, [=](int, QProcess::ExitStatus) {
-    if (!*finished)
-      complete(
-          {{"error", process->property("authCancelled").toBool() ? "登录已取消" : "供应商进程退出，请检查 Python 版本、依赖与插件配置"}});
+    if (*finished)
+      return;
+    if (process->property("authCancelled").toBool())
+      complete({{"cancelled", true}, {"message", "登录已取消"}});
+    else
+      complete({{"error", "供应商进程退出，请检查 Python 版本、依赖与插件配置"}});
   });
   connect(process, &QProcess::errorOccurred, this,
           [=](QProcess::ProcessError error) {
@@ -689,6 +697,12 @@ bool Providers::login(QString id, QString raw) {
          [this, id, publicValues, flags, work](QVariantMap result) {
            busy.remove(id);
            logins.remove(id);
+           if (result.contains("cancelled")) {
+             statuses[id] = result.value("message", "登录已取消").toString();
+             emit changed();
+             b->endControlWork(work, {{"ok", true}, {"cancelled", true}});
+             return;
+           }
            if (result.contains("error")) {
              statuses[id] = result["error"].toString();
              emit b->toast(statuses[id]);
@@ -716,9 +730,13 @@ void Providers::cancelLogin(QString id) {
     return;
   if (auto process = workers.value("login:" + id)) {
     process->setProperty("authCancelled", true);
+    process->write("{\"cancel\":true}\n");
     statuses[id] = "正在取消登录…";
     emit changed();
-    cancel("login:" + id);
+    QTimer::singleShot(800, process, [process] {
+      if (process->state() != QProcess::NotRunning)
+        process->kill();
+    });
   }
 }
 bool Providers::refreshModels(QString id) {
