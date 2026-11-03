@@ -3860,6 +3860,19 @@ def create_provider(context): return Interactive(context)
     const auto other = manager->addAccount("example-interactive", "0.1.0") ? manager->rows().last().toMap()["id"].toString() : QString();
     QVERIFY(!other.isEmpty() && other != id);
     QSignalSpy notices(backend, &Backend::toast);
+    const auto previousPage = window->property("page");
+    const auto previousTab = window->property("settingsTab");
+    const auto language = backend->language();
+    auto restore = qScopeGuard([&] {
+      manager->cancelLogin(id);
+      manager->cancelLogin(other);
+      backend->setLanguage(language);
+      window->setProperty("page", previousPage);
+      window->setProperty("settingsTab", previousTab);
+    });
+    backend->setLanguage("en");
+    window->setProperty("page", "settings");
+    window->setProperty("settingsTab", 0);
     manager->login(id, "{\"username\":\"fixture-secret\"}");
     manager->login(other, "{\"username\":\"other-secret\"}");
     QTRY_COMPARE_WITH_TIMEOUT(manager->rows().first().toMap()["status"].toString(), QString("Waiting for browser confirmation"), 15000);
@@ -3870,7 +3883,18 @@ def create_provider(context): return Interactive(context)
         bounded |= timer->interval() == 600000 && timer->isActive();
     QVERIFY(bounded);
     const auto before = notices.count();
-    manager->cancelLogin(id);
+    QTRY_VERIFY_WITH_TIMEOUT(find("loginPlugin_" + id) != nullptr, 5000);
+    auto button = find("loginPlugin_" + id);
+    QTRY_COMPARE_WITH_TIMEOUT(button->property("text").toString(), QString("Cancel sign-in"), 5000);
+    QVERIFY(button->isEnabled());
+    auto scroll = find("settingsScroll");
+    QVERIFY(scroll);
+    auto flick = qobject_cast<QQuickItem *>(scroll->property("contentItem").value<QObject *>());
+    QVERIFY(flick);
+    const auto center = button->mapToItem(flick, button->boundingRect().center());
+    flick->setProperty("contentY", qBound(0.0, flick->property("contentY").toDouble() + center.y() - flick->height() / 2,
+                                          qMax(0.0, flick->property("contentHeight").toDouble() - flick->height())));
+    click("loginPlugin_" + id);
     QTRY_VERIFY_WITH_TIMEOUT(!manager->rows().first().toMap()["busy"].toBool(), 5000);
     QCOMPARE(manager->rows().first().toMap()["status"].toString(), QString("Sign-in interrupted: ***"));
     QVERIFY(!manager->rows().first().toMap()["loggingIn"].toBool());
