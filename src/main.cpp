@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
   configureWebView(U::cleanPath(earlyRoot));
   QQuickStyle::setStyle("Basic");
   QApplication app(argc, argv);
-  InputMethodUpdates inputUpdates(app);
+  InputMethodUpdates inputUpdates(&app);
   app.setApplicationName("Umeko-Desktop");
   app.setApplicationDisplayName("Umeko-Desktop");
   app.setApplicationVersion(UMEKO_VERSION);

@@ -3746,14 +3746,14 @@ Item {
     composer.setResizeMode(QQuickView::SizeRootObjectToView);
     QQmlComponent component(composer.engine());
     const auto url = QUrl::fromLocalFile(root + "/tests/fixtures/input-method.qml");
-    component.setData(R"QML(import QtQuick
-import "../../app/qml" as Umeko
-Item {
-  Umeko.Composer {
-    objectName: "composer"; x: 20; width: parent.width - 40
-    anchors.bottom: parent.bottom; anchors.bottomMargin: 20
-  }
-})QML", url);
+    component.setData("import QtQuick\n"
+                      "import \"../../app/qml\" as Umeko\n"
+                      "Item {\n"
+                      "  Umeko.Composer {\n"
+                      "    objectName: \"composer\"; x: 20; width: parent.width - 40\n"
+                      "    anchors.bottom: parent.bottom; anchors.bottomMargin: 20\n"
+                      "  }\n"
+                      "}", url);
     QVERIFY2(component.isReady(), qPrintable(component.errors().isEmpty() ? QString() : component.errors().first().toString()));
     composer.setContent(url, &component, component.create());
     composer.resize(840, 400);
