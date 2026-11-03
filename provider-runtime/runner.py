@@ -108,12 +108,12 @@ def main():
             method, params = request["method"], request.get("params") or {}
             if method == "login":
                 result = None
-                if not request_cancelled.is_set():
+                if not request_cancelled.is_set() and not cancelled.is_set():
                     credentials = params["credentials"]
                     details = provider.authenticate(credentials) or {}
-                    if not request_cancelled.is_set():
+                    if not request_cancelled.is_set() and not cancelled.is_set():
                         models = provider.list_models(refresh=True)
-                        if not request_cancelled.is_set():
+                        if not request_cancelled.is_set() and not cancelled.is_set():
                             provider.context.secrets.set("credentials", credentials)
                             result = {"models": models, "label": str(details.get("label", "已登录"))[:100]}
             elif method == "models":

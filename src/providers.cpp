@@ -525,7 +525,8 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
     *finished = true;
     workers.remove(request);
     timeout->stop();
-    if (!process->property("authCancelled").toBool() && !pendingSecrets->isEmpty() &&
+    if (!result.contains("cancelled") &&
+        !process->property("authCancelled").toBool() && !pendingSecrets->isEmpty() &&
         *pendingSecrets != b->store.secret("account:" + id) &&
         !b->store.setSecret("account:" + id, *pendingSecrets))
       result = {{"error", "无法保护供应商凭据，请检查系统密钥环"}};

@@ -3740,7 +3740,7 @@ Item {
              qPrintable(lastText()));
   }
   void inputMethodCaretUpdates() {
-    InputMethodUpdates updates(QApplication::instance());
+    InputMethodUpdates updates(qApp);
     QQuickView composer;
     composer.engine()->rootContext()->setContextProperty("backend", backend.get());
     composer.setResizeMode(QQuickView::SizeRootObjectToView);
@@ -3787,11 +3787,13 @@ Item {
       const auto mapped = item->mapRectToScene(item->inputMethodQuery(Qt::ImCursorRectangle).toRectF());
       const auto caret = item->mapRectToScene(item->property("cursorRectangle").toRectF());
       for (const auto &expected : {mapped, caret}) {
+        QString message;
+        QDebug(&message) << actual << "!=" << expected;
         QVERIFY2(qAbs(actual.x() - expected.x()) <= 1 &&
                  qAbs(actual.y() - expected.y()) <= 1 &&
                  qAbs(actual.width() - expected.width()) <= 1 &&
                  qAbs(actual.height() - expected.height()) <= 1,
-                 qPrintable(actual.toString() + " != " + expected.toString()));
+                 qPrintable(message));
       }
       QVERIFY(actual.width() > 0 && actual.height() > 0);
     };
@@ -3881,9 +3883,12 @@ class Interactive(Provider):
   super().__init__(context); self.model_calls=0
  def authenticate(self, credentials):
   self.context.secrets.set('session',{'token':'synthetic-pending-token'})
+  if credentials['username']=='provider-close':
+   self.close()
+   raise ProviderError('Sign-in interrupted: '+credentials['username'])
   self.context.report_status('Waiting for browser confirmation')
   while not self.context.request_cancelled.wait(.05): pass
-  raise ProviderError('Sign-in interrupted: fixture-secret')
+  raise ProviderError('Sign-in interrupted: '+credentials['username'])
  def list_models(self, refresh=False):
   self.model_calls+=1
   Path(self.context.state_dir/'models-called').write_text('called')
@@ -3895,7 +3900,7 @@ def create_provider(context): return Interactive(context)
     const auto id = manager->rows().last().toMap()["id"].toString();
     const auto other = manager->addAccount("example-interactive", "0.1.0") ? manager->rows().last().toMap()["id"].toString() : QString();
     QVERIFY(!other.isEmpty() && other != id);
-    QSignalSpy notices(backend, &Backend::toast);
+    QSignalSpy notices(backend.get(), &Backend::toast);
     const auto previousPage = window->property("page");
     const auto previousTab = window->property("settingsTab");
     const auto language = backend->language();
@@ -3941,6 +3946,14 @@ def create_provider(context): return Interactive(context)
     manager->cancelLogin(other);
     QTRY_VERIFY_WITH_TIMEOUT(!manager->rows().last().toMap()["busy"].toBool(), 5000);
     QCOMPARE(notices.count(), before);
+    const auto providerClosed = manager->addAccount("example-interactive", "0.1.0") ? manager->rows().last().toMap()["id"].toString() : QString();
+    QVERIFY(!providerClosed.isEmpty());
+    manager->login(providerClosed, "{\"username\":\"provider-close\"}");
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->rows().last().toMap()["busy"].toBool(), 5000);
+    QCOMPARE(manager->rows().last().toMap()["status"].toString(), QString("Sign-in interrupted: ***"));
+    QCOMPARE(notices.count(), before);
+    QVERIFY(backend->store.secret("account:" + providerClosed).isEmpty());
+    QVERIFY(!QFileInfo::exists(directory.filePath("provider-plugins/state/" + U::sha(providerClosed.toUtf8()) + "/models-called")));
     QVERIFY(manager->uninstall("example-interactive", "0.1.0"));
   }
   void providerPackageReinstallation() {

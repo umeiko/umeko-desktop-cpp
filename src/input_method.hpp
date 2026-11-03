@@ -6,18 +6,18 @@
 #include <QQuickItem>
 #include <QTimer>
 
-class QApplication;
+class QGuiApplication;
 
 class InputMethodUpdates : public QObject {
   Q_OBJECT
 public:
-  explicit InputMethodUpdates(QApplication *application);
+  explicit InputMethodUpdates(QGuiApplication *application);
 
 private:
   void schedule();
   void update();
 
-  QApplication *application;
+  QGuiApplication *application;
   QList<QQuickItem *> items;
   QList<QMetaObject::Connection> connections;
   QTimer pending;

@@ -1,17 +1,17 @@
 #include "input_method.hpp"
 
-#include <QApplication>
+#include <QGuiApplication>
 #include <QInputMethod>
 #include <QQuickWindow>
 
-InputMethodUpdates::InputMethodUpdates(QApplication *application)
+InputMethodUpdates::InputMethodUpdates(QGuiApplication *application)
     : QObject(application), application(application), pending(this) {
   pending.setSingleShot(true);
   pending.setInterval(0);
   connect(&pending, &QTimer::timeout, this, &InputMethodUpdates::update);
-  connect(application, &QApplication::focusObjectChanged, this,
+  connect(application, &QGuiApplication::focusObjectChanged, this,
           &InputMethodUpdates::schedule);
-  connect(application, &QApplication::focusWindowChanged, this,
+  connect(application, &QGuiApplication::focusWindowChanged, this,
           &InputMethodUpdates::schedule);
 }
 
