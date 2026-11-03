@@ -26,7 +26,22 @@ void require(bool valid, QString error) {
 QString key(const QString &widget, const QString &request) {
   return widget + "/" + request;
 }
-} // namespace
+}
+
+namespace U {
+QString checkpointPath(QString path) {
+  path = localPath(path);
+  QFileInfo info(path);
+  if (info.exists()) return info.canonicalFilePath();
+  auto parent = info.absoluteDir();
+  QStringList suffix{info.fileName()};
+  while (!parent.exists() && !parent.isRoot()) {
+    suffix.prepend(parent.dirName());
+    parent.cdUp();
+  }
+  return QDir(parent.canonicalPath()).filePath(suffix.join('/'));
+}
+}
 
 WidgetHost::WidgetHost(DesktopPlugins *manager)
     : QObject(manager), m(manager), b(manager->b) {
@@ -406,6 +421,14 @@ void WidgetHost::execute(Task request) {
     reply(request, result);
     return;
   }
+  if ((b->management->busy() || b->kernelUpdating) && operation == "pi.scan" && request->attempts < 80) {
+    ++request->attempts;
+    QTimer::singleShot(250, this, [this, request] {
+      try { execute(request); }
+      catch (const std::exception &error) { reply(request, {{"ok", false}, {"error", QString::fromUtf8(error.what())}}); }
+    });
+    return;
+  }
   require(!b->management->busy() && !b->kernelUpdating,
           "Pi management is busy; retry when it finishes");
   require(!mutation(operation) || !b->view->busy(),
@@ -426,11 +449,11 @@ void WidgetHost::execute(Task request) {
 }
 
 void WidgetHost::queryCheckpoint(Task request) {
-  const auto workspace = U::cleanPath(request->session["workspace"].toString());
+  const auto workspace = U::checkpointPath(request->session["workspace"].toString());
   require(!workspace.isEmpty(), "A workspace is required");
   require(!workspaceLocked(workspace), "Another checkpoint restore owns this workspace");
   for (const auto &record : b->records) {
-    if (!record->process || !record->ready || record->stale || U::cleanPath(record->workspace) != workspace) continue;
+    if (!record->process || !record->ready || record->stale || U::checkpointPath(record->workspace) != workspace) continue;
     ++request->backgroundPending;
     const auto id = request->id + (request->backgroundPending > 1 ? "-" + record->key : "");
     catalogRequests[id] = {request, record->key};
@@ -442,11 +465,11 @@ void WidgetHost::queryCheckpoint(Task request) {
 void WidgetHost::finishCheckpoint(Task request) {
   owner(request);
   require(request->backgroundError.isEmpty(), request->backgroundError);
-  const auto workspace = U::cleanPath(request->session["workspace"].toString());
+  const auto workspace = U::checkpointPath(request->session["workspace"].toString());
   require(!workspaceLocked(workspace), "Another checkpoint restore owns this workspace");
   QStringList running;
   for (const auto &record : b->records)
-    if (record->busy() && U::cleanPath(record->workspace) == workspace) running << record->title;
+    if (record->busy() && U::checkpointPath(record->workspace) == workspace) running << record->title;
   require(running.isEmpty(), "同工作目录仍有运行中的任务：" + running.mid(0, 4).join("、"));
   const auto token = U::uuid().remove('-');
   checkpointLocks[token] = {request->widget, request->worker, workspace};
@@ -461,7 +484,7 @@ void WidgetHost::syncCheckpointLocks() {
 }
 
 bool WidgetHost::workspaceLocked(QString workspace) const {
-  const auto target = U::cleanPath(workspace);
+  const auto target = U::checkpointPath(workspace);
   if (target.isEmpty()) return false;
   for (const auto &lock : checkpointLocks)
     if (lock.workspace == target) return true;
@@ -511,10 +534,10 @@ void WidgetHost::observe(QString key, QVariantMap event) {
     --request->backgroundPending;
     if (!event["ok"].toBool()) request->backgroundError = event["error"].toString();
     else {
-      const auto workspace = U::cleanPath(request->session["workspace"].toString());
+      const auto workspace = U::checkpointPath(request->session["workspace"].toString());
       for (const auto &value : event["value"].toMap()["jobs"].toList()) {
         const auto job = value.toMap();
-        const auto relative = QDir(workspace).relativeFilePath(U::cleanPath(job["cwd"].toString()));
+        const auto relative = QDir(workspace).relativeFilePath(U::checkpointPath(job["cwd"].toString()));
         if (job["status"] == "running" && !relative.startsWith("../") && relative != ".." && !QDir::isAbsolutePath(relative)) {
           request->backgroundError = "同工作目录仍有运行中的后台任务；请等待结束后再恢复";
           break;

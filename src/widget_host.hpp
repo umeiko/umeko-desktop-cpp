@@ -25,6 +25,7 @@ private:
     QVariantMap session;
     QVariant arguments;
     int backgroundPending = 0;
+    int attempts = 0;
     QString backgroundError;
   };
   using Task = std::shared_ptr<Request>;

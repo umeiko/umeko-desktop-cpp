@@ -1178,7 +1178,7 @@ private slots:
       return host->requestFor(id, {{"operation", operation}, {"arguments", arguments}, {"session", manager->m_session}});
     };
     auto wait = [&](QString token) {
-      QDeadlineTimer deadline(5000);
+      QDeadlineTimer deadline(15000);
       while (!results.contains(token) && !deadline.hasExpired()) QTest::qWait(10);
       return results.value(token);
     };
@@ -1186,6 +1186,7 @@ private slots:
     QVERIFY(!wait(token)["ok"].toBool());
     token = request("pi.status", {{"limit",true}});
     QVERIFY(!wait(token)["ok"].toBool());
+    backend->management->scan();
     token = request("pi.scan");
     auto accepted = wait(token);
     QVERIFY2(accepted["ok"].toBool(), qPrintable(QString::fromUtf8(QJsonDocument::fromVariant(accepted).toJson(QJsonDocument::Compact))));
