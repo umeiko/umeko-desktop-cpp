@@ -339,6 +339,7 @@ test("real bridge reports background jobs and enforces checkpoint lock changes",
   try {
     send({ type: "inspect", workspace: cwd, defaultCwd: cwd, agentDir, sessionDir, model: "fixture", models: [{ id: "fixture", contextWindow: 128000 }], gateway: `http://127.0.0.1:${server.address().port}/`, token: "fixture", agent: {} });
     await wait(() => events.some(event => event.type === "ready"));
+    await wait(() => events.some(event => event.type === "done" && event.action === "inspect"));
     send({ type: "prompt", text: "Start the background job" });
     await wait(() => events.some(event => event.type === "tool" && event.name === "background_job" && event.state === "done"));
     await wait(() => events.some(event => event.type === "done" && event.action === "prompt"));
