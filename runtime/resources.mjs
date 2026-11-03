@@ -1,7 +1,8 @@
+import { pluginSelection } from "./session-capabilities.mjs";
 // Native resource discovery/settings only: never import or execute extension code.
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, statSync, realpathSync, openSync, readSync, closeSync } from "node:fs";
 import { dirname, basename, join, relative, resolve, delimiter } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
@@ -28,11 +29,11 @@ function manifestAt(directory) {
   } catch { return {}; }
 }
 export function extensionInfo(row) {
-  const builtin = row.path.startsWith("builtin:"), name = row.path.slice(8), required = requiredBuiltins.has(row.path);
+  const builtin = row.path.startsWith("builtin:"), name = row.path.slice(8), required = false;
   let root = row.metadata?.packageRoot || row.metadata?.baseDir || "";
   let origin = "local", updateKind = "none", manifest = {};
-  if (builtin && ["chatbox", "pi-commands", "umeko-control"].includes(name)) {
-    const descriptions = {chatbox:"向聊天和侧栏展示文件、图片、文档与网页。", "pi-commands":"向当前内嵌 Pi 实例发送原生命令和斜杠命令。", "umeko-control":"查询和管理 Umeko 的供应商、主题、扩展与应用设置。"};
+  if (builtin && ["chatbox", "pi-commands", "umeko-control", "background-jobs"].includes(name)) {
+    const descriptions = {"background-jobs":"启动、读取、等待和停止当前会话自己的后台命令。",chatbox:"向聊天和侧栏展示文件、图片、文档与网页。", "pi-commands":"向当前内嵌 Pi 实例发送原生命令和斜杠命令。", "umeko-control":"查询和管理 Umeko 的供应商、主题、扩展与应用设置。"};
     return {icon:name, required, origin:"desktop", bundled:true, description:descriptions[name], homepage:desktopRepository, repository:desktopRepository, version:"", package:"", updateKind:"desktop"};
   }
   if (builtin) {
@@ -98,23 +99,7 @@ export async function checkExtensionUpdate(row, {cwd, lookup = npmVersion} = {})
   return {id:row.id,status:"unsupported",message:"本地扩展没有可检查的更新源"};
 }
 
-export const builtins = ["codemode", "tool-search", "mcp", "chatbox", "pi-commands", "umeko-control", "subagents"];
-// Desktop integration and tool routing are part of Umeko's runtime contract.
-// Keep optional MCP/community extensions configurable. This policy is a read
-// view: native Pi settings remain writable and are never rewritten on startup.
-export const requiredBuiltins = new Set(builtins.filter(name => ["codemode", "tool-search", "chatbox", "pi-commands", "umeko-control", "background-jobs"].includes(name)).map(name => "builtin:" + name));
-const protectedSettings = new WeakMap();
-function requiredResourceSettings(settings) {
-  if (protectedSettings.has(settings)) return protectedSettings.get(settings);
-  const force = data => ({...data, extensions:[...(data.extensions || []).filter(value=>!requiredBuiltins.has(value.replace(/^[!+-]/,""))), ...[...requiredBuiltins].map(path => "+" + path)]});
-  const view = new Proxy(settings, {get(target, key) {
-    if (key === "getGlobalSettings" || key === "getProjectSettings") return () => force(target[key]());
-    const value = Reflect.get(target, key, target);
-    return typeof value === "function" ? value.bind(target) : value;
-  }});
-  protectedSettings.set(settings, view); protectedSettings.set(view, view);
-  return view;
-}
+export const builtins = ["codemode", "tool-search", "mcp", "chatbox", "pi-commands", "umeko-control", "background-jobs", "background-jobs", "subagents"];
 const target = entry => entry.replace(/^[!+-]/, "");
 const canonical = (value, base) => value.startsWith("builtin:") ? value : resolve(base, value);
 export function extensionName(path, metadata = {}) {
@@ -166,7 +151,7 @@ export async function prepareNativeSettings(Pi, input) {
 }
 
 async function discover(Pi, input, settings) {
-  const manager = new Pi.DefaultPackageManager({ cwd: input.cwd, agentDir: input.agentDir, settingsManager: requiredResourceSettings(settings), builtinExtensions: builtins });
+  const manager = new Pi.DefaultPackageManager({ cwd: input.cwd, agentDir: input.agentDir, settingsManager: settings, builtinExtensions: builtins });
   const resolved = await manager.resolve(async () => "skip");
   // pi config can replace an external file declaration with only '-file'.
   // Keep that existing, explicitly disabled file available for re-enabling.
@@ -179,7 +164,7 @@ async function discover(Pi, input, settings) {
       }
     }
   }
-  return resolved.extensions.filter(row => !input.agent?.safeMode || row.path.startsWith("builtin:")).map(row => requiredBuiltins.has(row.path) ? {...row, enabled:true, metadata:{...row.metadata, scope:"user"}} : row).map(row => ({ ...row,
+  return resolved.extensions.filter(row => !input.agent?.safeMode || row.path.startsWith("builtin:")).map(row => ({ ...row,
     id: createHash("sha256").update(JSON.stringify([row.path, row.metadata.scope, row.metadata.source])).digest("hex").slice(0, 24),
     name: extensionName(row.path, row.metadata),
     scope: row.metadata.scope === "project" ? "project" : "global",
@@ -209,12 +194,17 @@ function selectExtension(settings, input, row, enabled) {
     if (project) settings.setProjectExtensionPaths(paths); else settings.setExtensionPaths(paths);
   }
 }
+export async function sessionExtensionPaths(Pi,input,settings) {
+  const rows=await discover(Pi,input,settings),legacy=input.sessionExtensions || {};
+  return rows.filter(row=>pluginSelection(input.piCapabilities,row.path,
+    typeof legacy[row.path]==="boolean" ? legacy[row.path] : row.enabled)).map(row=>row.path);
+}
 export async function sessionResourceSettings(Pi, input, native) {
   const overrides = input.sessionExtensions;
-  if (input.agent?.safeMode || !overrides || typeof overrides !== "object" || Array.isArray(overrides) || !Object.values(overrides).some(value=>typeof value === "boolean")) return requiredResourceSettings(native);
+  if (input.agent?.safeMode || !overrides || typeof overrides !== "object" || Array.isArray(overrides) || !Object.values(overrides).some(value=>typeof value === "boolean")) return native;
   const rows = await discover(Pi, input, native);
-  const selected = rows.filter(row=>!requiredBuiltins.has(row.path) && typeof overrides[row.path] === "boolean");
-  if(!selected.length) return requiredResourceSettings(native);
+  const selected = rows.filter(row=>typeof overrides[row.path] === "boolean");
+  if(!selected.length) return native;
   const data = {global:JSON.stringify(native.getGlobalSettings()), project:JSON.stringify(native.getProjectSettings())};
   const storage = {withLock(scope, fn) { const next=fn(data[scope]); if(typeof next === "string") data[scope]=next; }};
   const settings = Pi.SettingsManager.fromStorage(storage,{projectTrusted:true});
@@ -227,15 +217,15 @@ export async function sessionResourceSettings(Pi, input, native) {
     data.global=JSON.stringify(native.getGlobalSettings());
     data.project=JSON.stringify(native.getProjectSettings());
     await reload();
-    for(const row of rows) if(!requiredBuiltins.has(row.path) && typeof overrides[row.path] === "boolean") selectExtension(settings,input,row,overrides[row.path]);
+    for(const row of rows) if(typeof overrides[row.path] === "boolean") selectExtension(settings,input,row,overrides[row.path]);
     await settings.flush(); checkErrors(settings);
   };
-  return requiredResourceSettings(settings);
+  return settings;
 }
 export function extensionDocument(row) {
   const info=extensionInfo(row);
   const name=row.path.startsWith("builtin:") ? row.path.slice(8) : row.name;
-  const tools={codemode:["codemode"], "tool-search":["tool_search"], mcp:["MCP 服务器提供的工具"], chatbox:["submit_to_chatbox"], "pi-commands":["run_pi_command"], "umeko-control":["umeko_desktop"], subagents:["subagent", "get_subagent_result", "steer_subagent"]};
+  const tools={"background-jobs":["background_job"],codemode:["codemode"], "tool-search":["tool_search"], mcp:["MCP 服务器提供的工具"], chatbox:["submit_to_chatbox"], "pi-commands":["run_pi_command"], "umeko-control":["umeko_desktop"], subagents:["subagent", "get_subagent_result", "steer_subagent"]};
   const summary=`# ${name}
 
 ${info.description || "本地 Pi 扩展。"}
@@ -270,7 +260,6 @@ export async function manageResources(Pi, input) {
     if (input.agent?.safeMode) throw new Error("请先关闭恢复模式，再修改扩展配置");
     const row = rows.find(r => r.id === input.id);
     if (!row) throw new Error("扩展已变更，请刷新列表后重试");
-    if (requiredBuiltins.has(row.path)) throw new Error("Umeko 基础能力固定启用，不能修改启用范围");
     selectExtension(settings, input, row, input.enabled);
     await settings.flush(); checkErrors(settings);
     rows = await discover(Pi, input, settings);
@@ -279,7 +268,6 @@ export async function manageResources(Pi, input) {
     if(input.agent?.safeMode) throw new Error("请先关闭恢复模式，再修改扩展配置");
     const row=rows.find(r=>r.id===input.id);
     if(!row) throw new Error("扩展已变更，请刷新列表后重试");
-    if (requiredBuiltins.has(row.path)) throw new Error("Umeko 基础能力固定启用，不能修改启用范围");
     let globalRow={...row,metadata:{...row.metadata,scope:"user"}};
     if(row.metadata.origin === "package" && row.metadata.scope === "project") {
       const original=row.metadata.source;
@@ -314,8 +302,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try {
     // Discovery must not fetch models or install missing packages.
     process.env.PI_OFFLINE = "1";
-    const { installProviderPolicy } = await import("./provider-policy.mjs"); installProviderPolicy({ offline: true });
-    const Pi = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "node_modules/@earendil-works/pi-coding-agent/dist/index.js")));
+    // Administration uses settings and resource discovery only. Importing the
+    // public SDK here also loaded every model client and tool unnecessarily.
+    const entry = import.meta.resolve("@earendil-works/pi-coding-agent");
+    const [settingsModule, packagesModule] = await Promise.all([
+      import(new URL("./core/settings-manager.js", entry)),
+      import(new URL("./core/package-manager.js", entry)),
+    ]);
+    const Pi = { SettingsManager: settingsModule.SettingsManager, DefaultPackageManager: packagesModule.DefaultPackageManager };
     let raw = ""; for await (const chunk of process.stdin) raw += chunk;
     process.stdout.write(JSON.stringify({ ok: true, ...await manageResources(Pi, JSON.parse(raw)) }) + "\n");
   } catch (error) { process.stdout.write(JSON.stringify({ ok: false, error: error.message }) + "\n"); process.exitCode = 1; }

@@ -2,6 +2,7 @@
 #include <QClipboard>
 #include <QDesktopServices>
 #include <QImageReader>
+#include <QFontDatabase>
 #include <QMimeData>
 #include <QNetworkProxyFactory>
 #include <stdexcept>
@@ -15,6 +16,7 @@
 Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
     : QObject(parent), store(directory), root(U::cleanPath(resourceRoot)),
       chat(this) {
+  if(!fontFamily().isEmpty()){auto font=QGuiApplication::font();font.setFamily(fontFamily());QGuiApplication::setFont(font);}
   initCharacters();
   release = root + "/runtime/releases/coding-1.3.0";
   auto active =
@@ -34,7 +36,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
     // The adapters belong to this desktop build, even when Pi itself was
     // upgraded separately. Keep web/queue fixes with the application update.
     QStringList adapters{"bridge.mjs", "package-install.mjs", "update-engine.mjs", "resources.mjs", "provider-policy.mjs", "chatbox.mjs",
-          "tool-visibility.mjs", "network-retry.mjs", "pi-commands.mjs", "umeko-control.mjs", "umeko-documents.mjs", "subagents.mjs", "subagent-sdk.mjs", "subagent-settings.mjs", "input-queue.mjs", "widget-messages.mjs", "rpc-ui.mjs", "umeko-operations.json", "webview-component.mjs", "webview-component.json"};
+          "skills.mjs", "recent-images.mjs", "background-jobs.mjs", "process-guard.mjs", "tool-permissions.mjs", "session-capabilities.mjs", "markdown-preview.mjs", "tool-visibility.mjs", "network-retry.mjs", "pi-commands.mjs", "umeko-control.mjs", "umeko-documents.mjs", "subagents.mjs", "subagent-sdk.mjs", "subagent-settings.mjs", "input-queue.mjs", "widget-messages.mjs", "rpc-ui.mjs", "umeko-operations.json", "webview-component.mjs", "webview-component.json"};
     QDirIterator docs(root + "/runtime/umeko-docs", QDir::Files, QDirIterator::Subdirectories);
     while (docs.hasNext()) adapters << QDir(root + "/runtime").relativeFilePath(docs.next());
     for (const auto &name : adapters) {
@@ -56,7 +58,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
                    destination.write(bytes) == bytes.size() &&
                    destination.commit();
     }
-    compatible = compatible && QFileInfo(candidate + "/node_modules/@gotgenes/pi-subagents/package.json").isFile();
+    compatible = compatible && QFileInfo(candidate + "/node_modules/@gotgenes/pi-subagents/package.json").isFile() && QFileInfo(candidate + "/node_modules/marked/package.json").isFile() && QFileInfo(candidate + "/node_modules/@alexlikevibe/pi-bg/package.json").isFile() && QFileInfo(candidate + "/node_modules/shell-quote/package.json").isFile();
     if (compatible)
       release = candidate;
   }
@@ -75,9 +77,12 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
   about = new AppAbout(this);
   previewLoader = new SessionPreview(this);
   conversationSearch = new ConversationSearch(this);
-  documents = new DocumentPreview(this, &store);
+  documents = new DocumentPreview(this, &store, root);
   children = new Subagents(this);
   desktopExtensions = new DesktopPlugins(this);
+  skills = new Skills(this);
+  slash = new SlashCommands(this);
+  skills->installBundled();
   appearanceSave.setSingleShot(true);
   appearanceSave.setInterval(250);
   connect(&appearanceSave, &QTimer::timeout, this, [this] { store.save(); });
@@ -102,22 +107,30 @@ QVariantMap Backend::config() const {
   auto server = cfg["server"].toMap();
   server.remove("keys");
   cfg["server"] = server;
-  auto rows = cfg["providers"].toList();
-  for (auto &v : rows) {
-    auto p = v.toMap();
-    p.remove("key");
-    p.remove("secrets");
-    if (!p.contains("hasKey"))
-      p["hasKey"] = false;
-    QVariantList models;
-    for (auto m : p["models"].toList()) {
-      try {
-        models << U::normalizeModel(m.toMap());
-      } catch (...) {
+  const auto providers=cfg["providers"].toList();
+  // QML reads config repeatedly during layout. Typography-only updates must
+  // not re-run model-name/context inference for an unchanged provider list.
+  struct ProviderProjection {QVariantList input,output;};
+  thread_local ProviderProjection cached;
+  auto rows=cached.input==providers?cached.output:providers;
+  if(cached.input!=providers) {
+    for (auto &v : rows) {
+      auto p = v.toMap();
+      p.remove("key");
+      p.remove("secrets");
+      if (!p.contains("hasKey"))
+        p["hasKey"] = false;
+      QVariantList models;
+      for (auto m : p["models"].toList()) {
+        try {
+          models << U::normalizeModel(m.toMap());
+        } catch (...) {
+        }
       }
+      p["models"] = models;
+      v = p;
     }
-    p["models"] = models;
-    v = p;
+    cached={providers,rows};
   }
   cfg["providers"] = rows;
   return cfg;
@@ -292,9 +305,11 @@ QVariantList Backend::projectRows() const {
     s["waiting"] = false;
     s["busy"] = false;
     s["unread"] = meta["unread"].toBool();
+    s["outcome"]=meta["lastTurn"].toMap()["state"];
     for (auto live : records)
       if (live->id == id) {
-        s["running"] = live->phase == "running";
+        s["outcome"]=sessionTurnStatus(live)["state"];
+        s["running"] = live->phase == "running" || s["outcome"]=="running" || s["outcome"]=="stopping";
         s["loading"] = live->phase == "loading" || live->phase == "working";
         s["waiting"] = !live->approval.isEmpty();
         s["busy"] = live->busy();
@@ -1124,6 +1139,8 @@ void Backend::close() {
     return;
   closing = true;
   if (about) about->closeDownload();
+  if (skills) skills->close();
+  if(view && !view->id.isEmpty())setMetadata(view->id,{{"viewport",QVariantMap{{"index",view->scrollIndex},{"offset",view->scrollY},{"follow",view->followTail}}}});
   appearanceSave.stop();
   previewLoader->cancel();
   children->close();
@@ -1154,6 +1171,8 @@ void Backend::close() {
   saveSessions();
 }
 void Backend::injectDemo() {
+  const auto widget=qEnvironmentVariable("UMEKO_DEMO_WIDGET");
+  if(!widget.isEmpty()){desktopExtensions->openPage(widget);return;}
   const auto preview = normalizeWebUrl(qEnvironmentVariable("UMEKO_WEB_PREVIEW_URL"));
   const auto document = qEnvironmentVariable("UMEKO_DOCUMENT_PREVIEW_PATH");
   const auto input = QJsonDocument::fromJson(document.toUtf8());

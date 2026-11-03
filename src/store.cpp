@@ -62,13 +62,14 @@ QVariantMap Store::defaults() {
       {"sessionMeta", QVariantMap{}},
       {"workspace", ""},
       {"dark", false},
-      {"theme", "light"},
+      {"theme", "light"},{"fontFamily",""},
       {"character", "yanami"},
       {"providers", QVariantList{}},
       {"selectedProvider", ""},
       {"selectedModel", ""},
       {"providerRuntime", QVariantMap{}},
-      {"agent", QVariantMap{{"maxTokens", 32768},
+      {"desktop",QVariantMap{{"autoOpenSubmissions",true},{"webDisplay","embedded"},{"chatWidthHints",true}}},
+      {"agent", QVariantMap{{"maxContextImages",3},{"toolPermissionMode","auto"},{"maxTokens", 32768},
                             {"outputLimitDefaultVersion", 1},
                             {"instructions", ""},
                             {"autoCompaction", true},
@@ -84,7 +85,7 @@ QVariantMap Store::defaults() {
                              {"anthropic", true},
                              {"lan", false},
                              {"keys", QVariantList{}}}},
-      {"ui", QVariantMap{{"sidebarWidth", 244}, {"sidebarCollapsed", false}}}};
+      {"ui", QVariantMap{{"sidebarWidth", 244}, {"sidebarCollapsed", false}, {"lineSpacing","standard"}}}};
 }
 bool Store::migrateProfile(QString previous, QString target) {
   if (QFileInfo::exists(target) ||
@@ -257,6 +258,8 @@ Store::Store(QString path) {
   }
   auto ui = data["ui"].toMap();
   auto agent = data["agent"].toMap();
+  if(!QStringList{"auto","ask"}.contains(agent.value("toolPermissionMode","auto").toString()))agent["toolPermissionMode"]="auto";
+  data["agent"]=agent;
   const bool outputDefaultMigrated =
       saved["agent"].toMap()["outputLimitDefaultVersion"].toInt() != 1;
   if (outputDefaultMigrated) {
@@ -279,8 +282,10 @@ Store::Store(QString path) {
   ui["fontScale"] =
       numeric && ui.value("fontScale").metaType().id() != QMetaType::Bool &&
               std::isfinite(scale)
-          ? qBound(0.5, scale, 2.0)
+          ? qBound(0.3, scale, 2.0)
           : 1.0;
+  if(!QStringList{"compact","standard","relaxed"}.contains(ui["lineSpacing"].toString()))ui["lineSpacing"]="standard";
+  if(data["fontFamily"].metaType().id()!=QMetaType::QString || data["fontFamily"].toString().size()>128)data["fontFamily"]="";
   ui["sidebarWidth"] = qBound(200, ui.value("sidebarWidth", 244).toInt(), 480);
   data["ui"] = ui;
   // Keychain entries retain their original namespace when the profile moves.

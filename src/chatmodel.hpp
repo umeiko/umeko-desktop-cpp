@@ -3,29 +3,44 @@
 
 class ChatModel : public QAbstractListModel {
   Q_OBJECT
+  Q_PROPERTY(bool paged READ paged NOTIFY questionsChanged)
   Q_PROPERTY(QVariantList questions READ questions NOTIFY questionsChanged)
 public:
   enum { MessageRole = Qt::UserRole + 1 };
-  using QAbstractListModel::QAbstractListModel;
+  explicit ChatModel(QObject *parent=nullptr);
+  bool paged() const { return rows.size()>256; }
+  Q_INVOKABLE void requestRange(int first,int last);
+  Q_INVOKABLE void retryPage(int row) {requestRange(row,row);}
+  Q_INVOKABLE void recordHeight(int row,double height);
+  Q_INVOKABLE bool rangeReady(int first,int last) const;
   QVariantList rows;
   QVariantList questions() const { return questionRows; }
   int rowCount(const QModelIndex &parent = {}) const override {
     return parent.isValid() ? 0 : rows.size();
   }
-  QVariant data(const QModelIndex &index, int role) const override {
-    return index.isValid() && index.row() < rows.size() && role == MessageRole
-               ? rows[index.row()]
-               : QVariant();
-  }
+  QVariant data(const QModelIndex &index, int role) const override;
   QHash<int, QByteArray> roleNames() const override {
     return {{MessageRole, "modelData"}};
   }
   void update(const QVariantList &messages);
+  void switchContext(QString token);
+  void seed(QVariantList messages, QVariantList projected, int anchor);
   int rowForEntry(const QString &entry) const;
   static QVariantList project(const QVariantList &messages);
 signals:
   void questionsChanged();
+  void windowReady();
 
 private:
-  QVariantList questionRows;
+  QString context;
+  QVariantList questionRows, input, pendingInput;
+  QHash<int,QVariantMap> prepared;
+  QHash<int,double> heights;
+  QList<int> cached;
+  quint64 revision=0;
+  bool projecting=false, rendering=false;
+  int wantedFirst=0,wantedLast=3;
+  void publish(QVariantList projected);
+  void projectPending();
+  void renderRange();
 };

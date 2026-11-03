@@ -5,6 +5,8 @@
 #include <functional>
 
 namespace U {
+QVariantMap compactionView(QVariantMap entry);
+QVariantMap compactionStatus(QVariantMap row, QString active = {});
 QString uuid();
 QString stamp();
 QString cleanPath(QString path);
@@ -28,6 +30,7 @@ void run(QObject *owner, const QString &program, const QStringList &arguments,
          int timeout = 45000, const QString &cwd = {}, QVariantMap npm = {});
 QVariantMap contextSuggestion(QString name);
 QVariantMap visionSuggestion(QString name);
+qint64 providerContext(QVariantMap model);
 QVariantMap normalizeModel(QVariantMap model, QVariantMap previous = {});
 int parseContext(const QVariant &value);
 QVariantMap toolView(QString id, QString name, QVariantMap arguments,

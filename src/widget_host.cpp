@@ -1,34 +1,10 @@
 #include "widget_host.hpp"
 #include "backend.hpp"
+#include "pi_capabilities.hpp"
 #include <stdexcept>
 
 namespace {
 const QString nativeId="builtin:pi-tools";
-QVariantList toolCatalog(const Session &session, QVariantList rows) {
-  const auto tools=session.resources["allTools"].toList();
-  if(!tools.isEmpty()) rows.prepend(QVariantMap{{"id",nativeId},{"path",nativeId},{"name","Pi 内置工具"},{"source","builtin"},{"scope","session"},{"enabled",true},
-    {"info",QVariantMap{{"icon","pi-commands"},{"required",true},{"bundled",true},{"description","Pi 原生的文件、搜索与命令工具。"},{"updateKind","desktop"}}}});
-  QMap<QString,QVariantList> groups;
-  for(const auto &value:tools) {
-    auto tool=value.toMap(); const auto name=tool["name"].toString(); auto source=tool["source"].toString();
-    if(name.isEmpty() || name.size()>256) continue;
-    if(QStringList{"read","bash","powershell","edit","write","grep","find","ls"}.contains(name) && source=="builtin:"+name) source=nativeId;
-    groups[source]<<tool;
-  }
-  QVariantList result;
-  for(const auto &value:rows) {
-    auto row=value.toMap(); const auto path=row["path"].toString();
-    const bool enabled=session.extensionModes.contains(path) ? session.extensionModes[path]=="session" : row["enabled"].toBool();
-    QVariantList entries;
-    for(const auto &value:groups.value(path)) {
-      const auto tool=value.toMap(); const auto name=tool["name"].toString(); const bool hidden=tool["exposure"]=="hidden";
-      entries<<QVariantMap{{"name",name},{"description",tool["description"].toString().left(4096)},
-        {"visible",enabled && !hidden && !session.blockedTools.contains(name)},{"editable",enabled && !hidden}};
-    }
-    row["tools"]=entries; row["toolCount"]=entries.size(); result<<row;
-  }
-  return result;
-}
 
 const QMap<QString, QString> commands{
     {"pi.scan", "extensions.scan"},
@@ -40,7 +16,7 @@ const QMap<QString, QString> commands{
     {"pi.details", "extensions.details"},
     {"pi.activation", "extensions.activation"}};
 bool mutation(const QString &operation) {
-  return QStringList{"pi.refresh", "pi.enable", "pi.install", "pi.remove", "pi.activation", "pi.toolVisibility"}
+  return QStringList{"pi.refresh", "pi.enable", "pi.install", "pi.remove", "pi.activation", "pi.toolVisibility", "pi.preset", "pi.tool", "pi.plugin", "skills.attach", "skills.default", "skills.import", "skills.paste", "skills.importLocal", "skills.rename", "skills.delete"}
       .contains(operation);
 }
 void require(bool valid, QString error) {
@@ -62,10 +38,11 @@ WidgetHost::WidgetHost(DesktopPlugins *manager)
 QVariantMap WidgetHost::capabilities() const {
   QVariantMap operations;
   auto names = commands.keys();
-  names << "pi.status" << "pi.job" << "pi.network" << "pi.cancel" << "pi.inventory" << "pi.toolVisibility";
+  names << "pi.status" << "pi.job" << "pi.network" << "pi.cancel" << "pi.inventory" << "pi.toolVisibility" << "pi.preset" << "pi.tool" << "pi.plugin" << "pi.tools";
+  names << "skills.list" << "skills.browse" << "skills.preview" << "skills.details" << "skills.job" << "skills.attach" << "skills.default" << "skills.importPreview" << "skills.import" << "skills.paste" << "skills.importLocal" << "skills.open" << "skills.copy" << "skills.insert" << "skills.rename" << "skills.delete";
   for (const auto &name : names)
     operations[name] =
-        QVariantMap{{"permission", mutation(name) || name=="pi.cancel" ? "pi.manage" : "pi.read"},
+        QVariantMap{{"permission", name.startsWith("skills.") ? (name=="skills.insert" ? "session.write" : mutation(name) ? "skills.manage" : "skills.read") : mutation(name) || name=="pi.cancel" ? "pi.manage" : "pi.read"},
                     {"confirmation", mutation(name)}};
   return {{"version", 1},
           {"operations", operations},
@@ -147,13 +124,14 @@ void WidgetHost::begin(Task request) {
                         .size() <= 16384,
             "Host arguments must be a JSON object of at most 16 KiB");
     const auto args = request->arguments.toMap();
-    const auto permission = mutation(operation) || operation=="pi.cancel" ? "pi.manage" : "pi.read";
+    const auto permission = capabilities()["operations"].toMap()[operation].toMap()["permission"].toString();
     require(
         m->entry(request->widget)["permissions"].toList().contains(permission),
         QString("Widget permission is required: ") + permission);
     const QMap<QString, QStringList> fields{
         {"pi.status", {"offset", "limit", "query", "details", "toolOffset"}},
         {"pi.inventory", {}},
+        {"pi.preset", {"preset"}},{"pi.tool", {"name","enabled"}},{"pi.plugin", {"id","enabled"}},{"pi.tools", {"id","query","offset","limit"}},
         {"pi.toolVisibility", {"id", "name", "visible"}},
         {"pi.scan", {}},
         {"pi.network", {}},
@@ -165,16 +143,30 @@ void WidgetHost::begin(Task request) {
         {"pi.remove", {"id"}},
         {"pi.checkUpdate", {"id"}},
         {"pi.details", {"id"}},
-        {"pi.activation", {"id","mode"}}};
+        {"pi.activation", {"id","mode"}},
+        {"skills.list",{}},{"skills.browse",{}},{"skills.preview",{"id"}},{"skills.details",{"id"}},{"skills.job",{"id","offset","limit","wait"}},
+        {"skills.attach",{"id","enabled"}},{"skills.default",{"id","enabled"}},
+        {"skills.importPreview",{"source","project"}},{"skills.import",{"id","decisions"}},{"skills.paste",{"project"}},{"skills.importLocal",{"source","project"}},
+        {"skills.open",{"id","mode"}},{"skills.copy",{"id","kind"}},{"skills.insert",{"id"}},{"skills.rename",{"id","name"}},{"skills.delete",{"id"}}};
     for (auto it = args.cbegin(); it != args.cend(); ++it)
       require(fields[operation].contains(it.key()), "Unknown host arguments");
+    if(operation.startsWith("skills.")) {
+      if(!QStringList{"skills.list","skills.browse","skills.paste","skills.importLocal","skills.importPreview"}.contains(operation))
+        require(args["id"].metaType().id()==QMetaType::QString && !args["id"].toString().isEmpty() && args["id"].toString().size()<=4096,"A valid Skill id is required");
+      if(args.contains("source"))require(args["source"].metaType().id()==QMetaType::QString && !args["source"].toString().isEmpty() && args["source"].toString().size()<=4096,"A local Skill source is required");
+      if(args.contains("enabled"))require(args["enabled"].metaType().id()==QMetaType::Bool,"enabled must be boolean");
+      if(args.contains("project"))require(args["project"].metaType().id()==QMetaType::Bool,"project must be boolean");
+      if(operation=="skills.open")require(QStringList{"preview","edit","reveal"}.contains(args["mode"].toString()),"Invalid file action");
+      if(operation=="skills.copy")require(QStringList{"folder","path"}.contains(args["kind"].toString()),"Invalid copy action");
+      if(mutation(operation))require(!b->view->busy() && !b->view->subagentsActive && !b->management->busy() && !b->kernelBusy(),"Wait for the current task before changing Skills");
+    }
     if (operation == "pi.enable" || operation == "pi.job" || operation=="pi.cancel" ||
-        operation == "pi.remove" || operation == "pi.checkUpdate" || operation == "pi.details" || operation == "pi.activation")
+        operation == "pi.remove" || operation == "pi.checkUpdate" || operation == "pi.details" || operation == "pi.activation" || operation == "pi.plugin" || operation == "pi.tools")
       require(args["id"].metaType().id() == QMetaType::QString &&
                   !args["id"].toString().isEmpty() &&
                   args["id"].toString().size() <= 4096,
               "A valid id is required");
-    if (operation == "pi.enable")
+    if (operation == "pi.enable" || operation == "pi.plugin" || operation == "pi.tool")
       require(args["enabled"].metaType().id() == QMetaType::Bool,
               "enabled must be boolean");
     if(operation=="pi.activation") require(QStringList{"global","session","disabled"}.contains(args["mode"].toString()),"Invalid activation mode");
@@ -192,7 +184,7 @@ void WidgetHost::begin(Task request) {
                   args["project"].metaType().id() == QMetaType::Bool,
               "project must be boolean");
     }
-    if (operation == "pi.status") {
+    if (operation == "pi.status" || operation == "pi.tools") {
       for(const auto &field:{QString("query"),QString("details")}) if(args.contains(field)) require(args[field].metaType().id()==QMetaType::QString && args[field].toString().size()<=256,"Invalid local catalog query");
       for (const auto &name : {QString("offset"), QString("limit"), QString("toolOffset")}) {
         const auto value = args.value(name, name == "limit" ? 100 : 0);
@@ -206,11 +198,8 @@ void WidgetHost::begin(Task request) {
                 "Invalid offset or limit");
       }
     }
-    if(operation=="pi.activation" || operation=="pi.enable")
-      for(const auto &value:b->management->extensions()) {
-        const auto row=value.toMap();
-        if(row["id"]==args["id"]) require(!row["info"].toMap()["required"].toBool(),"Umeko 基础能力固定启用，不能修改启用范围");
-      }
+    if(QStringList{"pi.preset","pi.tool","pi.plugin"}.contains(operation) && request->widget=="pi-manager" && m->entry(request->widget)["builtin"].toBool()){execute(request);return;}
+    if(request->widget=="skill-manager" && operation=="skills.attach" && m->entry(request->widget)["builtin"].toBool()){execute(request);return;}
     if (mutation(operation)) {
       require(!b->view->busy() && !b->management->busy() && !b->kernelUpdating,
               "Pi is busy; Agent installs must use run_pi_command and its "
@@ -263,10 +252,31 @@ void WidgetHost::execute(Task request) {
   owner(request);
   const auto operation = request->operation;
   auto args = request->arguments.toMap();
+  if(operation.startsWith("skills.")) {
+    if(operation=="skills.job") {
+      const auto old=jobs.value(args["id"].toString());
+      require(old && old->worker==request->worker && old->widget==request->widget && old->session["token"]==request->session["token"] && old->session["workspace"]==request->session["workspace"],"Skill job does not belong to this Widget and chat");
+      const auto offset=args.value("offset",0).toInt(),limit=args.value("limit",100).toInt();
+      require(offset>=0 && limit>=1 && limit<=200,"Invalid Skill page");
+      reply(request,b->skills->job(args["id"].toString(),offset,limit));return;
+    }
+    require(!mutation(operation) || (!b->view->busy() && !b->view->subagentsActive && !b->management->busy()),"The chat became busy");
+    auto result=b->skills->start(operation,args);const auto job=result["jobId"].toString();jobs[job]=request;jobOrder<<job;
+    while(jobOrder.size()>128)jobs.remove(jobOrder.takeFirst());
+    reply(request,result);return;
+  }
+  if(QStringList{"pi.preset","pi.tool","pi.plugin"}.contains(operation)) {
+    require(operation=="pi.preset" || b->management->extensionsCurrent(),"Refresh the current local inventory first");
+    reply(request,{{"ok",true},{"result",b->management->configureCapabilities(operation,args)}});return;
+  }
+  if(operation=="pi.tools") {
+    require(b->management->extensionsCurrent(),"Refresh the current local inventory first");
+    reply(request,{{"ok",true},{"result",b->management->capabilityTools(args["id"].toString(),args["query"].toString(),args.value("offset",0).toInt(),args.value("limit",100).toInt())}});return;
+  }
   if(operation=="pi.toolVisibility") {
     require(b->management->extensionsCurrent(),"Refresh the current local inventory first");
     bool found=false;
-    for(const auto &value:toolCatalog(*b->view,b->management->extensions())) {
+    for(const auto &value:b->management->capabilityExtensions()) {
       const auto row=value.toMap(); if(row["id"]!=args["id"]) continue;
       for(const auto &item:row["tools"].toList()) { const auto tool=item.toMap(); found |= tool["name"]==args["name"] && tool["editable"].toBool(); }
     }
@@ -310,13 +320,17 @@ void WidgetHost::execute(Task request) {
   }
   if (operation == "pi.status") {
     const auto current=b->management->extensionsCurrent();
-    const auto all=current ? toolCatalog(*b->view,b->management->extensions()) : QVariantList{};
+    const auto all=current ? b->management->capabilityExtensions() : QVariantList{};
     const auto query=args["query"].toString(), detailId=args["details"].toString();
     QVariantList rows;
     for(const auto &value:all) {
       const auto row=value.toMap();
       const auto text=row["name"].toString()+" "+row["path"].toString()+" "+row["info"].toMap()["description"].toString();
-      if(!detailId.isEmpty() ? row["id"]==detailId : query.isEmpty() || text.contains(query,Qt::CaseInsensitive)) rows<<value;
+      bool matches=query.isEmpty() || text.contains(query,Qt::CaseInsensitive);
+      if(!matches)for(const auto &item:row["tools"].toList()) {
+        const auto tool=item.toMap();if((tool["name"].toString()+" "+tool["description"].toString()).contains(query,Qt::CaseInsensitive)){matches=true;break;}
+      }
+      if(detailId.isEmpty() ? matches : row["id"]==detailId)rows<<value;
     }
     const auto offset=args.value("offset",0).toInt(),limit=args.value("limit",100).toInt();
     auto page=rows.mid(offset,limit);
@@ -327,7 +341,7 @@ void WidgetHost::execute(Task request) {
     }
     QSet<QString> paths; QVariantMap modes;
     for(const auto &value:page) { const auto path=value.toMap()["path"].toString(); paths.insert(path); if(b->view->extensionModes.contains(path))modes[path]=b->view->extensionModes[path]; }
-    QVariantMap result{{"busy",b->management->busy()},{"status",current ? b->management->status() : QString()},
+    QVariantMap result{{"profile",b->management->capabilityProfile()},{"sessionBusy",b->view->busy() || b->view->subagentsActive},{"busy",b->management->busy() || b->kernelBusy() || (b->view->busy() && b->view->action=="load")},{"status",current ? b->management->status() : QString()},
       {"extensions",page},{"total",rows.size()},{"catalogTotal",all.size()},{"hasMore",offset+limit<rows.size()},
       {"contextCurrent",current},{"inventoryReady",!b->view->resources["allTools"].toList().isEmpty()},
       {"inventoryFailed",b->view->action=="load" && !b->view->busy() && (b->view->failed || b->view->cancelled)},{"agentBusy",b->view->busy() || b->view->subagentsActive},{"workspace",request->session["workspace"]},{"activationModes",modes},
@@ -397,6 +411,7 @@ void WidgetHost::execute(Task request) {
 
 void WidgetHost::stop(QString id) {
   activity.remove(id);
+  if(id=="skill-manager" && b->skills)b->skills->close();
   if (pending && pending->widget == id)
     respondApproval(false);
   for (auto it = jobs.begin(); it != jobs.end();) {

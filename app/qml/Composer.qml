@@ -9,10 +9,24 @@ Item {
     height: 157 + Theme.control(33) - 33 + (backend.attachments.length ? Theme.control(48) : 0) + queueOffset
     signal openModels()
     signal chooseFiles()
+    property bool slashDismissed: false
+    readonly property bool slashVisible: prompt.activeFocus && !prompt.inputMethodComposing && /^\//.test(prompt.text) && !slashDismissed
+    function chooseSlash(entry) {
+        if (entry.group === "命令") {
+            setText(entry.command + " ")
+            slashDismissed = true
+        } else if (backend.slashCommands.choose(entry.id)) {
+            setText("")
+        }
+    }
     function focusInput() { prompt.forceActiveFocus() }
     function setText(value) { prompt.text = value; prompt.forceActiveFocus(); prompt.cursorPosition = value.length }
     function sendMessage(steering) {
-        if (backend.loading || backend.kernelBusy) return
+        if (backend.kernelBusy || backend.loading) return
+        if (/^\//.test(prompt.text)) {
+            if (backend.slashCommands.execute(prompt.text)) setText("")
+            return
+        }
         if (steering) backend.steer(prompt.text)
         else if (prompt.text.trim().length || backend.attachments.length) backend.send(prompt.text)
     }
@@ -25,9 +39,24 @@ Item {
             prompt.cursorPosition = position + 1
             event.accepted = true
         } else if (event.modifiers & Qt.ShiftModifier) event.accepted = false
+        else if (root.slashVisible) { slashMenu.chooseSelection(); event.accepted = true }
         else { sendMessage(); event.accepted = true }
     }
     Connections { target: backend; function onEditorText(text) { root.setText(text) } }
+    Connections { target: backend; function onViewChanged() { root.slashDismissed = false } }
+    onSlashVisibleChanged: if (slashVisible) backend.slashCommands.refresh()
+    CompactCommandMenu {
+        id: slashMenu
+        z: 20; width: parent.width
+        anchors.bottom: parent.top; anchors.bottomMargin: 8
+        // Track y explicitly: mapToItem() alone does not notify when the
+        // bottom-anchored composer moves after its first layout pass.
+        maximumHeight: Math.min(Theme.control(360), Math.max(Theme.control(66), root.y + root.parent.mapToItem(null, 0, 0).y - 90))
+        visible: root.slashVisible
+        entries: backend.slashCommands.entries
+        query: prompt.text
+        onChosen: entry => root.chooseSlash(entry)
+    }
     QueuedMessages { id: queued; width: parent.width }
     Rectangle { x: 0; y: root.queueOffset + 6; width: parent.width; height: parent.height - root.queueOffset; radius: 17; color: "#090f0a"; opacity: Theme.dark ? 0.1 : 0.035 }
     Rectangle {
@@ -44,7 +73,7 @@ Item {
                         required property var modelData
                         width: Math.min(attachmentName.implicitWidth, 165) + Theme.control(63); height: Theme.control(33); radius: 7; color: Theme.accentBg
                         Glyph { x: 9; anchors.verticalCenter: parent.verticalCenter; name: modelData.kind === "web" ? "globe" : modelData.kind === "folder" ? "folder" : modelData.kind === "image" ? "image" : "file"; width: Theme.icon(15); height: Theme.icon(15) }
-                        Text { id: attachmentName; x: Theme.control(31); anchors.verticalCenter: parent.verticalCenter; width: Math.min(implicitWidth, 165); text: modelData.name; textFormat: Text.PlainText; elide: Text.ElideMiddle; color: Theme.ink; font.pixelSize: Theme.font(10) }
+                        Text { font.family: Theme.fontFamily; id: attachmentName; x: Theme.control(31); anchors.verticalCenter: parent.verticalCenter; width: Math.min(implicitWidth, 165); text: modelData.name; textFormat: Text.PlainText; elide: Text.ElideMiddle; color: Theme.ink; font.pixelSize: Theme.font(10, visible) }
                         ActionButton { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; width: Theme.control(27); height: Theme.control(27); quiet: true; glyph: "x"; onClicked: backend.removeAttachment(modelData.id) }
                     }
                 }
@@ -52,15 +81,26 @@ Item {
         }
         ScrollView {
             x: 20; y: backend.attachments.length ? Theme.control(48) + 15 : 15; width: parent.width - 40; height: 82; clip: true
-            TextArea {
+            TextArea { font.family: Theme.fontFamily;
                 id: prompt; objectName: "promptInput"
                 color: Theme.ink; placeholderTextColor: Theme.muted
                 placeholderText: backend.config.workspace ? I18n.t("在 ") + backend.workspaceName + I18n.t(" 项目下开展工作") : I18n.t("输入任务…")
                 wrapMode: TextArea.Wrap; selectByMouse: true
-                padding: 0; topPadding: 3; font.pixelSize: Theme.font(13)
+                padding: 0; topPadding: 3; font.pixelSize: Theme.font(13, visible)
                 background: null
-                onTextChanged: backend.setDraft(text)
-                Keys.onPressed: event => { if (event.matches(StandardKey.Paste) && backend.pasteAttachments()) event.accepted = true }
+                onTextChanged: { root.slashDismissed = false; backend.setDraft(text) }
+                Keys.onPressed: event => {
+                    if (event.matches(StandardKey.Paste) && backend.pasteAttachments()) event.accepted = true
+                    else if (root.slashVisible && !inputMethodComposing) {
+                        if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+                            slashMenu.moveSelection(event.key === Qt.Key_Up ? -1 : 1); event.accepted = true
+                        } else if (event.key === Qt.Key_Tab) {
+                            slashMenu.chooseSelection(); event.accepted = true
+                        } else if (event.key === Qt.Key_Escape) {
+                            root.slashDismissed = true; event.accepted = true
+                        }
+                    }
+                }
                 Keys.onReturnPressed: event => root.handleEnter(event)
                 Keys.onEnterPressed: event => root.handleEnter(event)
             }
@@ -71,23 +111,24 @@ Item {
             ActionButton { objectName: "openChatDirectoryButton"; glyph: "folder"; quiet: true; width: Theme.control(31); height: Theme.control(31); hint: I18n.t("在文件管理器中打开当前目录"); onClicked: backend.openChatDirectory() }
             Rectangle { width: 1; height: 15; color: Theme.line; anchors.verticalCenter: parent.verticalCenter }
             ContextUsage {}
+            TaskStatus { objectName: "composerTaskStatus"; status: backend.turnStatus; compact: true; anchors.verticalCenter: parent.verticalCenter }
             ActionButton {
                 id: modelButton; objectName: "modelSelector"; quiet: true; height: Theme.control(31)
                 width: Math.min(modelRow.implicitWidth + 18, 350)
                 onClicked: root.openModels()
                 contentItem: Item { Row {
                     id: modelRow; spacing: 7; anchors.verticalCenter: parent.verticalCenter; x: 10
-                    Text { text: { let p = backend.config.providers.find(p => p.id === backend.config.selectedProvider); return p ? p.name : I18n.t("选择供应商") } color: Theme.ink; font.pixelSize: Theme.font(11); anchors.verticalCenter: parent.verticalCenter }
-                    Text { text: "/"; font.pixelSize: Theme.font(11); color: Theme.muted; anchors.verticalCenter: parent.verticalCenter }
-                    Text { text: backend.config.selectedModel; width: Math.min(implicitWidth, 135); elide: Text.ElideRight; color: Theme.muted; font.pixelSize: Theme.font(11); anchors.verticalCenter: parent.verticalCenter }
-                    Text { objectName: "reasoningEffortBadge"; visible: backend.reasoningEffort !== "off"; text: "· " + ({low:"Low",high:"High",max:"Max"}[backend.reasoningEffort] || ""); color: Theme.accent; font.pixelSize: Theme.font(11); anchors.verticalCenter: parent.verticalCenter }
+                    Text { font.family: Theme.fontFamily; text: { let p = backend.config.providers.find(p => p.id === backend.config.selectedProvider); return p ? p.name : I18n.t("选择供应商") } color: Theme.ink; font.pixelSize: Theme.font(11, visible); anchors.verticalCenter: parent.verticalCenter }
+                    Text { font.family: Theme.fontFamily; text: "/"; font.pixelSize: Theme.font(11, visible); color: Theme.muted; anchors.verticalCenter: parent.verticalCenter }
+                    Text { font.family: Theme.fontFamily; text: backend.config.selectedModel; width: Math.min(implicitWidth, 135); elide: Text.ElideRight; color: Theme.muted; font.pixelSize: Theme.font(11, visible); anchors.verticalCenter: parent.verticalCenter }
+                    Text { font.family: Theme.fontFamily; objectName: "reasoningEffortBadge"; visible: backend.reasoningEffort !== "off"; text: "· " + ({low:"Low",high:"High",max:"Max"}[backend.reasoningEffort] || ""); color: Theme.accent; font.pixelSize: Theme.font(11, visible); anchors.verticalCenter: parent.verticalCenter }
                     Glyph { name: "chevron-down"; width: Theme.icon(12); height: Theme.icon(12); anchors.verticalCenter: parent.verticalCenter }
                 } }
             }
         }
         Row {
             anchors.right: parent.right; anchors.rightMargin: 14; anchors.bottom: parent.bottom; anchors.bottomMargin: 12; spacing: 13
-            Text { visible: Theme.fontScale <= 1.25; text: backend.loading ? backend.toolStatus || I18n.t("正在加载 Pi") : backend.running ? I18n.t("Enter 加入队列 · Ctrl+S 优先") : I18n.t("Enter 发送"); font.pixelSize: Theme.font(10); color: Theme.muted; anchors.verticalCenter: parent.verticalCenter }
+            Text { font.family: Theme.fontFamily; visible: Theme.fontScale <= 1.25; text: backend.loading ? backend.toolStatus || I18n.t("正在加载 Pi") : backend.running ? I18n.t("Enter 加入队列 · Ctrl+S 优先") : I18n.t("Enter 发送"); font.pixelSize: Theme.font(10, visible); color: Theme.muted; anchors.verticalCenter: parent.verticalCenter }
             Rectangle {
                 objectName: "sendButton"
                 readonly property bool stopAction: backend.running

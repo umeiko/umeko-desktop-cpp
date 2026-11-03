@@ -1,12 +1,15 @@
 #pragma once
 #include "common.hpp"
 class DesktopPlugins;
+class PetReminders;
 class DesktopPet : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantMap config READ config NOTIFY changed)
   Q_PROPERTY(bool visible READ visible NOTIFY changed)
   Q_PROPERTY(QVariantList appearances READ appearances NOTIFY changed)
   Q_PROPERTY(QVariantMap state READ state NOTIFY changed)
+  Q_PROPERTY(QVariantList reminderItems READ reminderItems NOTIFY changed)
+  Q_PROPERTY(QVariantList reminderCard READ reminderCard NOTIFY reminderCardChanged)
 public:
   explicit DesktopPet(DesktopPlugins *manager);
   QVariantMap config() const { return options; }
@@ -15,6 +18,11 @@ public:
   }
   QVariantList appearances() const;
   QVariantMap state() const;
+  QVariantList reminderItems() const;
+  QVariantList reminderCard() const { return card; }
+  Q_INVOKABLE void openReminders(QString id, bool create);
+  Q_INVOKABLE void dismissReminders();
+  Q_INVOKABLE void completeReminder(QString id, int revision);
   void start();
   void stop();
   void close();
@@ -27,6 +35,8 @@ public:
   Q_INVOKABLE QVariantMap screenBounds(int x, int y) const;
 signals:
   void changed();
+  void reminderCardChanged();
+  void reminderPresented(QVariantList items);
   void reaction(QString text);
   void restoreRequested();
   void settingsRequested();
@@ -39,6 +49,10 @@ private:
   bool rareIdleActive = false;
   DesktopPlugins *m;
   QTimer timer;
+  PetReminders *reminders = nullptr;
+  QVariantList card;
+  QVariantMap selection{{"id",""},{"create",false},{"serial",0}};
+  void syncReminders();
   QElapsedTimer clock;
   QVariantMap options, packs, activity;
   QHash<QString, bool> observed;

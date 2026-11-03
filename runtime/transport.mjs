@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { transientFailure, certificateFailure, describeFailure } from './network-retry.mjs';
 import { randomUUID, X509Certificate } from 'node:crypto';
 import tls from 'node:tls';
+import {formatHttpError} from './provider-errors.mjs';
 
 const require = createRequire(new URL('./releases/coding-1.3.0/package.json', import.meta.url));
 const { Agent, ProxyAgent, EnvHttpProxyAgent, fetch: providerFetch } = require('undici');
@@ -97,6 +98,8 @@ export function failureReport(directory, provider, request, response, failure, h
   const certificate = certificateFailure(failure);
   const error = new Error(certificate
     ? `TLS certificate validation failed (${certificate.code}); check the provider's Network settings and CA file, then open request details [Umeko:${id}]`
+    : response.status >= 400 ? `${formatHttpError(response.status,response.body,response.headers,[provider.key])} [Umeko:${id}]`
+    : /供应商返回 HTTP \d+：/.test(failure.message) ? `${redact(failure.message,[provider.key])} [Umeko:${id}]`
     : `Provider request failed; open request details [Umeko:${id}]`);
   error.reportId = id; error.cause = failure; error.retryable = transientFailure(failure, http);
   if (certificate) error.tlsCode = certificate.code;

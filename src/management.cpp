@@ -1,4 +1,5 @@
 #include "backend.hpp"
+#include "pi_capabilities.hpp"
 #include "update_proxy.hpp"
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
@@ -23,7 +24,7 @@ void Backend::saveAgent(QString raw) {
     return;
   }
   auto agent = store.data["agent"].toMap();
-  for (auto key : {"maxTokens", "instructions", "autoCompaction", "agentDir",
+  for (auto key : {"maxTokens", "maxContextImages", "instructions", "autoCompaction", "agentDir",
                    "skillPaths", "extensionPaths"})
     if (values.contains(key))
       agent[key] = values[key];
@@ -38,6 +39,7 @@ void Backend::saveAgent(QString raw) {
     agent[key] = paths;
   }
   store.data["agent"] = agent;
+  skills->installBundled();
   invalidate();
   notify();
   emit toast("Pi 设置已保存，下次加载生效");
@@ -448,49 +450,85 @@ void PiManagement::setExtensionEnabled(QString id, bool enabled) {
 QVariantMap PiManagement::extensionModes() const { return b->view->extensionModes; }
 void PiManagement::loadExtensionDetails(QString id) { resource({{"action","details"},{"id",id}}); }
 void PiManagement::saveModes(std::shared_ptr<Session> session) {
-  if(!session->id.isEmpty()) { b->setMetadata(session->id,{{"extensionModes",session->extensionModes}}); b->store.save(); }
+  if(!session->id.isEmpty()) { b->setMetadata(session->id,{{"extensionModes",session->extensionModes},{"piCapabilities",session->piCapabilities},{"blockedTools",session->blockedTools}}); b->store.save(); }
   session->stale=true;
   if(!session->busy() && !session->subagentsActive) b->retire(session);
   emit changed(); emit b->chatChanged();
 }
-void PiManagement::setToolVisible(QString name, bool visible) {
-  auto s=b->view;
-  if(s->busy() || s->subagentsActive || m_busy || b->kernelBusy())
-    throw std::runtime_error("请等待当前任务和子代理结束后修改工具可见性");
-  bool found=false;
-  for(const auto &value:s->resources["allTools"].toList()) {
-    const auto tool=value.toMap();
-    found |= tool["name"]==name && tool["exposure"]!="hidden";
+QVariantMap PiManagement::capabilityProfile() const {
+  return PiCapabilities::normalize(b->view->piCapabilities,b->view->blockedTools);
+}
+QVariantList PiManagement::capabilityExtensions() const {
+  const auto s=b->view;const auto profile=capabilityProfile();const auto tools=PiCapabilities::catalog(s->resources);
+  QVariantList rows{QVariantMap{{"id",PiCapabilities::nativeId},{"path","native"},{"name","Pi 原生工具"},{"source","native"},{"scope","session"},{"enabled",true},
+    {"info",QVariantMap{{"icon","code"},{"bundled",true},{"description","read · bash · powershell · edit · write · grep · find · ls"}}}}};
+  rows.append(m_extensions);
+  for(auto &value:rows) {
+    auto row=value.toMap();const auto source=row["path"].toString();
+    const bool fallback=s->extensionModes.contains(source) ? s->extensionModes[source]=="session" : row["enabled"].toBool();
+    const bool enabled=PiCapabilities::pluginEnabled(profile,source,fallback);row["sessionEnabled"]=enabled;
+    auto info=row["info"].toMap();info["required"]=false;row["info"]=info;
+    QVariantList entries;int count=0;
+    for(const auto &item:tools) {
+      const auto tool=item.toMap();if(tool["owner"]!=source)continue;
+      const bool visible=PiCapabilities::toolEnabled(profile,tool,fallback) && tool["exposure"]!="hidden";
+      entries<<QVariantMap{{"name",tool["name"]},{"description",tool["description"].toString().left(1024)},{"visible",visible},
+        {"enabled",visible},{"editable",enabled && tool["exposure"]!="hidden"},{"owner",source}};
+      count+=visible;
+    }
+    row["tools"]=entries;row["toolCount"]=entries.size();row["enabledToolCount"]=count;value=row;
   }
-  if(!found) throw std::runtime_error("工具列表已变更，请刷新后重试");
-  if(!visible && !s->blockedTools.contains(name) && s->blockedTools.size()>=4096)
-    throw std::runtime_error("本会话工具可见性设置已达上限");
-  const auto previous=s->blockedTools;
-  s->blockedTools.removeAll(name);
-  if(!visible) s->blockedTools.append(name);
+  return rows;
+}
+QVariantMap PiManagement::capabilityTools(QString id,QString query,int offset,int limit) const {
+  if(id=="native")id=PiCapabilities::nativeId;
+  QVariantMap row;for(const auto &item:capabilityExtensions())if(item.toMap()["id"]==id)row=item.toMap();
+  if(row.isEmpty())throw std::runtime_error("Refresh the current extension catalog first");
+  const auto text=row["name"].toString()+" "+row["path"].toString()+" "+row["info"].toMap()["description"].toString();
+  if(text.contains(query,Qt::CaseInsensitive))query.clear();
+  QVariantList tools;for(const auto &item:row["tools"].toList()) {
+    const auto tool=item.toMap();if(query.isEmpty() || (tool["name"].toString()+" "+tool["description"].toString()).contains(query,Qt::CaseInsensitive))tools<<item;
+  }
+  return {{"tools",tools.mid(offset,limit)},{"total",tools.size()},{"hasMore",offset+limit<tools.size()},{"profile",capabilityProfile()},
+    {"loading",b->view->busy() && QStringList{"load","inspect"}.contains(b->view->action)},{"sessionEnabled",row["sessionEnabled"]}};
+}
+QVariantMap PiManagement::configureCapabilities(QString action,QVariantMap args) {
+  const auto s=b->view;
+  if(s->busy() || s->subagentsActive || m_busy || b->kernelBusy())throw std::runtime_error("请等待当前任务和子代理结束后修改工具配置");
+  if(!s->globalAgent.isEmpty())throw std::runtime_error("当前会话的运行边界不允许修改工具配置");
+  const auto previousProfile=s->piCapabilities,previousResources=s->resources,previousStore=b->store.data;
+  const auto previousBlocked=s->blockedTools;
   try {
-    if(!s->id.isEmpty()) { b->setMetadata(s->id,{{"blockedTools",s->blockedTools}}); if(!b->store.save()) throw std::runtime_error("工具可见性保存失败"); }
-  } catch(...) {
-    s->blockedTools=previous;
-    if(!s->id.isEmpty()) b->setMetadata(s->id,{{"blockedTools",previous}});
-    throw;
-  }
-  auto tools=s->resources["allTools"].toList();
-  for(auto &value:tools) {
-    auto tool=value.toMap(); if(tool["name"]!=name) continue;
-    tool["visible"]=visible;if(!visible)tool["active"]=false;value=tool;
-  }
-  s->resources["allTools"]=tools;
-  if(!visible) { auto names=s->resources["tools"].toList();names.removeAll(name);s->resources["tools"]=names; }
-  s->stale=true; b->retire(s);
-  emit changed(); emit b->chatChanged();
+    s->piCapabilities=PiCapabilities::change(capabilityProfile(),action,args,m_extensions,s->resources);
+    const auto definitions=PiCapabilities::catalog(s->resources);s->blockedTools.clear();
+    for(const auto &value:definitions)if(!PiCapabilities::toolEnabled(s->piCapabilities,value.toMap()))s->blockedTools<<value.toMap()["name"].toString();
+    auto tools=s->resources["allTools"].toList();
+    for(auto &value:tools) {
+      auto tool=value.toMap();QVariantMap definition=tool;
+      for(const auto &item:definitions)if(item.toMap()["name"]==tool["name"])definition=item.toMap();
+      tool["visible"]=PiCapabilities::toolEnabled(s->piCapabilities,definition) && tool["exposure"]!="hidden";
+      if(!tool["visible"].toBool())tool["active"]=false;value=tool;
+    }
+    s->resources["allTools"]=tools;auto names=s->resources["tools"].toList();
+    for(int i=names.size()-1;i>=0;--i)if(s->blockedTools.contains(names[i].toString()))names.removeAt(i);
+    s->resources["tools"]=names;
+    if(!s->id.isEmpty()) {
+      b->setMetadata(s->id,{{"piCapabilities",s->piCapabilities},{"blockedTools",s->blockedTools},{"extensionModes",s->extensionModes}});
+      if(!b->store.save())throw std::runtime_error("工具配置保存失败");
+    }
+  } catch(...) {s->piCapabilities=previousProfile;s->blockedTools=previousBlocked;s->resources=previousResources;b->store.data=previousStore;throw;}
+  s->stale=true;b->retire(s);emit changed();emit b->chatChanged();
+  QTimer::singleShot(0,this,[this,s]{if(b->view==s && !s->busy() && !s->model.isEmpty())b->command(s,"load",{});});
+  return {{"profile",capabilityProfile()}};
+}
+void PiManagement::setToolVisible(QString name,bool visible) {
+  configureCapabilities("pi.tool",{{"name",name},{"enabled",visible}});
 }
 void PiManagement::setExtensionMode(QString id, QString mode) {
   if(m_busy || b->kernelBusy() || b->store.data["agent"].toMap()["safeMode"].toBool() || !QStringList{"global","session","disabled"}.contains(mode)) return;
   if(!extensionsCurrent()) { emit b->toast("请刷新当前对话的插件列表"); return; }
   for(const auto &value:m_extensions) {
     const auto row=value.toMap(); if(row["id"]!=id) continue;
-    if(row["info"].toMap()["required"].toBool()) { emit b->toast("Umeko 基础能力固定启用，不能修改启用范围"); return; }
     const auto path=row["path"].toString();
     if(mode=="global") resource({{"action","enable-global"},{"id",id},{"targetPath",path}},true);
     else { b->view->extensionModes[path]=mode; saveModes(b->view); }

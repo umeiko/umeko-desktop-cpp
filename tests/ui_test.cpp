@@ -7,6 +7,7 @@
 #include "backend.hpp"
 #include "miniz.h"
 #include "syntaxhighlighter.hpp"
+#include "text_spacing.hpp"
 #include "update_network_fixture.hpp"
 #include <QDesktopServices>
 #include <QImageReader>
@@ -194,6 +195,7 @@ private slots:
     QQuickStyle::setStyle("Basic");
     qmlRegisterType<TerminalView>("Umeko.Terminal",1,0,"TerminalView");
   qmlRegisterType<SyntaxHighlighter>("Umeko.Text", 1, 0, "SyntaxHighlighter");
+  qmlRegisterType<TextSpacing>("Umeko.Text",1,0,"TextSpacing");
     Store seed(directory.path());
     auto agent = seed.data["agent"].toMap();
     agent["agentDir"] = directory.filePath("agent");
@@ -826,6 +828,65 @@ private slots:
     window->grabWindow().save(root+"/build/screenshots/tool-catalog-visible.png");
     QMetaObject::invokeMethod(find("backToPiButton"),"clicked");
   }
+  void native066SkillsSlashAndDocumentPreview() {
+    const auto oldSize=window->size();const auto oldPaneWidth=window->property("webPreferredWidth");
+    const auto original=backend->store.data;
+    auto widgets=qobject_cast<DesktopPlugins *>(backend->desktopPlugins());
+    const auto cleanup=qScopeGuard([&]{widgets->closePage();backend->store.data=original;backend->newSession();backend->notify();window->resize(oldSize);window->setProperty("webPreferredWidth",oldPaneWidth);});
+    auto agent=original["agent"].toMap();const auto agentDir=directory.filePath("native066-agent");
+    agent["agentDir"]=agentDir;agent["safeMode"]=false;backend->store.data["agent"]=agent;
+    const auto folder=agentDir+"/skills/native-fixture";QDir().mkpath(folder);
+    QFile skill(folder+"/SKILL.md");QVERIFY(skill.open(QIODevice::WriteOnly));skill.write("---\nname: native-fixture\ndescription: Native fixture.\n---\n# Fixture");skill.close();
+    backend->newSession();backend->notify();window->setProperty("page","chat");window->resize(1320,900);window->setProperty("webPreferredWidth",600);
+    widgets->setEnabled("skill-manager",true);widgets->setSessionEnabled("skill-manager",true);
+    backend->slash->refresh();
+    auto hasSkill=[&]{for(const auto &v:backend->slash->entries())if(v.toMap()["path"]==folder+"/SKILL.md")return true;return false;};
+    QTRY_VERIFY_WITH_TIMEOUT(hasSkill(),10000);
+    QString skillId;for(const auto &v:backend->slash->entries())if(v.toMap()["path"]==folder+"/SKILL.md")skillId=v.toMap()["id"].toString();
+    QVERIFY(backend->slash->choose(skillId));QCOMPARE(backend->attachments().size(),1);QCOMPARE(backend->attachments().first().toMap()["kind"].toString(),QString("folder"));
+    QCOMPARE(backend->messages().size(),0); // Selection attaches; it never sends.
+    QVERIFY(widgets->openPage("skill-manager"));
+    QTRY_VERIFY_WITH_TIMEOUT(find("skillManagerWidget"),10000);
+    auto page=find("skillManagerWidget");
+    QTRY_COMPARE_WITH_TIMEOUT(page->property("skills").toList().size(),1,10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),10000);
+    QTRY_VERIFY_WITH_TIMEOUT(page->property("preview").toMap().contains("markdown"),10000);
+    QDir().mkpath(root+"/build/screenshots");QVERIFY(window->grabWindow().save(root+"/build/screenshots/native066-skills.png"));
+    const auto rows=page->property("skills").toList();
+    QMetaObject::invokeMethod(page,"setEnabled",Q_ARG(QVariant,rows.first()),Q_ARG(QVariant,false));
+    QTRY_VERIFY_WITH_TIMEOUT(backend->view->skillModes.contains(folder+"/SKILL.md"),5000);
+    QVERIFY(!backend->view->skillModes[folder+"/SKILL.md"].toBool());
+    widgets->closePage();widgets->setSessionEnabled("skill-manager",false);backend->slash->invalidate();backend->slash->refresh();
+    QVERIFY(!hasSkill());QVERIFY(QFile::exists(folder+"/SKILL.md"));
+    QFile document(directory.filePath("native066-large.md"));QVERIFY(document.open(QIODevice::WriteOnly));
+    const auto body=QByteArray("# Heading\n\n| A | B |\n|---|---|\n| Full table | Value |\n\n```cpp\nint value = 42;\n```\n\n").repeated(1200);
+    document.write(body);document.close();
+    backend->documents->load(document.fileName(),"markdown");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->documents->state()["busy"].toBool(),10000);
+    QVERIFY(backend->documents->state()["chunked"].toBool());QVERIFY(!backend->documents->state()["truncated"].toBool());
+    auto blocks=qobject_cast<QAbstractItemModel *>(backend->documents->blocks());QVERIFY(blocks->rowCount()>1000);
+    const auto first=blocks->data(blocks->index(0,0),Qt::UserRole+1).toMap();QVERIFY(first["html"].toString().contains("Heading"));
+    backend->documents->setMode("markdown","source");backend->documents->copyAll();QCOMPARE(QGuiApplication::clipboard()->text().toUtf8(),body);
+    backend->documents->cancel();
+  }
+  void native066LongHistoryWindow() {
+    const auto cleanup=qScopeGuard([&]{backend->newSession();});
+    const auto path=directory.filePath("long-native066.jsonl");QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(QJsonObject{{"type","session"},{"id","native066-history"},{"cwd",directory.path()}}).toJson(QJsonDocument::Compact)+'\n');
+    QString parent;
+    for(int i=0;i<2400;++i){const auto id=QString::number(i);const QJsonObject message{{"role",i%2?"assistant":"user"},{"content",QJsonArray{QJsonObject{{"type","text"},{"text",QString("Message %1\n\n**Native history.**").arg(i)}}}},{"stopReason","stop"}};
+      file.write(QJsonDocument(QJsonObject{{"type","message"},{"id",id},{"parentId",parent},{"message",message}}).toJson(QJsonDocument::Compact)+'\n');parent=id;}
+    file.close();backend->sessionIndex.prepend(QVariantMap{{"id","native066-history"},{"file",path},{"title","Long native history"},{"workspace",directory.path()}});
+    backend->setMetadata("native066-history",{{"viewport",QVariantMap{{"index",1200},{"offset",10},{"follow",false}}}});
+    QSignalSpy ready(backend->previewLoader,&SessionPreview::ready);
+    backend->previewLoader->prepare("native066-history",6606);QTRY_VERIFY_WITH_TIMEOUT(!ready.isEmpty(),10000);QVERIFY(ready.last()[1].toBool());
+    QVERIFY(backend->previewLoader->activate(6606));QCOMPARE(backend->chat.rowCount(),2400);QVERIFY(backend->chat.paged());
+    QTRY_VERIFY_WITH_TIMEOUT(backend->chat.rangeReady(1200,1204),5000);
+    QCOMPARE(backend->scrollAnchor(),1200);QVERIFY(!backend->followTail());QVERIFY(!backend->view->process);
+    QVERIFY(!backend->chat.data(backend->chat.index(1201,0),ChatModel::MessageRole).toMap()["_loading"].toBool());
+    backend->chat.requestRange(2396,2399);QTRY_VERIFY_WITH_TIMEOUT(backend->chat.rangeReady(2396,2399),5000);
+    QVERIFY(backend->chat.data(backend->chat.index(2399,0),ChatModel::MessageRole).toMap()["text"].toString().contains("2399"));
+  }
   void piManagerColdToolInventory() {
     const auto restoreFocus=qScopeGuard([&] {window->requestActivate();QTest::qWait(100);});
     QQmlEngine fixtureEngine;
@@ -865,32 +926,73 @@ private slots:
       QVariantMap{{"name","submit_to_chatbox"},{"source","builtin:chatbox"},{"description","Display an artifact"},{"exposure","direct"}}};
     backend->setLanguage("zh");backend->notify();window->setProperty("page","chat");window->resize(1320,900);window->setProperty("webPreferredWidth",600);QTest::qWait(100);
     widgets->setEnabled("pi-manager",true);QVERIFY(widgets->openPage("pi-manager"));
-    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerToolTag_write"),10000);
+    QTRY_VERIFY_WITH_TIMEOUT(find("piExtension_builtin:pi-tools"),10000);
     auto page=find("piManagerWidget");QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),10000);
-    click("piManagerEntry_builtin:pi-tools");
-    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerToolVisible_write"),10000);
+    QCOMPARE(page->property("expandedId").toString(),QString());
+    click("piExtension_builtin:pi-tools");
+    QTRY_VERIFY_WITH_TIMEOUT(find("piToolSwitch_write") && find("piToolSwitch_write")->isVisible(),10000);
     QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),10000);
-    QVERIFY(find("piManagerToolVisible_write")->property("checked").toBool());
-    click("piManagerToolVisible_write");
-    QTRY_VERIFY_WITH_TIMEOUT(!host->pendingApproval().isEmpty(),2000);
-    QVERIFY(origin->blockedTools.isEmpty());
-    click("widgetHost_allowToolButton");
+    QVERIFY(find("piToolSwitch_write")->property("checked").toBool());
+    click("piToolSwitch_write");
     QTRY_COMPARE_WITH_TIMEOUT(origin->blockedTools,QStringList{"write"},5000);
+    QVERIFY(host->pendingApproval().isEmpty()); // The official per-chat controls apply immediately.
     QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),5000);
-    QVERIFY(!find("piManagerToolVisible_write")->property("checked").toBool());
+    QVERIFY(!find("piToolSwitch_write")->property("checked").toBool());
+    QVERIFY(find("piToolSwitch_read")->property("checked").toBool());
     QCOMPARE(backend->metadata(origin->id)["blockedTools"].toStringList(),QStringList{"write"});
     Store saved(directory.path());QCOMPARE(saved.data["sessionMeta"].toMap()[origin->id].toMap()["blockedTools"].toStringList(),QStringList{"write"});
+    QCOMPARE(saved.data["sessionMeta"].toMap()[origin->id].toMap()["piCapabilities"].toMap()["preset"].toString(),QString("custom"));
+    click("piPreset_full");QTRY_VERIFY_WITH_TIMEOUT(origin->blockedTools.isEmpty() && !page->property("working").toBool(),5000);
+    click("piPreset_custom");QTRY_VERIFY_WITH_TIMEOUT(origin->blockedTools.contains("write") && !page->property("working").toBool(),5000);
+    find("piManagerSearch")->setProperty("text","Write a file");
+    QTRY_COMPARE_WITH_TIMEOUT(find("piManagerList")->property("count").toInt(),1,5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),5000);
     QDir().mkpath(root+"/build/screenshots");
-    QVERIFY(window->grabWindow().save(root+"/build/screenshots/session-tool-visibility-detail.png"));
-    click("piManagerBack");QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),5000);
-    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerToolTag_write") && find("piManagerToolTag_read"),5000);
-    QCOMPARE(find("piManagerToolTag_write")->property("ink").value<QColor>(),QColor("#ba3c42"));
-    QCOMPARE(find("piManagerToolTag_read")->property("ink").value<QColor>(),QColor("#287746"));
     QVERIFY(window->grabWindow().save(root+"/build/screenshots/session-tool-visibility-list.png"));
     backend->newSession();QVERIFY(backend->view->blockedTools.isEmpty());
     backend->activate(origin);QCOMPARE(backend->view->blockedTools,QStringList{"write"});
     origin->subagentsActive=true;QVERIFY_EXCEPTION_THROWN(backend->management->setToolVisible("write",true),std::runtime_error);origin->subagentsActive=false;
     backend->management->setToolVisible("write",true);QVERIFY(origin->blockedTools.isEmpty());
+  }
+  void nativePiCapabilitiesReachEmbeddedRuntime() {
+    auto widgets=backend->desktopExtensions;const auto oldAgent=backend->store.data["agent"];
+    const auto oldSize=window->size();const auto oldWidth=window->property("webPreferredWidth");
+    const auto cleanup=qScopeGuard([&]{widgets->closePage();backend->store.data["agent"]=oldAgent;window->resize(oldSize);window->setProperty("webPreferredWidth",oldWidth);});
+    configureAPI();const auto agentDir=directory.filePath("pi-capabilities-agent"),work=directory.filePath("pi-capabilities-work");
+    QDir().mkpath(agentDir+"/extensions");QDir().mkpath(work);
+    QFile extension(agentDir+"/extensions/capability-fixture.mjs");QVERIFY(extension.open(QIODevice::WriteOnly));
+    extension.write("export default pi=>{for(const name of ['fixture_one','fixture_two'])pi.registerTool({name,label:name,description:'Fixture tool '+name,parameters:{type:'object',properties:{}},execute:async()=>({content:[{type:'text',text:'fixture'}]})});};");extension.close();
+    QVERIFY(U::writeJson(agentDir+"/settings.json",QVariantMap{{"extensions",QStringList{extension.fileName()}}}));
+    auto agent=oldAgent.toMap();agent["agentDir"]=agentDir;agent["safeMode"]=false;backend->store.data["agent"]=agent;
+    backend->newSession();auto record=backend->view;record->workspace=work;backend->notify();
+    window->resize(1480,960);window->setProperty("webPreferredWidth",500);window->setProperty("page","chat");
+    const auto before=requests.size();QVERIFY(widgets->openPage("pi-manager"));
+    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerWidget"),10000);auto page=find("piManagerWidget");
+    auto ready=[&]{return !record->busy() && !page->property("working").toBool() && !page->property("sessionBusy").toBool() && !page->property("inventoryLoading").toBool() && backend->management->extensionsCurrent() && record->resources.contains("toolCatalog");};
+    QTRY_VERIFY2_WITH_TIMEOUT(ready(),qPrintable(QString("busy=%1 working=%2 current=%3 catalog=%4 action=%5 failed=%6 status=%7 notice=%8 pending=%9").arg(record->busy()).arg(page->property("working").toBool()).arg(backend->management->extensionsCurrent()).arg(record->resources.contains("toolCatalog")).arg(record->action).arg(record->failed).arg(backend->management->status()).arg(page->property("notice").toString()).arg(QString::fromUtf8(QJsonDocument::fromVariant(page->property("pending")).toJson(QJsonDocument::Compact)))),15000);QCOMPARE(page->property("expandedId").toString(),QString());
+    QVariantMap row;for(const auto &value:backend->management->extensions())if(value.toMap()["path"].toString().endsWith("capability-fixture.mjs"))row=value.toMap();
+    QVERIFY(!row.isEmpty());find("piManagerSearch")->setProperty("text","fixture_one");
+    QTRY_COMPARE_WITH_TIMEOUT(find("piManagerList")->property("count").toInt(),1,5000);QTRY_VERIFY_WITH_TIMEOUT(ready(),5000);
+    find("piManagerSearch")->setProperty("text","capability-fixture");QTRY_VERIFY_WITH_TIMEOUT(page->property("query").toString()=="capability-fixture" && ready(),5000);
+    click("piExtension_"+row["id"].toString());QTRY_VERIFY_WITH_TIMEOUT(find("piToolSwitch_fixture_one"),5000);QTRY_VERIFY_WITH_TIMEOUT(ready(),5000);
+    click("piToolSwitch_fixture_one");QTRY_VERIFY_WITH_TIMEOUT(ready() && !record->resources["tools"].toStringList().contains("fixture_one"),10000);
+    QVERIFY(record->resources["tools"].toStringList().contains("fixture_two"));
+    QTRY_VERIFY_WITH_TIMEOUT(find("piPluginSwitch_"+row["id"].toString())->isEnabled(),5000);
+    click("piPluginSwitch_"+row["id"].toString());QTRY_VERIFY2_WITH_TIMEOUT(ready() && !record->resources["tools"].toStringList().contains("fixture_two"),qPrintable(QString("profile=%1 tools=%2 busy=%3 working=%4 uiBusy=%5 inventory=%6 notice=%7").arg(QString::fromUtf8(QJsonDocument::fromVariant(record->piCapabilities).toJson(QJsonDocument::Compact))).arg(record->resources["tools"].toStringList().join(",")).arg(record->busy()).arg(page->property("working").toBool()).arg(page->property("sessionBusy").toBool()).arg(page->property("inventoryLoading").toBool()).arg(page->property("notice").toString())),10000);
+    QTRY_VERIFY_WITH_TIMEOUT(find("piToolSwitch_fixture_two"),5000); // Cached definitions survive unloading.
+    click("piPluginSwitch_"+row["id"].toString());QTRY_VERIFY_WITH_TIMEOUT(ready() && record->resources["tools"].toStringList().contains("fixture_two"),10000);
+    QVERIFY(!record->resources["tools"].toStringList().contains("fixture_one"));
+    find("piManagerSearch")->setProperty("text","");QTRY_VERIFY_WITH_TIMEOUT(page->property("query").toString().isEmpty() && ready(),5000);
+    click("piPreset_minimal");QTRY_VERIFY_WITH_TIMEOUT(ready() && record->piCapabilities["preset"]=="minimal",10000);
+    const auto names=record->resources["tools"].toStringList();QVERIFY(names.contains("read") && names.contains("write"));QVERIFY(!names.contains("grep") && !names.contains("fixture_two"));QVERIFY(!names.contains("umeko_desktop"));
+    click("piPreset_custom");QTRY_VERIFY_WITH_TIMEOUT(ready() && record->piCapabilities["preset"]=="custom",10000);
+    QCOMPARE(record->piCapabilities["custom"].toMap()["base"].toString(),QString("full"));
+    QVERIFY(record->resources["tools"].toStringList().contains("fixture_two"));QVERIFY(!record->resources["tools"].toStringList().contains("fixture_one"));
+    QVERIFY(!record->id.isEmpty());QCOMPARE(backend->metadata(record->id)["piCapabilities"].toMap(),record->piCapabilities);
+    QCOMPARE(requests.size(),before); // Inventory and loadout changes never prompt a model.
+    auto process=widgets->workers.value("pi-manager")->process;widgets->closePage();
+    QTRY_VERIFY_WITH_TIMEOUT(!process || process->state()==QProcess::NotRunning,5000);
+    backend->newSession();QVERIFY(backend->view->piCapabilities.isEmpty());backend->activate(record);QCOMPARE(backend->view->piCapabilities["preset"].toString(),QString("custom"));
   }
   void piManagerIsOnlyACloseableWidget() {
     backend->setLanguage("zh");
@@ -933,7 +1035,7 @@ private slots:
     // A bounded long Markdown fixture exercises the actual Widget scroll container.
     backend->management->loadExtensionDetails(row["id"].toString());
     QTRY_VERIFY_WITH_TIMEOUT(!backend->management->busy(),10000);
-    click("piManagerEntry_"+row["id"].toString());
+    click("piExtensionDetails_"+row["id"].toString());
     QTRY_VERIFY_WITH_TIMEOUT(find("piManagerReadme")->property("text").toString().contains("submit_to_chatbox"),10000);
     QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),10000);
     auto scroll=find("piManagerDetailScroll"), readme=find("piManagerReadme");
@@ -944,24 +1046,30 @@ private slots:
     QTest::qWait(200);
     QVERIFY(scroll->property("contentHeight").toDouble()>scroll->height()*2);
     QVERIFY(window->grabWindow().save(root+"/build/screenshots/pi-widget-detail-scroll.png"));
-    QVERIFY(row["info"].toMap()["required"].toBool());
-    QVERIFY(!find("piManagerActivation")->isEnabled());
-    QVERIFY(find("piManagerActivation")->property("displayText").toString().contains("固定启用"));
-    backend->management->setExtensionMode(row["id"].toString(),"disabled");
-    QVERIFY(backend->view->extensionModes.isEmpty());
+    QVERIFY(!row["info"].toMap()["required"].toBool());
+    QVERIFY(find("piManagerSessionSwitch")->isEnabled());
+    QVERIFY(find("piManagerSessionSwitch")->property("checked").toBool());
+    click("piManagerSessionSwitch");
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),5000);
+    QVERIFY(!find("piManagerSessionSwitch")->property("checked").toBool());
+    QVERIFY(!backend->view->piCapabilities["custom"].toMap()["plugins"].toMap()["builtin:chatbox"].toBool());
+    click("piManagerSessionSwitch");
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),5000);
+    QVERIFY(find("piManagerSessionSwitch")->property("checked").toBool());
     click("piManagerBack");
     find("piManagerSearch")->setProperty("text","mcp");
     QTRY_COMPARE_WITH_TIMEOUT(find("piManagerList")->property("count").toInt(),1,10000);
     for(const auto &value:backend->management->extensions())if(value.toMap()["path"]=="builtin:mcp")row=value.toMap();
-    QTRY_VERIFY_WITH_TIMEOUT(find("piManagerEntry_"+row["id"].toString()),5000);
+    QTRY_VERIFY_WITH_TIMEOUT(find("piExtensionDetails_"+row["id"].toString()),5000);
     QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),5000);
-    click("piManagerEntry_"+row["id"].toString());
+    click("piExtensionDetails_"+row["id"].toString());
     QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),10000);
-    QVERIFY(find("piManagerActivation")->isEnabled());
-    click("piManagerActivation");QTest::keyClick(window,Qt::Key_Home);QTest::keyClick(window,Qt::Key_Down);QTest::keyClick(window,Qt::Key_Return);
-    QTRY_VERIFY_WITH_TIMEOUT(host->pendingApproval().contains("id"),2000);
-    click("widgetHost_allowToolButton");
-    QTRY_COMPARE_WITH_TIMEOUT(backend->view->extensionModes.value("builtin:mcp").toString(),QString("session"),5000);
+    QVERIFY(find("piManagerSessionSwitch")->isEnabled());
+    click("piManagerSessionSwitch");
+    QTRY_COMPARE_WITH_TIMEOUT(backend->view->piCapabilities["preset"].toString(),QString("custom"),5000);
+    QTRY_VERIFY_WITH_TIMEOUT(backend->view->piCapabilities["custom"].toMap()["plugins"].toMap().contains("builtin:mcp"),5000);
+    QVERIFY(!backend->view->piCapabilities["custom"].toMap()["plugins"].toMap()["builtin:mcp"].toBool());
+    QVERIFY(host->pendingApproval().isEmpty());
     QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),10000);
     QVERIFY(!QFile::exists(agentDir+"/settings.json"));
     auto origin=backend->view;
@@ -1025,7 +1133,9 @@ private slots:
     QVERIFY(!widgets->openPage(id));
     backend->newSession();
     QVERIFY(backend->view->extensionModes.isEmpty());
-    QCOMPARE(origin->extensionModes.value("builtin:mcp").toString(),QString("session"));
+    QCOMPARE(origin->piCapabilities["preset"].toString(),QString("custom"));
+    QVERIFY(!origin->piCapabilities["custom"].toMap()["plugins"].toMap()["builtin:mcp"].toBool());
+    QVERIFY(backend->view->piCapabilities.isEmpty());
   }
   void widgetHostServicesAreScopedAndAsynchronous() {
     backend->newSession();
@@ -2751,6 +2861,64 @@ Item {
     QVERIFY(backend->setProviderProxy(id, "direct", ""));
     window->setProperty("page", "chat");
   }
+  void compactionTaskStatusAndPermissionControls() {
+    const auto oldAgent=backend->store.data["agent"].toMap();
+    const auto restore=qScopeGuard([&]{backend->store.data["agent"]=oldAgent;backend->store.save();emit backend->changed();window->setProperty("page","chat");backend->newSession();});
+    backend->newSession();auto session=backend->view;session->id=U::uuid();session->file=directory.filePath("compaction.jsonl");session->model="fixture";
+    session->action="compact";session->phase="running";QVariantMap event{{"type","compaction_event"},{"version",2},{"eventId",U::uuid()},{"state","running"},{"mode","manual"},{"before",10000},{"after",QVariant()},{"afterEstimated",true},{"summary",""},{"error",""},{"entryId","start"},{"timestamp",U::stamp()}};
+    backend->event(session,event);QCOMPARE(session->messages.size(),1);QVERIFY(backend->compacting());QTest::qWait(200);
+    auto card=find("compactionEvent_0");QVERIFY(card && card->isVisible());QVERIFY(!find("assistantAvatar_0") || !find("assistantAvatar_0")->isVisible());
+    event["state"]="success";event["entryId"]="end";event["after"]=2000;event["summary"]="Fixture summary";backend->event(session,event);
+    QCOMPARE(session->messages.size(),1);QCOMPARE(session->messages.first().toMap()["entryId"].toString(),QString("start"));
+    click("compactionEventToggle_0");QVERIFY(find("compactionEventDetails_0")->property("text").toString().contains("Fixture summary"));
+    backend->event(session,{{"type","done"}});QVERIFY(!backend->compacting());QVERIFY(backend->turnStatus()["state"]!="finished");
+    for(const auto &outcome:QStringList{"finished","failed","stopped"}) {
+      session->action="prompt";session->phase="running";session->promptStarted=std::chrono::steady_clock::now()-std::chrono::seconds(5);session->failed=outcome=="failed";session->cancelled=outcome=="stopped";
+      QCOMPARE(backend->turnStatus()["state"].toString(),outcome=="stopped"?QString("stopping"):QString("running"));
+      backend->event(session,{{"type","done"}});QCOMPARE(backend->turnStatus()["state"].toString(),outcome);QVERIFY(backend->turnStatus()["elapsed"].toDouble()>=5);
+      backend->markRead(session);QCOMPARE(backend->turnStatus()["state"].toString(),outcome);
+    }
+    window->setProperty("page","settings");window->setProperty("settingsTab",3);QTest::qWait(200);
+    click("openPiSettingsButton");find("piFold_kernel")->setProperty("expanded",false);find("piFold_runtime")->setProperty("expanded",true);QTest::qWait(200);
+    auto flick=find("settingsScroll")->property("contentItem").value<QObject*>();QVERIFY(flick);flick->setProperty("contentY",0);
+    click("toolPermission_ask");QCOMPARE(backend->store.data["agent"].toMap()["toolPermissionMode"].toString(),QString("ask"));
+    Store saved(directory.path());QCOMPARE(saved.data["agent"].toMap()["toolPermissionMode"].toString(),QString("ask"));
+    click("toolPermission_auto");QCOMPARE(backend->store.data["agent"].toMap()["toolPermissionMode"].toString(),QString("auto"));
+    backend->setToolPermissionMode("invalid");QCOMPARE(backend->store.data["agent"].toMap()["toolPermissionMode"].toString(),QString("auto"));
+  }
+  void appearanceFontShortcutsAndHiddenLayout() {
+    const auto size=window->size();const auto scale=backend->fontScale();const auto family=backend->fontFamily(),spacing=backend->lineSpacing();
+    const auto restore=qScopeGuard([&]{backend->setFontScale(scale);backend->setLineSpacing(spacing);backend->setFontFamily(family);window->resize(size);window->setProperty("page","chat");});
+    window->resize(1480,1100);window->setProperty("page","settings");window->setProperty("settingsTab",5);backend->setFontScale(1);QTest::qWait(200);
+    for(int value:{75,100,125}) {
+      click("fontPreset_"+QString::number(value));QCOMPARE(qRound(backend->fontScale()*100),value);
+      QCOMPARE(find("fontScaleValue")->property("value").toInt(),value);
+      QCOMPARE(find("fontScaleLabel")->property("text").toString(),QString::number(value)+"%");
+    }
+    backend->setFontScale(.3);QCOMPARE(backend->fontScale(),.3);backend->setFontScale(1);QTest::qWait(200);
+    auto prompt=find("promptInput"),about=find("aboutVersion");QVERIFY(prompt && about);QVERIFY(!prompt->isVisible() && !about->isVisible());
+    const auto signal=[](QObject *item){return item->metaObject()->property(item->metaObject()->indexOfProperty("font")).notifySignal();};
+    QSignalSpy promptChanges(prompt,signal(prompt)),aboutChanges(about,signal(about));
+    QElapsedTimer timing;timing.start();
+    for(int value=75;value<=125;++value){backend->setFontScale(value/100.);QCoreApplication::processEvents();}
+    qInfo()<<"51 font-size updates (ms):"<<timing.elapsed()<<"hidden font changes:"<<promptChanges.size()<<aboutChanges.size();
+    QCOMPARE(promptChanges.size(),0);QCOMPARE(aboutChanges.size(),0);
+    window->setProperty("page","chat");QTest::qWait(150);QCOMPARE(prompt->property("font").value<QFont>().pixelSize(),16);
+    backend->newSession();backend->view->messages={QVariantMap{{"role","assistant"},{"text","Paragraph one.\n\n- List item\n\n```python\nprint('code')\n```"}}};emit backend->chatChanged();
+    auto visibleProse=[&]() -> QQuickItem* {QList<QQuickItem*> pending{window->contentItem()};while(!pending.isEmpty()){auto item=pending.takeLast();if(item->objectName()=="selectText_0_0" && item->isVisible() && item->property("text").toString().contains("Paragraph one"))return item;pending.append(item->childItems());}return nullptr;};
+    QTRY_VERIFY_WITH_TIMEOUT(visibleProse(),5000);auto prose=visibleProse();
+    auto document=prose->property("textDocument").value<QQuickTextDocument*>();QVERIFY(document);
+    for(const auto &value:QStringList{"compact","standard","relaxed"}) {
+      backend->setLineSpacing(value);QTest::qWait(50);
+      QCOMPARE(document->textDocument()->begin().blockFormat().lineHeight(),value=="compact"?100.:value=="standard"?120.:150.);
+    }
+    backend->setFontFamily("serif");QTest::qWait(150);QCOMPARE(prose->property("font").value<QFont>().family(),QString("serif"));
+    QCOMPARE(find("promptInput")->property("font").value<QFont>().family(),QString("serif"));
+    QTest::qWait(300);Store saved(directory.path());QCOMPARE(saved.data["fontFamily"].toString(),QString("serif"));QCOMPARE(saved.data["ui"].toMap()["lineSpacing"].toString(),QString("relaxed"));
+    backend->setFontFamily("系统默认");QVERIFY(backend->fontFamily().isEmpty());
+    window->setProperty("page","settings");window->setProperty("settingsTab",5);QTest::qWait(150);
+    QDir().mkpath(root+"/build/screenshots");QVERIFY(window->grabWindow().save(root+"/build/screenshots/native-font-settings.png"));
+  }
   void appearanceAndRequestDetails() {
     configureAPI();
     window->setProperty("page", "settings");
@@ -2778,13 +2946,18 @@ Item {
     QCOMPARE(find("addProviderButton")->property("text").toString(),
              QString("Add provider"));
     QCOMPARE(find("promptInput")->property("font").value<QFont>().pixelSize(),
-             26);
+             13);
     QCOMPARE(find("sendGlyph")->width(), 34.0);
     QCOMPARE(find("attachFilesButton")->width(), 62.0);
+    window->setProperty("page","chat");QTest::qWait(150);
+    QCOMPARE(find("promptInput")->property("font").value<QFont>().pixelSize(),26);
+    window->setProperty("page","settings");QTest::qWait(100);
     backend->setFontScale(.5);
     QTest::qWait(200);
     QCOMPARE(find("promptInput")->property("font").value<QFont>().pixelSize(),
-             7);
+             13);
+    window->setProperty("page","chat");QTest::qWait(150);
+    QCOMPARE(find("promptInput")->property("font").value<QFont>().pixelSize(),7);
     backend->setFontScale(1);
     backend->setLanguage("zh");
     window->setProperty("page", "chat");
@@ -3938,7 +4111,7 @@ def create_provider(context): return Interactive(context)
     QVERIFY(manager);
     QSet<QString> builtins;
     for(const auto &row:manager->rows())builtins.insert(row.toMap()["id"].toString());
-    QCOMPARE(builtins,QSet<QString>({"file-tree","git-viewer","terminal","desktop-pet","global-agents","pi-manager","change-review"}));
+    QCOMPARE(builtins,QSet<QString>({"file-tree","git-viewer","terminal","desktop-pet","global-agents","pi-manager","change-review","skill-manager"}));
     QTemporaryDir workspace;QVERIFY(workspace.isValid());
     QFile file(workspace.filePath("hello.md"));QVERIFY(file.open(QIODevice::WriteOnly));file.write("# Plugin fixture\n");file.close();
 #ifndef Q_OS_WIN
@@ -4481,6 +4654,28 @@ def create_provider(context): return Interactive(context)
     QDir().mkpath(root+"/build/screenshots");QVERIFY(petWindow->grabWindow().save(root+"/build/screenshots/whale-desktop-pet.png"));
     QVERIFY(pet->ui("hide",{})["ok"].toBool());
     QTRY_VERIFY(!window->findChild<QObject*>("desktopPetWindowLoader")->property("item").value<QObject*>());
+  }
+  void nativePetReminderWidgetAndBubble() {
+    auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);
+    const auto original=pet->config();QString id;
+    const auto cleanup=qScopeGuard([&]{if(!id.isEmpty())pet->ui("deleteItem",{{"id",id}});pet->ui("configure",original);window->setProperty("page","chat");window->requestActivate();});
+    QVERIFY(pet->ui("configure",{{"visible",true},{"paused",true},{"reminderNotificationsEnabled",true}})["ok"].toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(window->findChild<QQuickWindow*>("desktopPetWindow"),5000);
+    const auto result=pet->ui("createItem",{{"title","离线提醒验收"},{"notes","无需模型和网络"},{"dueAt",QDateTime::currentDateTimeUtc().addSecs(-1).toString(Qt::ISODate)}});
+    QVERIFY2(result["ok"].toBool(),qPrintable(result["error"].toString()));id=result["result"].toMap()["item"].toMap()["id"].toString();
+    QTRY_COMPARE_WITH_TIMEOUT(pet->reminderCard().size(),1,3000);
+    auto petWindow=window->findChild<QQuickWindow*>("desktopPetWindow");
+    QTRY_VERIFY_WITH_TIMEOUT(petWindow->findChild<QQuickItem*>("desktopPetReminderCard")->isVisible(),3000);
+    QCOMPARE(petWindow->findChild<QObject*>("desktopPetReminderCardTitle")->property("text").toString(),QString("离线提醒验收"));
+    const auto revision=pet->reminderCard().first().toMap()["revision"].toInt();
+    pet->completeReminder(id,revision-1);QCOMPARE(pet->reminderCard().size(),1); // Stale UI cannot complete a revised item.
+    pet->openReminders(id,false);
+    QTRY_VERIFY_WITH_TIMEOUT(find("desktopPetReminderTitle"),5000);
+    QTRY_COMPARE_WITH_TIMEOUT(find("desktopPetReminderTitle")->property("text").toString(),QString("离线提醒验收"),5000);
+    QTRY_VERIFY_WITH_TIMEOUT(find("desktopPetReminderList"),5000);
+    QDir().mkpath(root+"/build/screenshots");QVERIFY(window->grabWindow().save(root+"/build/screenshots/native-pet-reminders.png"));
+    pet->completeReminder(id,revision);QTRY_VERIFY(pet->reminderCard().isEmpty());
+    QCOMPARE(pet->ui("listItems",{{"status","completed"}})["result"].toMap()["items"].toList().size(),1);
   }
   void desktopPetImportsDataWithoutCode() {
     auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);

@@ -9,7 +9,7 @@ Item {
     property int activeQuestion: -1
     property real openY: height / 2
     readonly property bool expanded: panel.visible
-    readonly property int rowHeight: Math.max(30, Theme.font(12) + 16)
+    readonly property int rowHeight: Math.max(30, Theme.font(12, visible) + 16)
     width: 24
     visible: enabled && view && view.visible && questions.length > 0
 
@@ -132,16 +132,16 @@ Item {
                 contentItem: Row {
                     id: questionLine
                     spacing: 9
-                    Text {
+                    Text { font.family: Theme.fontFamily;
                         id: ordinal
-                        width: Math.max(18, String(root.questions.length).length * Theme.font(7)); anchors.verticalCenter: parent.verticalCenter
-                        text: option.index + 1; color: Theme.muted; font.pixelSize: Theme.font(10)
+                        width: Math.max(18, String(root.questions.length).length * Theme.font(7, visible)); anchors.verticalCenter: parent.verticalCenter
+                        text: option.index + 1; color: Theme.muted; font.pixelSize: Theme.font(10, visible)
                         horizontalAlignment: Text.AlignRight
                     }
-                    Text {
+                    Text { font.family: Theme.fontFamily;
                         width: Math.max(0, questionLine.width - ordinal.width - questionLine.spacing); anchors.verticalCenter: parent.verticalCenter
                         text: option.modelData.title; textFormat: Text.PlainText
-                        font.pixelSize: Theme.font(12); color: Theme.ink; elide: Text.ElideRight
+                        font.pixelSize: Theme.font(12, visible); color: Theme.ink; elide: Text.ElideRight
                     }
                 }
                 HoverHandler { cursorShape: Qt.PointingHandCursor }

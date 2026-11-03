@@ -1,6 +1,21 @@
 #include "backend.hpp"
+#include "pi_capabilities.hpp"
 #include "global_agents.hpp"
 
+QVariantMap Backend::sessionTurnStatus(std::shared_ptr<Session> s) const {
+  if(s->busy() && (s->action=="prompt" || s->action=="widget-notify") && s->promptStarted){
+    const double elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-*s->promptStarted).count();
+    return {{"state",s->cancelled?"stopping":"running"},{"elapsed",elapsed},{"startedAt",QDateTime::currentMSecsSinceEpoch()-elapsed*1000}};
+  }
+  const auto saved=metadata(s->id)["lastTurn"].toMap();if(!saved.isEmpty())return saved;
+  for(int i=s->messages.size()-1;i>=0;--i){auto m=s->messages[i].toMap();if(m["customType"]=="umeko-compaction")continue;if(m["role"]=="user")break;if(m["role"]=="assistant"){const auto reason=m["stopReason"].toString();return {{"state",m["error"].toBool()||reason=="error"?"failed":reason=="aborted"||reason=="length"?"stopped":""}};}}
+  return {};
+}
+void Backend::finishTurn(std::shared_ptr<Session> s,bool failed) {
+  if(!s->promptStarted || (s->action!="prompt" && s->action!="widget-notify"))return;
+  const double elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-*s->promptStarted).count();
+  if(!s->id.isEmpty())setMetadata(s->id,{{"lastTurn",QVariantMap{{"state",s->cancelled?"stopped":failed||s->failed?"failed":"finished"},{"elapsed",elapsed}}}});
+}
 std::shared_ptr<Session> Backend::fresh(QString workspace) {
   auto s = std::make_shared<Session>();
   s->workspace = workspace;
@@ -44,7 +59,12 @@ void Backend::markRead(std::shared_ptr<Session> s) {
 }
 void Backend::activate(std::shared_ptr<Session> s) {
   streaming.stop();
+  if(view && view!=s && !view->id.isEmpty())setMetadata(view->id,{{"viewport",QVariantMap{{"index",view->scrollIndex},{"offset",view->scrollY},{"follow",view->followTail}}}});
   view = s;
+  chat.switchContext(s->key);
+  const int anchor=s->followTail ? qMax(0,int(s->displaySnapshot.size())-4) : qMax(0,s->scrollIndex);
+  if(!s->displaySnapshot.isEmpty()){chat.seed(s->messages,s->displaySnapshot,anchor);s->displaySnapshot.clear();}
+  else chat.requestRange(qMax(0,s->scrollIndex),qMax(0,s->scrollIndex)+4);
   lru.removeAll(s->key);
   lru << s->key;
   if (!s->workspace.isEmpty()) {
@@ -161,7 +181,7 @@ void Backend::sessionInfo(std::shared_ptr<Session> s, QVariantMap info) {
   if (!s->file.isEmpty() || s->action == "prompt")
     indexSession(s);
   if (!s->id.isEmpty())
-    setMetadata(s->id, {{"reasoningEffort", s->reasoningEffort}, {"extensionModes",s->extensionModes}, {"blockedTools",s->blockedTools}});
+    setMetadata(s->id, {{"reasoningEffort", s->reasoningEffort}, {"extensionModes",s->extensionModes}, {"blockedTools",s->blockedTools},{"piCapabilities",s->piCapabilities},{"skillModes",s->skillModes}});
 }
 void Backend::saveSessions() { store.saveSessions(sessionIndex); }
 void Backend::newSession() {
@@ -172,34 +192,13 @@ void Backend::newSession() {
 void Backend::openSession(QString id) {
   auto s = findSession(id);
   if (!s) {
-    QVariantMap saved;
-    for (auto v : sessionIndex)
-      if (v.toMap()["id"] == id)
-        saved = v.toMap();
-    if (saved.isEmpty())
-      return;
-    s = fresh(saved["workspace"].toString());
-    s->id = id;
-    s->extensionModes = metadata(id)["extensionModes"].toMap();
-    s->blockedTools = metadata(id)["blockedTools"].toStringList();
-    auto effort =
-        metadata(id).value("reasoningEffort", s->reasoningEffort).toString();
-    s->reasoningEffort =
-        QStringList{"off", "low", "high", "max"}.contains(effort) ? effort
-                                                                  : "off";
-    s->title = saved["title"].toString();
-    s->file = saved["file"].toString();
-    s->provider = saved["provider"].toString();
-    s->model = saved["model"].toString();
-    if (!s->file.isEmpty()) {
-      auto history = U::preview(s->file);
-      s->messages = history.first;
-      s->tree = history.second;
-    }
+    static int next=1000000;const int request=++next;
+    auto connection=std::make_shared<QMetaObject::Connection>();
+    *connection=connect(previewLoader,&SessionPreview::ready,this,[this,request,connection](int token,bool ok){if(token!=request)return;disconnect(*connection);if(ok)previewLoader->activate(token);});
+    previewLoader->prepare(id,request);return;
   }
   activate(s);
-  if (!s->model.isEmpty() && !s->process && !s->busy())
-    command(s, "inspect");
+  // History browsing is read-only; start Pi only for an explicit task or inventory request.
 }
 void Backend::loadNativeIndex() {
   auto directory = store.directory + "/pi/sessions";
@@ -262,7 +261,7 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
     retire(s);
   s->action = action;
   s->promptStarted.reset();
-  if (action == "prompt") s->promptStarted = std::chrono::steady_clock::now();
+  if (action == "prompt" || action=="widget-notify") s->promptStarted = std::chrono::steady_clock::now();
   s->failed = false;
   s->cancelled = false;
   s->phase =
@@ -281,7 +280,7 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   }
   auto bridge = release + "/bridge.mjs";
   if (!QFileInfo(bridge).isFile() || U::node().isEmpty()) {
-    s->phase = "idle";
+    finishTurn(s,true);s->phase = "idle";
     s->promptStarted.reset();
     emit toast("Pi 内核或 Node.js 不可用，请检查安装");
     return false;
@@ -293,17 +292,23 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   values["workspace"] = s->workspace;
   values["defaultCwd"] = fallback;
   values["agentDir"] = agentDir();
-  values["webview"] = webviewConfiguration();
+  auto web=webviewConfiguration();web["autoOpen"]=store.data["desktop"].toMap().value("autoOpenSubmissions",true);web["display"]=store.data["desktop"].toMap().value("webDisplay","embedded");
+  values["webview"] = web;
   values["sessionDir"] = store.directory + "/pi/sessions";
   values["docsDir"] = store.directory + "/agent-docs";
   values["sessionFile"] = s->file;
   values["models"] = modelCatalog();
   values["agent"] = store.data["agent"];
+  values["permissionMode"]=store.data["agent"].toMap().value("toolPermissionMode","auto");
+  values["language"]=language();values["dataDir"]=store.directory;
   QVariantMap extensions;
   for(auto it=s->extensionModes.cbegin();it!=s->extensionModes.cend();++it)
     if(it.value()=="session" || it.value()=="disabled") extensions[it.key()]=it.value()=="session";
   values["sessionExtensions"] = extensions;
   values["blockedTools"] = s->blockedTools;
+  values["piCapabilities"] = s->piCapabilities;
+  values["sessionSkills"] = s->skillModes;
+  values["skillsEnabled"] = desktopExtensions->skillsEnabled(s->key);
   QVariantMap envValues;
   for (auto path : {agentDir() + "/mcp.json", s->workspace + "/.pi/mcp.json"}) {
     QFile f(path);
@@ -527,7 +532,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     s->ready = true;
     s->phase =
         s->action == "prompt" || s->action == "widget-notify" || s->action == "compact" ? "running" : "working";
-    s->status = s->phase == "running" ? "正在生成" : "正在处理";
+    s->status = s->action=="compact"?"正在压缩上下文":s->phase == "running" ? "正在生成" : "正在处理";
     sessionInfo(s, payload["session"].toMap());
   } else if (type == "session")
     sessionInfo(s, payload["session"].toMap());
@@ -543,7 +548,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     }
   } else if (type == "delta" || type == "thinking_delta") {
     if (s->messages.isEmpty() ||
-        s->messages.last().toMap()["role"] != "assistant")
+        (s->messages.last().toMap()["role"] != "assistant" || s->messages.last().toMap()["customType"]=="umeko-compaction"))
       s->messages << QVariantMap{
           {"role", "assistant"}, {"text", ""}, {"error", false}};
     auto last = s->messages.last().toMap();
@@ -574,7 +579,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
       }
   } else if (type == "assistant_start") {
     if (payload["retry"].toBool() && !s->messages.isEmpty() &&
-        s->messages.last().toMap()["role"] == "assistant" &&
+        s->messages.last().toMap()["role"] == "assistant" && s->messages.last().toMap()["customType"]!="umeko-compaction" &&
         s->messages.last().toMap()["tools"].toList().isEmpty()) {
       s->messages.last() =
           QVariantMap{{"role", "assistant"}, {"text", ""}, {"error", false}};
@@ -582,7 +587,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     }
     auto last =
         s->messages.isEmpty() ? QVariantMap{} : s->messages.last().toMap();
-    if (last["role"] != "assistant" || !last["text"].toString().isEmpty() ||
+    if (last["role"] != "assistant" || last["customType"]=="umeko-compaction" || !last["text"].toString().isEmpty() ||
         !last["thinking"].toString().isEmpty() ||
         !last["tools"].toList().isEmpty()) {
       s->messages << QVariantMap{
@@ -655,7 +660,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     }
     if (row < 0) {
       if (s->messages.isEmpty() ||
-          s->messages.last().toMap()["role"] != "assistant")
+          (s->messages.last().toMap()["role"] != "assistant" || s->messages.last().toMap()["customType"]=="umeko-compaction"))
         s->messages << QVariantMap{
             {"role", "assistant"}, {"text", ""}, {"error", false}};
       row = s->messages.size() - 1;
@@ -674,9 +679,9 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
         for (const auto &value : payload["media"].toList()) {
           const auto item = value.toMap();
           const auto url = normalizeWebUrl(item["url"].toString());
-          if (webviewAvailable() && item["kind"] == "web" && item["presentation"] == "webview" && !url.isEmpty()) emit webRequested(url, item["title"].toString());
+          if (item["kind"] == "web" && !url.isEmpty()) openWebPreview(url, item["title"].toString());
           const auto kind = U::documentKind(item["path"].toString(), item["kind"].toString());
-          if (!kind.isEmpty() && QFileInfo(item["path"].toString()).isAbsolute()) emit documentRequested(item["path"].toString(), item["title"].toString(), kind);
+          if (!kind.isEmpty() && QFileInfo(item["path"].toString()).isAbsolute() && !openExternalHtml(item["path"].toString())) emit documentRequested(item["path"].toString(), item["title"].toString(), kind);
         }
     }
     if (payload.contains("result"))
@@ -706,9 +711,15 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
                 {"result", umekoRequest({{"operation", payload["operation"]}, {"arguments", payload.value("arguments", QVariantMap{})}}, s->key)}});
     return;
   } else if (type == "resources") {
-    s->resources = payload["resources"].toMap();
+    s->resources = PiCapabilities::mergeResources(s->resources, payload["resources"].toMap(), s->piCapabilities);
     if (visible)
       emit changed();
+  } else if(type=="compaction_event") {
+    auto row=U::compactionView({{"type","custom"},{"customType","umeko-compaction"},{"data",payload},{"id",payload["entryId"]},{"timestamp",payload["timestamp"]}});
+    if(row.isEmpty())return;
+    int found=-1;for(int i=0;i<s->messages.size();++i)if(s->messages[i].toMap()["compaction"].toMap()["eventId"]==payload["eventId"]){found=i;break;}
+    if(found<0)s->messages<<row;else{auto previous=s->messages[found].toMap();previous["compaction"]=row["compaction"];s->messages[found]=previous;}
+    s->compactionRunning=payload["state"]=="running";s->compactionEvent=s->compactionRunning?payload["eventId"].toString():QString();s->status=s->compactionRunning?"正在压缩上下文":"";transcript=true;
   } else if (type == "network_retry") {
     s->networkRetry = payload["active"].toBool() ? payload : QVariantMap{};
     if (visible)
@@ -722,7 +733,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
   } else if (type == "error") {
     s->failed = true;
     if (!s->messages.isEmpty() &&
-        s->messages.last().toMap()["text"].toString().isEmpty()) {
+        s->messages.last().toMap()["text"].toString().isEmpty() && s->messages.last().toMap()["customType"]!="umeko-compaction") {
       auto last = s->messages.last().toMap();
       last["text"] = payload["message"];
       last["error"] = true;
@@ -735,9 +746,10 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     s->searchLeaf = payload["leafId"].toString();
     sessionInfo(s, payload["session"].toMap());
     s->messages = payload["messages"].toList();
+    for(auto &row:s->messages)row=U::compactionStatus(row.toMap(),s->compactionRunning?s->compactionEvent:QString());
     children->sync(s);
     s->tree = payload["tree"].toList();
-    s->resources = payload["resources"].toMap();
+    s->resources = PiCapabilities::mergeResources(s->resources, payload["resources"].toMap(), s->piCapabilities);
     s->usage = payload["contextUsage"].toMap();
     if (s->globalAgent.isEmpty()) for (auto v : payload["sessions"].toList()) {
       auto ns = v.toMap();
@@ -769,12 +781,15 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     }
     transcript = true;
   } else if (type == "done" || type == "exit") {
+    for(auto &row:s->messages)row=U::compactionStatus(row.toMap());
+    s->compactionRunning=false;s->compactionEvent.clear();transcript=true;
     s->networkRetry.clear();
     if (visible)
       emit retryChanged();
     bool was = s->busy();
     const bool longRunning = s->promptStarted &&
         std::chrono::steady_clock::now() - *s->promptStarted > std::chrono::minutes(3);
+    finishTurn(s,type=="exit");
     s->promptStarted.reset();
     if (!s->queue.isEmpty()) {
       QStringList texts;
@@ -793,7 +808,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
       if (was) {
         s->failed = true;
         if (!s->messages.isEmpty() &&
-            s->messages.last().toMap()["text"].toString().isEmpty()) {
+            s->messages.last().toMap()["text"].toString().isEmpty() && s->messages.last().toMap()["customType"]!="umeko-compaction") {
           auto m = s->messages.last().toMap();
           m["error"] = true;
           m["text"] =
@@ -843,8 +858,9 @@ void Backend::stop() {
     emit retryChanged();
     writePi(view, {{"type", "abort"}});
     view->approval.clear();
-    emit approvalChanged();
+    emit approvalChanged();emit chatChanged();emit sidebarChanged();
   } else if (view->busy()) {
+    view->cancelled=true;finishTurn(view);view->promptStarted.reset();
     retire(view);
     view->phase = "idle";
     emit chatChanged();

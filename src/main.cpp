@@ -3,6 +3,7 @@
 #include "backend.hpp"
 #include "webview_support.hpp"
 #include "syntaxhighlighter.hpp"
+#include "text_spacing.hpp"
 #include "update.hpp"
 #include "tray.hpp"
 #include "notifications.hpp"
@@ -88,6 +89,7 @@ int main(int argc, char **argv) {
   }
   qmlRegisterType<TerminalView>("Umeko.Terminal",1,0,"TerminalView");
   qmlRegisterType<SyntaxHighlighter>("Umeko.Text", 1, 0, "SyntaxHighlighter");
+  qmlRegisterType<TextSpacing>("Umeko.Text",1,0,"TextSpacing");
   Backend backend(root, parser.value("data-dir"));
   QObject::connect(qobject_cast<DesktopPlugins*>(backend.desktopPlugins()), &DesktopPlugins::openWithRequested,
                    &app, [&backend](const QString &path) {
@@ -145,6 +147,11 @@ int main(int argc, char **argv) {
   if (!parser.isSet("smoke"))
     qobject_cast<AppAbout *>(backend.appAbout())->startAutomaticChecks();
   if (parser.isSet("smoke")) {
+    // Exercise the packaged QRC, which file-based QML tests cannot validate.
+    for(const auto &path:{QString("app/qml/skill.svg"),QString("app/icons/pi-widget.svg"),QString("app/icons/widget-manager.svg"),QString("app/icons/yanami-desktop-settings-v2.png")}) {
+      if(QIcon(":/qt/qml/Umeko/App/"+path).pixmap(24,24).isNull()){diagnostic("UI_ART_MISSING:"+path);backend.close();return 1;}
+    }
+    diagnostic("UI_ART_READY:4");
 #ifdef Q_OS_LINUX
     QPluginLoader ime(QCoreApplication::applicationDirPath() + "/plugins/platforminputcontexts/libfcitx5platforminputcontextplugin.so");
     diagnostic("IME_PLUGIN_READY:" + QString::number(ime.load()));
@@ -168,7 +175,7 @@ int main(int argc, char **argv) {
 
   }
   if (parser.isSet("snapshot"))
-    QTimer::singleShot(qEnvironmentVariableIsSet("UMEKO_WEB_PREVIEW_URL") ? 4000 : 1200, &app,
+    QTimer::singleShot(qBound(1200,qEnvironmentVariableIntValue("UMEKO_SNAPSHOT_DELAY_MS") ? qEnvironmentVariableIntValue("UMEKO_SNAPSHOT_DELAY_MS") : qEnvironmentVariableIsSet("UMEKO_WEB_PREVIEW_URL") ? 4000 : 1200,30000), &app,
                        [window, path = parser.value("snapshot"), diagnostic] {
                          if (!window->grabWindow().save(path))
                            diagnostic("SNAPSHOT_FAILED");

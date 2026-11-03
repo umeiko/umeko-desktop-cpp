@@ -67,6 +67,7 @@ void SessionPreview::start() {
       probe.close();
       const auto history = U::preview(file);
       result["messages"] = history.first;
+      result["displaySnapshot"] = ChatModel::project(history.first);
       result["tree"] = history.second;
     }
     return result;
@@ -88,11 +89,16 @@ bool SessionPreview::activate(int token, bool readOnly) {
     s->id = id;
     s->extensionModes = b->metadata(id)["extensionModes"].toMap();
     s->blockedTools = b->metadata(id)["blockedTools"].toStringList();
+    s->piCapabilities = b->metadata(id)["piCapabilities"].toMap();
+    s->skillModes = b->metadata(id)["skillModes"].toMap();
     s->file = saved["file"].toString();
     s->title = saved["title"].toString();
     s->model = saved["model"].toString();
     s->provider = saved["provider"].toString();
     s->messages = prepared["messages"].toList();
+    s->displaySnapshot = prepared["displaySnapshot"].toList();
+    const auto viewport=b->metadata(id)["viewport"].toMap();
+    s->scrollIndex=viewport.value("index",-1).toInt();s->scrollY=viewport.value("offset",0).toDouble();s->followTail=viewport.value("follow",true).toBool();
     s->tree = prepared["tree"].toList();
   }
   cancel();

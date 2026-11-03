@@ -152,38 +152,37 @@ test("detail documents are on-demand, bounded and do not request remote images",
 });
 
 
-test("required desktop abilities ignore old disable filters and reject configuration changes",async()=>{
-  const {prepareNativeSettings,sessionResourceSettings,requiredBuiltins}=await import("../runtime/resources.mjs");
+test("all builtin extensions respect native and session switches across reloads",async()=>{
+  const {prepareNativeSettings,sessionResourceSettings}=await import("../runtime/resources.mjs");
   const {readFileSync}=await import("node:fs");
-  const root=mkdtempSync(join(tmpdir(),"umeko-required-"));
+  const root=mkdtempSync(join(tmpdir(),"umeko-configurable-builtins-"));
   try {
     const agent=join(root,"agent"),cwd=join(root,"project");
     mkdirSync(agent,{recursive:true});mkdirSync(join(cwd,".pi"),{recursive:true});
     const original={extensions:["!builtin:*","-builtin:chatbox"],theme:"dark"};
     writeFileSync(join(agent,"settings.json"),JSON.stringify(original));
-    writeFileSync(join(cwd,".pi/settings.json"),JSON.stringify({extensions:["!builtin:*","-builtin:chatbox"]}));
+    writeFileSync(join(cwd,".pi/settings.json"),JSON.stringify({extensions:["!builtin:*"]}));
     const input={cwd,agentDir:agent,agent:{}};
     const native=await prepareNativeSettings(Pi,input);
-    const settings=await sessionResourceSettings(Pi,{...input,sessionExtensions:Object.fromEntries([...requiredBuiltins].map(path=>[path,false]))},native);
+    const settings=await sessionResourceSettings(Pi,{...input,sessionExtensions:Object.fromEntries(builtins.map(name=>["builtin:"+name,false]))},native);
     const rows=async()=>(await new Pi.DefaultPackageManager({cwd,agentDir:agent,settingsManager:settings,builtinExtensions:builtins}).resolve(async()=>"skip")).extensions;
     for(let pass=0;pass<2;pass++) {
       const result=await rows();
-      for(const path of requiredBuiltins) assert.equal(result.find(row=>row.path===path).enabled,true,path);
-      assert.equal(result.find(row=>row.path==='builtin:mcp').enabled,false);
-      assert.equal(result.find(row=>row.path==='builtin:subagents').enabled,false);
+      for(const name of builtins) assert.equal(result.find(row=>row.path==="builtin:"+name).enabled,false,name);
       await settings.reload();
     }
-    // Ordinary native setters retain persistence through the policy view.
     settings.setTheme('light');await settings.flush();
-    assert.equal(JSON.parse(readFileSync(join(agent,'settings.json'),'utf8')).theme,'light');
+    assert.equal(settings.getSettings().theme,'light');
+    assert.equal(JSON.parse(readFileSync(join(agent,'settings.json'),'utf8')).theme,'dark','Session settings must not write shared configuration');
     assert.deepEqual(JSON.parse(readFileSync(join(agent,'settings.json'),'utf8')).extensions,original.extensions);
+    writeFileSync(join(agent,"settings.json"),'{}');writeFileSync(join(cwd,".pi/settings.json"),'{}');
     const scan=(await manageResources(Pi,input)).extensions;
-    for(const path of requiredBuiltins) {
-      const row=scan.find(row=>row.path===path);assert.equal(row.info.required,true);assert.equal(row.enabled,true);
-      await assert.rejects(manageResources(Pi,{...input,action:'toggle',id:row.id,enabled:false}),/基础能力固定启用/);
-      await assert.rejects(manageResources(Pi,{...input,action:'enable-global',id:row.id}),/基础能力固定启用/);
+    for(const name of builtins) {
+      const row=scan.find(row=>row.path==='builtin:'+name);assert.equal(row.info.required,false);assert.equal(row.enabled,true);
+      const disabled=(await manageResources(Pi,{...input,action:'toggle',id:row.id,enabled:false})).extensions;
+      assert.equal(disabled.find(r=>r.path===row.path).enabled,false,name+' did not disable');
+      const enabled=(await manageResources(Pi,{...input,action:'enable-global',id:row.id})).extensions;
+      assert.equal(enabled.find(r=>r.path===row.path).enabled,true,name+' did not enable');
     }
-    assert.equal(scan.find(row=>row.path==='builtin:mcp').info.required,false);
-    assert.equal(scan.find(row=>row.path==='builtin:subagents').info.required,false);
   } finally {rmSync(root,{recursive:true,force:true});}
 });

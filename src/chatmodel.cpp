@@ -1,5 +1,7 @@
 #include "chatmodel.hpp"
 #include "common.hpp"
+#include <QtConcurrent>
+#include <QTextDocument>
 
 QVariantList ChatModel::project(const QVariantList &messages) {
   QVariantList out;
@@ -12,12 +14,13 @@ QVariantList ChatModel::project(const QVariantList &messages) {
       if (!parsed.second.isEmpty())
         m["attachments"] = parsed.second;
     }
-    if (m["role"] == "assistant") {
+    if (m["role"] == "assistant" && m["customType"]!="umeko-compaction") {
       const QRegularExpression marker("\\s*\\[Umeko:([a-f0-9-]{36})\\]");
       const auto match = marker.match(m["text"].toString());
       if (match.hasMatch()) {
         m["diagnosticId"] = match.captured(1);
-        m["text"] = "供应商请求失败，请查看请求详情";
+        const auto summary=QRegularExpression("供应商返回 HTTP \\d+：.*?(?=\\s*\\[Umeko:|$)").match(m["text"].toString());
+        m["text"] = summary.hasMatch()?summary.captured().trimmed():QString("供应商请求失败，请查看请求详情");
       }
       QVariantList activity;
       if (!m["thinking"].toString().isEmpty())
@@ -54,7 +57,7 @@ QVariantList ChatModel::project(const QVariantList &messages) {
     const bool continuing = !out.isEmpty() &&
                             out.last().toMap()["stopReason"] == "length" &&
                             !m["error"].toBool();
-    if (!out.isEmpty() && m["role"] == "assistant" &&
+    if (!out.isEmpty() && m["customType"]!="umeko-compaction" && out.last().toMap()["customType"]!="umeko-compaction" && m["role"] == "assistant" &&
         out.last().toMap()["role"] == "assistant" &&
         (continuing || !out.last().toMap()["tools"].toList().isEmpty() ||
          !m["tools"].toList().isEmpty())) {
@@ -135,14 +138,55 @@ int ChatModel::rowForEntry(const QString &entry) const {
   for(int i=0;i<rows.size();++i)if(rows[i].toMap()["_entries"].toStringList().contains(entry))return i;
   return -1;
 }
+ChatModel::ChatModel(QObject *parent):QAbstractListModel(parent) {}
+QVariant ChatModel::data(const QModelIndex &idx,int role) const {
+  if(!idx.isValid() || idx.row()<0 || idx.row()>=rows.size() || role!=MessageRole)return {};
+  if(!paged())return rows[idx.row()];
+  if(prepared.contains(idx.row()))return prepared[idx.row()];
+  auto row=rows[idx.row()].toMap();
+  return QVariantMap{{"role",row["role"]},{"text",""},{"_entries",row["_entries"]},{"_loading",true},{"_estimatedHeight",heights.value(idx.row(),100)}};
+}
+void ChatModel::recordHeight(int row,double height){if(row>=0 && row<rows.size() && std::isfinite(height) && height>0)heights[row]=height;}
+bool ChatModel::rangeReady(int first,int last) const {
+  if(!paged())return true;
+  for(int i=qMax(0,first);i<=qMin(last,int(rows.size())-1);++i)if(!prepared.contains(i))return false;
+  return true;
+}
+void ChatModel::switchContext(QString token) {
+  if(context==token)return;
+  context=token;++revision;input.clear();pendingInput.clear();prepared.clear();cached.clear();heights.clear();
+  beginResetModel();rows.clear();questionRows.clear();endResetModel();emit questionsChanged();
+}
+void ChatModel::seed(QVariantList messages,QVariantList projected,int anchor) {
+  input=std::move(messages);pendingInput=input;prepared.clear();cached.clear();heights.clear();
+  wantedFirst=qMax(0,anchor-4);wantedLast=qMax(3,anchor+6);
+  publish(std::move(projected));
+}
 void ChatModel::update(const QVariantList &messages) {
-  auto projected = project(messages);
+  if(messages==input && !projecting)return;
+  pendingInput=messages;projectPending();
+}
+void ChatModel::projectPending() {
+  if(projecting)return;
+  if(pendingInput.size()<=256) {input=pendingInput;publish(project(input));return;}
+  projecting=true;const auto snapshot=pendingInput;
+  auto watcher=new QFutureWatcher<QVariantList>(this);
+  connect(watcher,&QFutureWatcher<QVariantList>::finished,this,[this,watcher,snapshot] {
+    auto projected=watcher->result();watcher->deleteLater();projecting=false;
+    if(snapshot==pendingInput){input=snapshot;publish(std::move(projected));}
+    else projectPending();
+  });watcher->setFuture(QtConcurrent::run([snapshot]{return project(snapshot);}));
+}
+void ChatModel::publish(QVariantList projected) {
+  ++revision;
+  if(projected.size()<rows.size())for(auto i:prepared.keys())if(i>=projected.size()){prepared.remove(i);cached.removeAll(i);}
   auto common = qMin(rows.size(), projected.size());
   bool questionsDirty = rows.size() != projected.size();
   for (int i = 0; i < common; ++i)
     if (rows[i] != projected[i]) {
       questionsDirty |= rows[i].toMap()["role"] == "user" ||
                         projected[i].toMap()["role"] == "user";
+      prepared.remove(i);cached.removeAll(i);
       rows[i] = projected[i];
       emit dataChanged(index(i), index(i), {MessageRole});
     }
@@ -181,4 +225,57 @@ void ChatModel::update(const QVariantList &messages) {
       emit questionsChanged();
     }
   }
+  requestRange(wantedFirst,wantedLast);
+  emit windowReady();
+
+}
+
+namespace {
+struct SafeMarkdown:QTextDocument {QVariant loadResource(int,const QUrl &) override{return {};}};
+QVariantList renderedText(QString text) {
+  QVariantList blocks;const QRegularExpression fence("(?:^|\\n)```([^\\n]*)\\n([\\s\\S]*?)(?:\\n```|$)");
+  auto add=[&](QString text,bool code,QString language={}) {
+    for(qsizetype at=0;at<text.size();) {
+      auto end=qMin(at+8192,text.size());const auto boundary=text.lastIndexOf('\n',end-1);if(boundary>at+4096)end=boundary+1;
+      if(end<text.size() && text[end-1].isHighSurrogate())--end;
+      auto part=text.mid(at,end-at);QVariantMap block{{"code",code},{"text",part},{"language",language}};
+      if(!code){SafeMarkdown doc;doc.setMarkdown(part);auto html=doc.toHtml();html.remove(QRegularExpression("<img\\b[^>]*>",QRegularExpression::CaseInsensitiveOption));block["html"]=html;}
+      blocks<<block;at=end;
+    }
+  };
+  qsizetype position=0;auto matches=fence.globalMatch(text);
+  while(matches.hasNext()){const auto m=matches.next();add(text.mid(position,m.capturedStart()-position),false);add(m.captured(2),true,m.captured(1).trimmed());position=m.capturedEnd();}
+  add(text.mid(position),false);return blocks;
+}
+QVariantMap renderMessage(QVariantMap row) {
+  auto activity=row["activity"].toList();
+  for(auto &v:activity){auto step=v.toMap();if(step["kind"]=="text" && !step["error"].toBool())step["_rendered"]=renderedText(step["text"].toString());v=step;}
+  row["activity"]=activity;
+  if(activity.isEmpty() && row["role"]=="assistant" && !row["error"].toBool())row["_rendered"]=renderedText(row["text"].toString());
+  return row;
+}
+}
+void ChatModel::requestRange(int first,int last) {
+  wantedFirst=qMax(0,first-4);wantedLast=qMin(int(rows.size())-1,qMax(first,last)+6);
+  renderRange();
+}
+void ChatModel::renderRange() {
+  if(!paged() || rendering || rows.isEmpty())return;
+  QList<int> indices;QVariantList values;
+  for(int i=wantedFirst;i<=wantedLast && indices.size()<32;++i)if(!prepared.contains(i)){indices<<i;values<<rows[i];}
+  if(indices.isEmpty())return;
+  rendering=true;
+  auto watcher=new QFutureWatcher<QVariantList>(this);
+  connect(watcher,&QFutureWatcher<QVariantList>::finished,this,[this,watcher,indices,values] {
+    const auto result=watcher->result();watcher->deleteLater();rendering=false;
+    {
+      // Streaming may update the tail while historical rows are rendering.
+      // Accept unchanged rows individually so a long reply cannot starve reads.
+      for(int n=0;n<indices.size();++n){int i=indices[n];if(i>=rows.size() || rows[i]!=values[n])continue;prepared[i]=result[n].toMap();cached.removeAll(i);cached<<i;emit dataChanged(index(i),index(i),{MessageRole});}
+      while(cached.size()>256){const int i=cached.takeFirst();prepared.remove(i);if(i<wantedFirst || i>wantedLast)emit dataChanged(index(i),index(i),{MessageRole});}
+      emit windowReady();
+    }
+    renderRange();
+  });
+  watcher->setFuture(QtConcurrent::run([values]{QVariantList result;for(const auto &v:values)result<<renderMessage(v.toMap());return result;}));
 }

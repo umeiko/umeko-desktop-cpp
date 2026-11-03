@@ -35,7 +35,7 @@ Window {
                     const tools = window.registryReady ? [{name:"enabled_tool",visible:true},{name:"disabled_tool",visible:false}] : []
                     bridge.hostResponse(id,{ok:true,result:{contextCurrent:true,busy:false,agentBusy:false,
                         inventoryReady:window.registryReady,inventoryFailed:window.registryFailed,
-                        extensions:[{id:"fixture",name:"Fixture",path:"/fixture",enabled:true,info:{},tools:tools,toolCount:tools.length}],
+                        extensions:[{id:"fixture",name:"Fixture",path:"/fixture",enabled:true,sessionEnabled:true,enabledToolCount:1,info:{},tools:tools,toolCount:tools.length}],
                         total:1,hasMore:false}})
                 }
             })

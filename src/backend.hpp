@@ -6,6 +6,8 @@
 #include "document_preview.hpp"
 #include "subagents.hpp"
 #include "desktop_plugins.hpp"
+#include "skills.hpp"
+#include "slash_commands.hpp"
 #include <QtQuick>
 #include <chrono>
 #include <optional>
@@ -93,6 +95,10 @@ public:
   Q_INVOKABLE void loadExtensionDetails(QString id);
   Q_INVOKABLE void setExtensionMode(QString id, QString mode);
   void setToolVisible(QString name, bool visible);
+  QVariantMap capabilityProfile() const;
+  QVariantList capabilityExtensions() const;
+  QVariantMap capabilityTools(QString id, QString query = {}, int offset = 0, int limit = 100) const;
+  QVariantMap configureCapabilities(QString action, QVariantMap args);
   Q_INVOKABLE void checkExtensionUpdate(QString id);
   Q_INVOKABLE bool saveNpmConfig(QString raw);
   Q_INVOKABLE void testNpmConfig();
@@ -186,15 +192,17 @@ private:
 };
 
 struct Session {
+  bool compactionRunning=false;
+  QString compactionEvent;
   QString searchLeaf;
   QString globalAgent;
   std::optional<std::chrono::steady_clock::time_point> promptStarted;
   QString key = U::uuid(), id, file, workspace, model, provider,
           title = "新会话", draft, phase = "idle", action, status, greeting, petActivity;
-  QVariantList messages, attachments, queue, tree;
+  QVariantList messages, attachments, queue, tree, displaySnapshot;
   QVariantList subagents;
   bool subagentsActive = false;
-  QVariantMap extensionModes;
+  QVariantMap extensionModes, skillModes, piCapabilities;
   QStringList blockedTools;
   QString reasoningEffort = "off";
   QVariantMap resources{
@@ -246,12 +254,17 @@ class Backend : public QObject {
   Q_PROPERTY(QObject *messageModel READ messageModel CONSTANT)
   Q_PROPERTY(QObject *providerPlugins READ providerPlugins CONSTANT)
   Q_PROPERTY(QObject *piManagement READ piManagement CONSTANT)
+  Q_PROPERTY(QObject *slashCommands READ slashCommands CONSTANT)
+  Q_PROPERTY(int messageCount READ messageCount NOTIFY chatChanged)
   Q_PROPERTY(QObject *sessionPreview READ sessionPreview CONSTANT)
   Q_PROPERTY(QObject *chatSearch READ chatSearch CONSTANT)
   Q_PROPERTY(QObject *appAbout READ appAbout CONSTANT)
   Q_PROPERTY(QVariantList commonProviders READ commonProviders CONSTANT)
   Q_PROPERTY(QString language READ language NOTIFY appearanceChanged)
-  Q_PROPERTY(double fontScale READ fontScale NOTIFY appearanceChanged)
+  Q_PROPERTY(double fontScale READ fontScale NOTIFY typographyChanged)
+  Q_PROPERTY(QString fontFamily READ fontFamily NOTIFY typographyChanged)
+  Q_PROPERTY(QStringList availableFonts READ availableFonts CONSTANT)
+  Q_PROPERTY(QString lineSpacing READ lineSpacing NOTIFY typographyChanged)
   Q_PROPERTY(QString userDataDirectory READ userDataDirectory CONSTANT)
   Q_PROPERTY(QVariantList projectRows READ projectRows NOTIFY sidebarChanged)
   Q_PROPERTY(int sidebarWidth READ sidebarWidth NOTIFY layoutChanged)
@@ -260,6 +273,9 @@ class Backend : public QObject {
   Q_PROPERTY(QString greeting READ greeting NOTIFY chatChanged)
   Q_PROPERTY(int portrait READ portrait NOTIFY chatChanged)
   Q_PROPERTY(bool busy READ busy NOTIFY chatChanged)
+  Q_PROPERTY(bool compactionAvailable READ compactionAvailable NOTIFY chatChanged)
+  Q_PROPERTY(bool compacting READ compacting NOTIFY chatChanged)
+  Q_PROPERTY(QVariantMap turnStatus READ turnStatus NOTIFY chatChanged)
   Q_PROPERTY(bool running READ running NOTIFY chatChanged)
   Q_PROPERTY(bool loading READ loading NOTIFY chatChanged)
   Q_PROPERTY(bool kernelBusy READ kernelBusy NOTIFY changed)
@@ -329,6 +345,12 @@ public:
   QObject *messageModel() { return &chat; }
   QObject *providerPlugins() { return providers; }
   QObject *piManagement() { return management; }
+  QObject *slashCommands() { return slash; }
+  int messageCount() const { return view->messages.size(); }
+  Q_INVOKABLE void showRequestDetails(QString id) { if(!requestReport(id).isEmpty())emit requestDetailsRequested(id); }
+  Q_INVOKABLE bool saveDesktopSettings(QString raw);
+  Q_INVOKABLE bool openExternalHtml(QString path);
+  Q_INVOKABLE void openWebPreview(QString url, QString title = {});
   QObject *sessionPreview() { return previewLoader; }
   QObject *chatSearch() { return conversationSearch; }
   QObject *appAbout() { return about; }
@@ -341,6 +363,11 @@ public:
   QString userDataDirectory() const { return store.directory; }
   Q_INVOKABLE void setLanguage(QString language);
   Q_INVOKABLE void setFontScale(double scale);
+  QString fontFamily() const { return store.data["fontFamily"].toString(); }
+  QStringList availableFonts() const;
+  QString lineSpacing() const {return store.data["ui"].toMap().value("lineSpacing","standard").toString();}
+  Q_INVOKABLE void setFontFamily(QString family);
+  Q_INVOKABLE void setLineSpacing(QString spacing);
   Q_INVOKABLE bool setProviderProxy(QString id, QString mode, QString address);
   Q_INVOKABLE bool setProviderCertificate(QString id, QString caFile);
   Q_INVOKABLE bool setProviderNetwork(QString id, QString mode, QString address, QString caFile);
@@ -356,6 +383,9 @@ public:
   QString greeting() const { return view->greeting; }
   int portrait() const { return view->portrait; }
   bool busy() const { return view->busy(); }
+  QVariantMap turnStatus() const {return sessionTurnStatus(view);}
+  QVariantMap sessionTurnStatus(std::shared_ptr<Session> session) const;
+  void finishTurn(std::shared_ptr<Session> session,bool failed=false);
   bool running() const { return view->phase == "running"; }
   bool loading() const {
     return view->phase == "loading" || view->phase == "working";
@@ -431,6 +461,10 @@ public:
   Q_INVOKABLE void steerQueued(QString id);
   Q_INVOKABLE void removeQueued(QString id);
   Q_INVOKABLE void stop();
+  Q_INVOKABLE void compactSession();
+  Q_INVOKABLE void setToolPermissionMode(QString mode);
+  bool compactionAvailable() const {return !view->id.isEmpty() && !view->file.isEmpty() && !view->model.isEmpty() && !kernelBusy();}
+  bool compacting() const {return view->compactionRunning || (view->busy() && view->action=="compact");}
   Q_INVOKABLE void selectModel(QString provider, QString model);
   QVariantList commonProviders() const;
   Q_INVOKABLE bool addCommonProvider(QString preset, QString key, QString alias,
@@ -479,6 +513,7 @@ public:
   void notify();
 signals:
   void appearanceChanged();
+  void typographyChanged();
   void changed();
   void chatChanged();
   void transcriptChanged();
@@ -494,12 +529,17 @@ signals:
   void contextUsageChanged();
   void reasoningChanged();
   void retryChanged();
+  void desktopSettingsChanged();
+  void requestDetailsRequested(QString id);
+  void widgetDocumentRequested(QString path, QString title, QString kind, QString widget);
   void proxyKeysChanged();
   void editorText(QString text);
 
 private:
   friend class Providers;
   QVariantMap characterDefaults, characterOptions, characterConfig, resolvedCharacter;
+  friend class Skills;
+  friend class SlashCommands;
   friend class PiManagement;
   friend class AppAbout;
   friend class SessionPreview;
@@ -515,6 +555,8 @@ private:
   ChatModel chat;
   Providers *providers;
   PiManagement *management;
+  Skills *skills = nullptr;
+  SlashCommands *slash;
   AppAbout *about;
   SessionPreview *previewLoader;
   ConversationSearch *conversationSearch;

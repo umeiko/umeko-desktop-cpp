@@ -5,6 +5,8 @@
 #include <QStringDecoder>
 #include <QTextDocument>
 #include <QtConcurrent>
+#include <QClipboard>
+#include <QGuiApplication>
 
 namespace {
 constexpr qsizetype ReadLimit = 256 * 1024, TextLimit = 48000, LineLimit = 1000,
@@ -13,8 +15,8 @@ struct LocalDocument : QTextDocument {
   QVariant loadResource(int, const QUrl &) override { return {}; }
 };
 } // namespace
-DocumentPreview::DocumentPreview(QObject *parent, Store *settings)
-    : QObject(parent), store(settings) {
+DocumentPreview::DocumentPreview(QObject *parent, Store *settings, QString resourceRoot)
+    : QObject(parent), model(this), root(std::move(resourceRoot)), store(settings) {
   connect(&server, &QTcpServer::newConnection, this, [this] {
     while (server.hasPendingConnections()) {
       auto socket = server.nextPendingConnection();
@@ -41,6 +43,7 @@ void DocumentPreview::setMode(QString type, QString mode) {
   if (current["fileType"] == type) {
     current["mode"] = mode;
     presentation();
+    model.setMode(mode);
     emit changed();
   }
 }
@@ -171,7 +174,8 @@ void DocumentPreview::serve(QTcpSocket *socket) {
   }));
 }
 void DocumentPreview::cancel() {
-  ++generation;
+  epoch->store(++generation);
+  model.load({}, {}, "source");
   pending.clear();
   current.clear();
   staticToken.clear();
@@ -180,8 +184,14 @@ void DocumentPreview::cancel() {
 }
 void DocumentPreview::load(QString path, QString kind) {
   const auto token = ++generation;
+  epoch->store(token);
+  QFileInfo info(path);const auto key=info.canonicalFilePath()+"|"+QString::number(info.size())+"|"+QString::number(info.lastModified().toMSecsSinceEpoch())+"|"+kind;
+  if(auto saved=cache.object(key)) {
+    pending.clear();auto result=*saved;auto rich=result.take("_rendered").toList(),plain=result.take("_source").toList();
+    current=result;presentation();model.load(rich,plain,current["mode"].toString());emit changed();return;
+  }
   pending = {
-      {"token", QVariant::fromValue(token)}, {"path", path}, {"kind", kind}};
+      {"token", QVariant::fromValue(token)}, {"path", path}, {"kind", kind}, {"cacheKey",key}};
   current = {{"path", path}, {"busy", true}};
   emit changed();
   start();
@@ -199,14 +209,51 @@ void DocumentPreview::start() {
             watcher->deleteLater();
             reading = false;
             if (job["token"].toULongLong() == generation) {
+              if(!result.contains("error"))cache.insert(job["cacheKey"].toString(),new QVariantMap(result),qMax(1,int(result["bytes"].toLongLong()/256)));
+              auto rich=result.take("_rendered").toList(), plain=result.take("_source").toList();
               current = result;
               presentation();
+              model.load(rich, plain, current["mode"].toString());
               emit changed();
             }
             start();
           });
-  watcher->setFuture(QtConcurrent::run(
-      [job] { return read(job["path"].toString(), job["kind"].toString()); }));
+  const auto script=root+"/runtime/markdown-preview.mjs", node=U::node();
+  const auto cancel=epoch;
+  watcher->setFuture(QtConcurrent::run([job,script,node,cancel] {
+    auto result=read(job["path"].toString(),job["kind"].toString());
+    if(!result["chunked"].toBool()) return result;
+    const auto text=result["text"].toString();
+    QVariantList source;
+    for(qsizetype start=0;start<text.size();) {
+      auto end=qMin(start+8192,text.size());
+      auto boundary=text.lastIndexOf('\n',end-1);
+      if(boundary>start+4096)end=boundary+1;
+      if(end<text.size() && text[end-1].isHighSurrogate())--end;
+      source<<QVariantMap{{"kind",result["kind"]=="code"?"code":"source"},{"language",result["language"]},{"text",text.mid(start,end-start)}};start=end;
+    }
+    result["_source"]=source;result["_rendered"]=source;
+    if(result["kind"]=="markdown") {
+      QProcess parser;U::hideConsole(&parser);parser.setProcessEnvironment(U::environment());
+      parser.start(node,{script});
+      if(parser.waitForStarted(5000)) {
+        parser.write(text.toUtf8());parser.closeWriteChannel();QElapsedTimer timer;timer.start();
+        QByteArray output,error;
+        while(parser.state()!=QProcess::NotRunning && timer.elapsed()<30000 && cancel->load()==job["token"].toULongLong()) {
+          parser.waitForReadyRead(30);output+=parser.readAllStandardOutput();error+=parser.readAllStandardError();
+          if(output.size()>128*1024*1024)break;
+        }
+        if(parser.state()!=QProcess::NotRunning){parser.kill();parser.waitForFinished(1000);}
+        output+=parser.readAllStandardOutput();
+        if(parser.exitStatus()==QProcess::NormalExit && parser.exitCode()==0) {
+          auto rows=QJsonDocument::fromJson(output).object()["blocks"].toArray().toVariantList();
+          if(!rows.isEmpty() || text.isEmpty())result["_rendered"]=rows;
+        } else result["renderNote"]="文档渲染暂时不可用，已保留完整源码预览";
+      } else result["renderNote"]="文档渲染暂时不可用，已保留完整源码预览";
+    }
+    result["text"]="";result["html"]="";result["simple"]=false;
+    return result;
+  }));
 }
 QVariantMap DocumentPreview::read(QString path, QString kind) {
   QVariantMap out{{"path", path}, {"busy", false}};
@@ -222,7 +269,8 @@ QVariantMap DocumentPreview::read(QString path, QString kind) {
   if (!file.open(QIODevice::ReadOnly))
     return fail("文件暂时无法读取");
   const auto size = file.size();
-  auto bytes = file.read(ReadLimit);
+  const bool full = size <= 16 * 1024 * 1024;
+  auto bytes = file.read(full ? size : ReadLimit);
   if (file.error() != QFileDevice::NoError)
     return fail("文件读取失败");
   bool truncated = size > bytes.size();
@@ -240,6 +288,11 @@ QVariantMap DocumentPreview::read(QString path, QString kind) {
   }
   text.replace("\r\n", "\n");
   text.replace('\r', '\n');
+  if(full && (text.size()>24000 || text.count('\n')>400 || (kind=="markdown" && (text.count('|')>256 || text.count('[')>256)))) {
+    out.insert("kind",kind);out.insert("fileType",QStringList{"html","htm"}.contains(info.suffix().toLower()) ? "html" : kind);
+    out.insert("text",text);out.insert("chunked",true);out.insert("bytes",size);out.insert("truncated",false);
+    out.insert("language",info.suffix().toLower());out.insert("highlight",kind=="code");return out;
+  }
   // Limit both the document layout and each individual block before it reaches
   // QML.
   if (text.size() > TextLimit) {
@@ -311,4 +364,29 @@ QVariantMap DocumentPreview::read(QString path, QString kind) {
   out.insert("truncated", truncated);
   out.insert("simple", simple);
   return out;
+}
+
+int DocumentPreview::anchorIndex(QString anchor) const {
+  if(anchor.startsWith('#'))anchor.remove(0,1);
+  anchor=QUrl::fromPercentEncoding(anchor.toUtf8());
+  for(int i=0;i<model.rows.size();++i)if(model.rows[i].toMap()["anchor"]==anchor)return i;
+  return -1;
+}
+void DocumentPreview::copySelection(QVariantMap range) {
+  auto a=range["anchor"].toMap(),z=range["cursor"].toMap();
+  if(a["row"].toInt()>z["row"].toInt() || (a["row"]==z["row"] && a["offset"].toInt()>z["offset"].toInt()))qSwap(a,z);
+  QStringList parts;
+  for(int i=qMax(0,a["row"].toInt());i<model.rows.size() && i<=z["row"].toInt();++i) {
+    const auto row=model.rows[i].toMap();auto text=row["text"].toString();
+    if(!row["html"].toString().isEmpty()){LocalDocument doc;doc.setHtml(row["html"].toString());text=doc.toPlainText();}
+    int start=i==a["row"].toInt() ? a["offset"].toInt() : 0;
+    int end=i==z["row"].toInt() && z["block"].toInt()!=2147483647 ? z["offset"].toInt() : text.size();
+    parts<<text.mid(qMax(0,start),qMax(0,end-start));
+  }
+  QGuiApplication::clipboard()->setText(parts.join(current["mode"]=="source" ? QString() : QString("\n")));
+}
+
+void DocumentPreview::copyAll() {
+  if(!current["chunked"].toBool()){QGuiApplication::clipboard()->setText(current["text"].toString());return;}
+  QString text;for(const auto &row:model.source)text+=row.toMap()["text"].toString();QGuiApplication::clipboard()->setText(text);
 }

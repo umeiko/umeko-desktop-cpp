@@ -22,6 +22,7 @@ public:
   ~DesktopPlugins() override;
   QVariantList rows() const;
   QVariantList sessionPlugins() const;
+  bool skillsEnabled(QString token) const;
   QVariantMap session() const;
   QVariantMap page() const;
   bool busy() const { return m_busy; }

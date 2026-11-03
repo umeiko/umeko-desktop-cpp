@@ -106,6 +106,13 @@ bool DesktopPlugins::sessionEnabled(QString id) const {
              ? sessions[storageKey].toList().contains(id)
              : entry(id)["builtin"].toBool();
 }
+bool DesktopPlugins::skillsEnabled(QString token) const {
+  if(!enabled("skill-manager"))return false;
+  const auto record=b->records.value(token);if(!record)return false;
+  const auto key=record->id.isEmpty()?"draft:"+record->key:record->id;
+  const auto sessions=settings["sessions"].toMap();
+  return sessions.contains(key)?sessions[key].toList().contains("skill-manager"):entry("skill-manager")["builtin"].toBool();
+}
 QVariantList DesktopPlugins::rows() const {
   QVariantList result;
   for (auto id : entries.keys()) {
@@ -277,6 +284,7 @@ void DesktopPlugins::setEnabled(QString id, bool value) {
   } else if (sessionEnabled(id) &&
              (application(id) || entry(id)["page"].toString().isEmpty()))
     start(id);
+  if(id=="skill-manager")b->invalidate();
   emit changed();
 }
 void DesktopPlugins::setSessionEnabled(QString id, bool value) {
@@ -312,6 +320,7 @@ void DesktopPlugins::setSessionEnabled(QString id, bool value) {
   } else if (enabled(id) && entry(id)["page"].toString().isEmpty())
     start(id);
   emit changed();
+  if(id=="skill-manager")b->invalidate();
 }
 bool DesktopPlugins::openPage(QString id) {
   if (m_closed) return false;

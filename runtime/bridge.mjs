@@ -1,15 +1,20 @@
+import { excludedSessionTools, toolSelection, collectToolCatalog } from "./session-capabilities.mjs";
 // JSONL presentation adapter for the complete, unmodified Pi Coding Agent SDK.
 // Tools, loop, skill expansion, extension hooks and session trees belong to Pi.
 import { installProviderPolicy, setGateway, setMcpNetwork } from "./provider-policy.mjs";
-import { prepareNativeSettings, sessionResourceSettings, builtins, extensionName, SUBAGENT_COMPLETION_HINT } from "./resources.mjs";
+import { prepareNativeSettings, sessionResourceSettings, sessionExtensionPaths, manageResources, builtins, extensionName, SUBAGENT_COMPLETION_HINT } from "./resources.mjs";
+import { sessionSkillOptions, manageSkills } from "./skills.mjs";
 import { chatboxExtension, chatboxItems, CHATBOX_TOOL } from "./chatbox.mjs";
 import { NETWORK_RETRY, retryOmissions } from "./network-retry.mjs";
 import { PI_COMMAND_TOOL, DESKTOP_PI_PROMPT, createPiCommandController } from "./pi-commands.mjs";
 import { UMEKO_TOOL, UMEKO_PROMPT, createUmekoControl, configureUmekoDocs, coordinatorExtension } from "./umeko-control.mjs";
 import { rpcCustom } from "./rpc-ui.mjs";
 import { createSubagentExtension, projectSubagents } from "./subagents.mjs";
-import { createWidgetMessages, createLoopReview } from "./widget-messages.mjs";
 import { createInputQueue } from "./input-queue.mjs";
+import { createRecentImagesExtension } from "./recent-images.mjs";
+import { backgroundJobsExtension } from "./background-jobs.mjs";
+import { createWidgetMessages, createLoopReview } from "./widget-messages.mjs";
+import { createToolPermissionExtension } from "./tool-permissions.mjs";
 import { blockedToolNames, toolInventory } from "./tool-visibility.mjs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createInterface } from "node:readline";
@@ -24,7 +29,7 @@ delete process.env.PI_OFFLINE;
 const bundledBin = fileURLToPath(new URL("./bin/", import.meta.url));
 if (existsSync(bundledBin)) process.env.PATH = bundledBin + delimiter + (process.env.PATH || "");
 for (const key of Object.keys(process.env)) {
-  if (/API_KEY$|ACCESS_TOKEN$|^NODE_(OPTIONS|PATH)$/i.test(key)) delete process.env[key];
+  if (/API_KEY$|ACCESS_TOKEN$|_(AK|SK|SECRET_KEY|SECURITY_TOKEN)$|^NODE_(OPTIONS|PATH)$/i.test(key)) delete process.env[key];
 }
 process.env.NO_PROXY = [process.env.NO_PROXY || process.env.no_proxy || "", "127.0.0.1", "localhost", "::1"].filter(Boolean).join(",");
 process.env.no_proxy = process.env.NO_PROXY;
@@ -35,16 +40,18 @@ const entry = import.meta.resolve("@earendil-works/pi-coding-agent");
 const { AuthStorage } = await import(new URL("./core/auth-storage.js", entry));
 const { loadMcpConfig } = await import(new URL("./extensions/mcp/config.js", entry));
 const { allToolNames, createAllToolDefinitions } = await import(new URL("./core/tools/index.js", entry));
-const nativeTools = [...allToolNames, "codemode", "tool_search", CHATBOX_TOOL, PI_COMMAND_TOOL, UMEKO_TOOL];
+const nativeTools = [...allToolNames, "codemode", "tool_search", CHATBOX_TOOL, PI_COMMAND_TOOL, UMEKO_TOOL, "background_job"];
 const version = JSON.parse(readFileSync(new URL("../package.json", entry), "utf8")).version;
 const emit = (event) => process.stdout.write(JSON.stringify(event) + "\n");
 const umekoControl = createUmekoControl({ emit });
-const loopReview=createLoopReview({emit});
-const widgetMessages=createWidgetMessages({getSession:()=>runtime?.session,emit});
 const subagents = createSubagentExtension({ emit, restoreSession: restoreSubagentSession });
 const textOf = content => typeof content === "string" ? content : (content || []).filter(c => c.type === "text").map(c => c.text).join("\n");
 const thinkingOf = content => Array.isArray(content) ? content.filter(c => c.type === "thinking").map(c => c.thinking || "").join("\n") : "";
+const compactionText = data => `已压缩：${data.before} → ${data.after} tokens`;
 let runtime, config, modelRuntime, selectedModel, executing = false, unsubscribe, closing = false;
+const compactionFailures = new WeakMap();
+const loopReview=createLoopReview({emit});
+const widgetMessages=createWidgetMessages({getSession:()=>runtime?.session,emit});
 let reasoningEffort = "off";
 const effortLevels = new Set(["off", "low", "high", "max"]);
 let mcpEntries = [], mcpStatus = "", capturingMcp = false, pollingResources = false;
@@ -55,6 +62,8 @@ const inputQueue=createInputQueue({getSession:()=>runtime?.session,isRunning:()=
   onReturned:items=>emit({type:"queue_returned",steering:[],followUp:items.map(item=>item.text)}),
   beforeInterrupt:()=>{clearDialogs(); commandCancellation++; piCommands.clear();}});
 const dialogs = new Map();
+let permissionPolicy = { mode: "auto", language: "en" };
+const permissionExtension = createToolPermissionExtension({ getPolicy: () => permissionPolicy });
 const commandOutput = new AsyncLocalStorage();
 const piCommands = createPiCommandController({ Pi, getRuntime: () => runtime, getConfig: () => config,
   reload: reloadSession, notify: message => emit({ type: "notice", message }),
@@ -69,10 +78,13 @@ const piCommands = createPiCommandController({ Pi, getRuntime: () => runtime, ge
 
 function ask(method, title, detail = "", options = []) {
   const id = crypto.randomUUID();
-  emit({ type: "ui_request", id, method, title, detail, options });
-  return new Promise(resolve => dialogs.set(id, resolve));
+  return new Promise(resolve => {
+    const event = { type: "ui_request", id, method, title, detail, options };
+    dialogs.set(id, { resolve, event });
+    if (dialogs.size === 1) emit(event);
+  });
 }
-function clearDialogs() { for (const done of dialogs.values()) done(undefined); dialogs.clear(); }
+function clearDialogs() { for (const dialog of dialogs.values()) dialog.resolve(undefined); dialogs.clear(); }
 function canonicalPath(path) {
   // Match Python's Path.resolve(), including Windows 8.3 names and missing leaves.
   try { return realpathSync.native(path); } catch {
@@ -95,11 +107,41 @@ const ui = {
   getEditorText: () => "", addAutocompleteProvider: () => () => {},
   custom: rpcCustom,
 };
+// The existing subagent SDK facade shares this host across ESM/Jiti modules.
+// No desktop operation or model-callable tool exposes this policy setter.
+globalThis[Symbol.for("umeko:tool-permission-host")] = { getPolicy: () => permissionPolicy, ui };
 
-globalThis[Symbol.for("umeko:tool-visibility-host")] = { getBlockedTools: () => blockedToolNames(config?.blockedTools) };
+globalThis[Symbol.for("umeko:tool-visibility-host")] = { getBlockedTools: () => [...new Set([...blockedToolNames(config?.blockedTools),...excludedSessionTools(config?.piCapabilities)])] };
+globalThis[Symbol.for("umeko:skill-policy-host")] = { enabled: () => config?.skillsEnabled !== false };
 
 async function bindSession(session) {
   unsubscribe?.();
+  let activeCompaction;
+  const publishCompaction = data => {
+    const entryId = session.sessionManager.appendCustomEntry("umeko-compaction", data);
+    const entry = session.sessionManager.getEntry(entryId);
+    emit({ type: "compaction_event", entryId, timestamp: entry.timestamp, ...data });
+  };
+  const startCompaction = reason => {
+    activeCompaction = { version: 2, eventId: crypto.randomUUID(), state: "running",
+      mode: reason === "manual" ? "manual" : "auto", before: session.getContextUsage()?.tokens ?? null,
+      after: null, afterEstimated: true, summary: "", error: "" };
+    publishCompaction(activeCompaction);
+  };
+  const finishCompaction = event => {
+    // Pi may report exhausted overflow recovery without a fresh start event.
+    if (!activeCompaction) startCompaction(event.reason);
+    const success = !!event.result && !event.aborted;
+    publishCompaction({ ...activeCompaction, state: success ? "success" : "failure",
+      before: event.result?.tokensBefore ?? activeCompaction.before,
+      after: event.result?.estimatedTokensAfter ?? null,
+      summary: success ? event.result.summary || "" : "",
+      error: success ? "" : event.errorMessage || (event.aborted ? "Compaction cancelled" : "Compaction failed") });
+    activeCompaction = undefined;
+  };
+  compactionFailures.set(session, error => {
+    if (activeCompaction) finishCompaction({ reason: activeCompaction.mode, errorMessage: error.message });
+  });
   let publishedFile = existsSync(session.sessionManager.getSessionFile() || "");
   let retryState = {}, retryTimer;
   const retry = state => { retryState = state; emit({ type: "network_retry", ...state }); };
@@ -118,7 +160,6 @@ async function bindSession(session) {
   };
   session.agent.onPayload = configurePayload;
   const unbind = session.subscribe(event => {
-    widgetMessages.observe(event);
     if (event.type === "message_end" && ["user", "assistant"].includes(event.message.role)) {
       // Pi persists after notifying listeners. Read the new leaf in the next
       // microtask, after that append, without rebuilding its complete branch.
@@ -136,6 +177,7 @@ async function bindSession(session) {
     if (event.type === "turn_end") queueMicrotask(() => {
       if (runtime?.session === session) emit({type:"history_checkpoint", leafId:session.sessionManager.getLeafId()});
     });
+    widgetMessages.observe(event);
     if (event.type === "queue_update") {
       inputQueue.sync(event.steering, event.followUp);
     }
@@ -154,7 +196,8 @@ async function bindSession(session) {
       isRetryableAssistantError(event.message) && !isContextOverflow(event.message, session.model?.contextWindow || 128000);
     if (event.type === "message_end" && !willRetry) emit({ type: "message", role: event.message.role,
       text: textOf(event.message.content), thinking: thinkingOf(event.message.content), stopReason: event.message.stopReason || "", error: event.message.stopReason === "aborted" ? "" : event.message.errorMessage || "", timestamp:event.message.timestamp });
-    if (event.type === "compaction_start") emit({ type: "status", text: "正在压缩上下文" });
+    if (event.type === "compaction_start") startCompaction(event.reason);
+    if (event.type === "compaction_end") finishCompaction(event);
     if (["auto_retry_start", "summarization_retry_scheduled"].includes(event.type)) {
       clearTimeout(retryTimer);
       retry({ active: true, waiting: true, attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, startedAt: Date.now() });
@@ -166,6 +209,7 @@ async function bindSession(session) {
     if (["entry_appended", "message_end", "compaction_end", "agent_end"].includes(event.type)) publishContext();
   });
   unsubscribe = () => {
+    compactionFailures.delete(session);
     clearTimeout(retryTimer);
     unbind();
     if (session.agent.onPayload === configurePayload) session.agent.onPayload = originalPayload;
@@ -243,6 +287,12 @@ async function restoreSubagentSession(child, context, customTools) {
   // transcripts use the standard read-only policy for Explore/Plan.
   const readonly = ["Explore","Plan"].includes(child.type);
   const loader = new Pi.DefaultResourceLoader({cwd:manager.getCwd(),agentDir:config.agentDir,settingsManager:policy,
+    ...await sessionSkillOptions(Pi, {...config,cwd:manager.getCwd()}, native),
+    extensionFactories: [
+      { name: "recent-images", hidden: true, replaceable: false, factory: createRecentImagesExtension({ getLimit: () => config.agent?.maxContextImages }) },
+      { name: "tool-permissions", hidden: true, replaceable: false, factory: permissionExtension },
+      { name: "background-jobs", builtin: true, replaceable: false, factory: backgroundJobsExtension },
+    ],
     systemPrompt:context?.systemPrompt || `You are the ${child.type} subagent embedded in Umeko Desktop. Continue the task in this existing conversation. ${readonly ? "Inspect and report only; do not modify files." : ""}`,
     appendSystemPrompt:context?.systemPrompt?.includes(SUBAGENT_COMPLETION_HINT) ? [] : [SUBAGENT_COMPLETION_HINT],
     extensionsOverride:base=>({...base,extensions:base.extensions.filter(extension=>!String(extension.path || "").includes("pi-subagents"))})});
@@ -258,11 +308,13 @@ async function restoreSubagentSession(child, context, customTools) {
 
 async function init(input) {
   config = input;
+  globalThis[Symbol.for("umeko:recent-images-policy")] = { getLimit: () => config.agent?.maxContextImages };
+  permissionPolicy = { mode: input.permissionMode || input.agent?.toolPermissionMode || "auto", language: input.language || "en", dataDir: input.dataDir };
   configureUmekoDocs({directory: input.docsDir || join(input.agentDir, "cache", "umeko-docs"), models: input.models});
   reasoningEffort = effortLevels.has(input.reasoningEffort) ? input.reasoningEffort : "off";
   setGateway(input.gateway);
   process.env.PI_CODING_AGENT_DIR = input.agentDir;
-  for (const [name, value] of Object.entries(input.mcpEnv || {})) if (!/^NODE_|^(HTTP|HTTPS|ALL)_PROXY$/i.test(name)) process.env[name] = value;
+  for (const [name, value] of Object.entries(input.mcpEnv || {})) if (!/^NODE_|^(HTTP|HTTPS|ALL)_PROXY$|_(AK|SK|SECRET_KEY|SECURITY_TOKEN)$/i.test(name)) process.env[name] = value;
   const cwd = resolve(input.workspace || input.defaultCwd);
   if (!existsSync(cwd)) throw new Error("工作目录不存在");
   mkdirSync(input.sessionDir, { recursive: true });
@@ -289,6 +341,9 @@ async function init(input) {
     const nativeManager = await prepareNativeSettings(Pi, { cwd, agentDir, agent: input.agent });
     const settingsManager = await sessionResourceSettings(Pi, {...input,cwd,agentDir}, nativeManager);
     const nativeSettings = settingsManager.getSettings();
+    const skillOptions=await sessionSkillOptions(Pi,{...input,cwd,agentDir},nativeManager);
+    globalThis[Symbol.for("umeko:skill-policy-host")].options=skillOptions;
+    const selectedExtensions=input.piCapabilities && !input.globalCoordinator ? await sessionExtensionPaths(Pi,{...input,cwd,agentDir},nativeManager) : null;
     const settings = Pi.SettingsManager.inMemory({ ...nativeSettings,
       retry: { ...nativeSettings.retry, ...NETWORK_RETRY, provider: { ...nativeSettings.retry?.provider, maxRetries: 0 } },
       defaultTools: [...new Set([...nativeTools, ...(settingsManager.getDefaultTools() || [])])],
@@ -297,15 +352,21 @@ async function init(input) {
     }, { projectTrusted: !input.agent?.safeMode });
     const services = await Pi.createAgentSessionServices({ cwd, agentDir, modelRuntime, settingsManager,
       resourceLoaderOptions: {
+        ...skillOptions,
         ...(input.agent?.safeMode || input.globalCoordinator ? { noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
           additionalExtensionPaths: builtins.map(name => "builtin:" + name) } : {}),
-        appendSystemPrompt: [DESKTOP_PI_PROMPT + " " + UMEKO_PROMPT + " Reply in the user's language.", input.agent?.instructions || ""],
+        ...(selectedExtensions ? {noExtensions:true,additionalExtensionPaths:selectedExtensions} : {}),
+        appendSystemPrompt: [(input.globalCoordinator || toolSelection(input.piCapabilities,{name:PI_COMMAND_TOOL,source:"builtin:pi-commands"}) ? DESKTOP_PI_PROMPT+" " : "") + (input.globalCoordinator || toolSelection(input.piCapabilities,{name:UMEKO_TOOL,source:"builtin:umeko-control"}) ? UMEKO_PROMPT+" " : "") + "Reply in the user's language.", input.agent?.instructions || ""],
         extensionFactories: [
-          ...(input.loopReview ? [{name:"loop-review",hidden:true,replaceable:false,factory:loopReview.extension}] : []),
           ...(input.globalCoordinator ? [{name:"global-coordinator-boundary",hidden:true,replaceable:false,factory:coordinatorExtension}] : []),
+          ...(input.loopReview ? [{name:"loop-review",hidden:true,replaceable:false,factory:loopReview.extension}] : []),
+          // Mandatory inline factory: resource filters cannot disable the gate.
+          { name: "recent-images", hidden: true, replaceable: false, factory: createRecentImagesExtension({ getLimit: () => config.agent?.maxContextImages }) },
+          { name: "tool-permissions", hidden: true, replaceable: false, factory: permissionExtension },
           { name: "chatbox", builtin: true, replaceable: false, factory: pi => chatboxExtension(pi, () => config.webview || {}) },
           { name: "pi-commands", builtin: true, replaceable: false, factory: piCommands.extension },
           { name: "umeko-control", builtin: true, replaceable: false, factory: pi => umekoControl.extension(pi) },
+          { name: "background-jobs", builtin: true, replaceable: false, factory: backgroundJobsExtension },
           { name: "subagents", builtin: true, replaceable: true, factory: subagents.extension },
           { name: "output-continuation", builtin: true, replaceable: false, factory: outputContinuationExtension },
           { name: "codemode", builtin: true, replaceable: true, factory: Pi.createCodemodeExtension() },
@@ -322,7 +383,7 @@ async function init(input) {
     // Keep native global/project resource scopes in the loader, while desktop
     // generation/compaction overrides stay in memory on the session itself.
     services.settingsManager = settings;
-    const result = await Pi.createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model: selectedModel, excludeTools: blockedToolNames(input.blockedTools) });
+    const result = await Pi.createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model: selectedModel, excludeTools: input.globalCoordinator ? undefined : [...new Set([...blockedToolNames(input.blockedTools),...excludedSessionTools(input.piCapabilities)])] });
     return { ...result, services, diagnostics: services.diagnostics };
   };
   let manager;
@@ -369,13 +430,28 @@ async function state() {
   const omittedRetries = retryOmissions(branch);
   const results = new Map(branch.filter(e => e.type === "message" && e.message.role === "toolResult").map(e => [e.message.toolCallId, e.message]));
   const deliveries = branch.filter(e => e.type === "custom" && e.customType === "umeko-chatbox" && e.data?.version === 1 && typeof e.data.toolCallId === "string" && Array.isArray(e.data.items)).map(e => e.data);
-  const candidates = branch.filter(e => e.type === "message" && !omittedRetries.has(e.id) && ["user", "assistant"].includes(e.message.role));
-  // The native host owns its history model; retain its complete-history contract.
+  const compactions = new Map();
+  const candidates = branch.flatMap(e => {
+    if (e.type === "message" && !omittedRetries.has(e.id) && ["user", "assistant"].includes(e.message.role)) return [e];
+    if (e.type !== "custom" || e.customType !== "umeko-compaction" || ![1, 2].includes(e.data?.version)) return [];
+    if (e.data.version === 1) return [e];
+    if (compactions.has(e.data.eventId)) {
+      compactions.get(e.data.eventId).data = e.data;
+      return [];
+    }
+    const first = { ...e };
+    compactions.set(e.data.eventId, first);
+    return [first];
+  });
+  // Native ChatModel owns paging and its complete-history contract.
   const paged = false;
   const selected = config.globalCoordinator ? candidates.slice(-64) : candidates;
   const messages = projectSubagents(branch, selected.map(e => {
+    if (e.type === "custom") return { role: "assistant", text: e.data.version === 1 ? compactionText(e.data) : "", customType: e.customType,
+      compaction: e.data, entryId: e.id, timestamp: e.timestamp };
     const message = e.message;
     const row = {role: message.role, text: textOf(message.content) || (message.stopReason === "aborted" ? "" : message.errorMessage || ""), error: message.stopReason !== "aborted" && !!message.errorMessage, entryId:e.id, timestamp:message.timestamp || e.timestamp};
+    if (row.error) row.errorMessage = message.errorMessage;
     if (message.role === "assistant") row.stopReason = message.stopReason || "";
     const thinking = thinkingOf(message.content);
     if (thinking) row.thinking = thinking;
@@ -391,7 +467,7 @@ async function state() {
       return [row, ...nested];
     });
     return row;
-  }).filter(row => row.text || row.thinking || row.tools?.length));
+  }).filter(row => row.text || row.thinking || row.tools?.length || row.customType === "umeko-compaction"));
   const list = await Pi.SessionManager.listAll(config.sessionDir);
   const file = manager.getSessionFile();
   emit({ type: "state", session: { id: manager.getSessionId(), file: file && existsSync(file) ? file : undefined,
@@ -414,8 +490,10 @@ async function capabilities() {
   const allTools = session.getAllTools(), active = session.getActiveToolNames();
   return {
     tools: active,
-    allTools: toolInventory(session, createAllToolDefinitions(session.sessionManager.getCwd()), config.blockedTools),
-    skills: session.resourceLoader.getSkills().skills.map(s => ({ name: s.name, path: s.filePath, description: s.description })),
+    contextFiles: session.resourceLoader.getAgentsFiles().agentsFiles.map(file => file.path),
+    toolCatalog: [...new Map([...Object.values(createAllToolDefinitions(session.cwd)).map(tool=>({name:tool.name,description:tool.description,parameters:tool.parameters,source:"builtin:"+tool.name,owner:"native",exposure:"direct"})),...collectToolCatalog(session)].map(tool=>[tool.name,tool])).values()].map(({name,description,source,owner,exposure})=>({name,description:String(description || "").slice(0,1024),source,owner,exposure})),
+    allTools: toolInventory(session, createAllToolDefinitions(session.sessionManager.getCwd()), [...blockedToolNames(config.blockedTools),...excludedSessionTools(config.piCapabilities)]),
+    skills: session.resourceLoader.getSkills().skills.map(s => ({ name: s.name, path: s.filePath, description: s.description, sourceInfo: s.sourceInfo })),
     extensions: session.resourceLoader.getExtensions().extensions.map(e => ({ name: extensionName(e.path, session.resourceLoader.resourceMetadataByPath?.get(e.path)), path: e.path })),
     prompts: session.resourceLoader.getPrompts().prompts.map(p => ({ name: p.name, description: p.description, path: p.filePath })),
     commands: session.extensionRunner.getRegisteredCommands().map(command => ({ name: command.name, description: command.description || "" })),
@@ -446,6 +524,25 @@ async function promptWithInterrupts(first) {
 }
 
 async function execute(input) {
+  if (input.type === "widget_catalog") {
+    // A read-only side channel, including during a streaming turn. Never run
+    // state(), reload(), prompt() or emit done for a management-page read.
+    try {
+      if (!runtime || closing || config.globalCoordinator) throw new Error("Pi instance is not available");
+      const context = {...config, cwd: runtime.session.sessionManager.getCwd(), includeProject: !!config.workspace};
+      let value;
+      if (input.kind === "skills") value = await manageSkills(Pi, {...context, action: "browse"});
+      else if (input.kind === "extensions") value = (await manageResources(Pi, {...context, action: "scan"})).extensions;
+      else if (input.kind === "extension-details") value = (await manageResources(Pi, {...context, action: "details", id: input.extensionId})).details;
+      else throw new Error("Unsupported directory request");
+      emit({type: "widget_catalog", id: input.id, ok: true, value});
+    } catch (error) { emit({type: "widget_catalog", id: input.id, ok: false, error: error.message}); }
+    return;
+  }
+  if (input.type === "desktop_settings") {
+    if (config && input.webview && typeof input.webview === "object") config.webview = input.webview;
+    return;
+  }
   if (input.type === "loop_review_response") { loopReview.response(input); return; }
   if (input.type === "umeko_response") { umekoControl.response(input); return; }
   if(input.type==='widget-notify' && runtime && (executing || input.notification?.wake===false)) {
@@ -469,7 +566,19 @@ async function execute(input) {
     }
     return;
   }
-  if (input.type === "ui_response") { dialogs.get(input.id)?.(input.value); dialogs.delete(input.id); return; }
+  if (input.type === "tool_permission_mode") {
+    if (!["auto", "ask"].includes(input.mode)) { emit({ type: "error", message: "Invalid tool permission mode" }); return; }
+    permissionPolicy = { ...permissionPolicy, mode: input.mode, language: input.language || permissionPolicy.language, dataDir: input.dataDir || permissionPolicy.dataDir };
+    return;
+  }
+  if (input.type === "ui_response") {
+    const dialog = dialogs.get(input.id);
+    if (!dialog || dialogs.keys().next().value !== input.id) return;
+    dialogs.delete(input.id); dialog.resolve(input.value);
+    const next = dialogs.values().next().value;
+    if (next) emit(next.event);
+    return;
+  }
   if (input.type === "abort") {
     commandCancellation++;
     piCommands.clear();
@@ -506,7 +615,7 @@ async function execute(input) {
     }
     else if (input.type === "fork") await forkSession(input.entryId || runtime.session.sessionManager.getLeafId(), { position: "at" });
     else if (input.type === "navigate") await runtime.session.navigateTree(input.entryId, { summarize: false });
-    else if (input.type === "compact") await runtime.session.compact();
+    else if (input.type === "compact") await runtime.session.compact(input.customInstructions);
     else if (input.type === "reload") await reloadSession(runtime.session);
     else if (input.type === "rename") runtime.session.setSessionName(input.title);
     else if (input.type === "mcp-command") await runtime.session.prompt(input.text);
@@ -518,7 +627,10 @@ async function execute(input) {
       await state();
       await inputQueue.chain;
     } while (inputQueue.hasInterrupts);
-  } catch (error) { emit({ type: "error", message: error.message }); }
+  } catch (error) {
+    if (input.type === "compact") compactionFailures.get(runtime?.session)?.(error);
+    emit({ type: "error", message: error.message });
+  }
   finally {
     // A failed/aborted model request can leave Pi's native pending queues intact.
     // Return them to the editor rather than displaying unserviceable queue chips.

@@ -333,7 +333,7 @@ QVariantMap Backend::umekoRequestImpl(QVariantMap request, QString callerKey, bo
       require(found, spec["target"] == "plugins" ? QString("参数 id 需要供应商/账号 ID，不能使用插件包 ID；请通过 plugins.list 查看 accounts[].id，包操作使用 plugin / version 参数") : exists + " ID does not exist");
     }
     if (operation == "appearance.language") require(QStringList{"zh", "en"}.contains(args["language"].toString()), "language must be zh or en");
-    if (operation == "appearance.fontScale") require(args["scale"].toDouble() >= .5 && args["scale"].toDouble() <= 2, "scale must be 0.5-2");
+    if (operation == "appearance.fontScale") require(args["scale"].toDouble() >= .3 && args["scale"].toDouble() <= 2, "scale must be 0.3-2");
     if (operation == "themes.select") {
       bool found = QStringList{"light", "dark", "yanami"}.contains(id);
       for (auto theme : customThemes()) if (theme.toMap()["id"] == id) found = true;

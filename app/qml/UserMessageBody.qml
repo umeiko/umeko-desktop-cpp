@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Window
+import Umeko.Text 1.0
 
 Item {
     id: root
@@ -17,17 +18,18 @@ Item {
             Item {
                 required property var modelData
                 width: Math.ceil(measure.advanceWidth) + Theme.control(34); height: 1
-                TextMetrics { id: measure; font.pixelSize: Theme.font(12); text: modelData.name }
+                TextMetrics { id: measure; font.pixelSize: Theme.font(12, root.visible); text: modelData.name }
             }
         }
     }
     Flow {
         id: content; width: root.width; spacing: 6
-        SelectableText {
+        SelectableText { font.family: Theme.fontFamily;
             id: prose; visible: root.text.length > 0
             width: Math.min(root.width, Math.max(1, Math.ceil(textMeasure.advanceWidth) + 1))
             text: root.text; color: Theme.ink; textFormat: TextEdit.PlainText
-            font.pixelSize: Theme.font(13); wrapMode: TextEdit.Wrap; topPadding: 3; bottomPadding: 3
+            font.pixelSize: Theme.font(13, visible); wrapMode: TextEdit.Wrap; topPadding: 3; bottomPadding: 3
+            TextSpacing { enabled: prose.visible; document: prose.textDocument; factor: Theme.proseLineHeight }
             selectionController: root.selectionController; messageIndex: root.messageIndex; blockIndex: 0
         }
         Repeater {
@@ -42,10 +44,10 @@ Item {
                 radius: 5; color: attachmentHit.interactionHovered ? Theme.hover : Theme.accentBg; border.color: Theme.line
                 TextMetrics { id: nameMeasure; font: filename.font; text: modelData.name }
                 Glyph { x: 7; anchors.verticalCenter: parent.verticalCenter; width: Theme.icon(14); height: Theme.icon(14); name: modelData.kind === "web" ? "globe" : modelData.kind === "folder" ? "folder" : modelData.kind === "image" ? "image" : "file" }
-                SelectableText {
+                SelectableText { font.family: Theme.fontFamily;
                     id: filename; objectName: "userAttachmentName_" + root.messageIndex + "_" + index
                     x: 11 + Theme.icon(14); y: 4; width: parent.width - x - 7
-                    text: modelData.name; textFormat: TextEdit.PlainText; font.pixelSize: Theme.font(12)
+                    text: modelData.name; textFormat: TextEdit.PlainText; font.pixelSize: Theme.font(12, visible)
                     color: Theme.ink; wrapMode: TextEdit.WrapAnywhere
                     selectionController: root.selectionController; messageIndex: root.messageIndex; blockIndex: 10000 + index
                     Accessible.description: modelData.path

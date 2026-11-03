@@ -20,6 +20,7 @@ Item {
         for (const item of interactions) {
             if (!item.visible || !item.enabled || item.width <= 0 || item.height <= 0) continue
             const p = mapToItem(item, x, y)
+            if (typeof item.selectionContains === "function" && !item.selectionContains(p.x,p.y)) continue
             if (p.x >= 0 && p.y >= 0 && p.x <= item.width && p.y <= item.height && item.interactionPriority >= priority) {
                 found = item; priority = item.interactionPriority
             }
@@ -176,12 +177,12 @@ Item {
         }
         return pieces.join("\n\n").replace(/\u2029|\u2028/g, "\n")
     }
-    function copy() { if (hasSelection) dataSource.copy(selectedText()) }
+    function copy() { if (hasSelection) { if(dataSource.documentSelection) dataSource.copyChatSelection({anchor:anchor,cursor:cursor}); else dataSource.copy(selectedText()) } }
     function selectAll() {
-        const rows = dataSource.displayMessages
-        if (!rows.length) return
+        const count = dataSource.documentSelection ? dataSource.messageCount : dataSource.displayMessages.length
+        if (!count) return
         anchor = {row:0,block:-100000,offset:0}
-        cursor = {row:rows.length - 1,block:2147483647,offset:0}
+        cursor = {row:count - 1,block:2147483647,offset:0}
         refresh(); forceActiveFocus()
     }
     Keys.onPressed: event => {
@@ -203,7 +204,7 @@ Item {
     }
     Timer { interval: 16; repeat: true; running: root.dragging; onTriggered: Qt.callLater(root.autoScroll) }
     Timer { id: refreshTimer; interval: 0; onTriggered: root.refresh() }
-    TextEdit { id: renderer; visible: false; readOnly: true }
+    TextEdit { font.family: Theme.fontFamily; id: renderer; visible: false; readOnly: true }
     FloatingMenu {
         id: selectionMenu; objectName: "selectionContextMenu"
         ContextAction { objectName: "copySelectedText"; text: I18n.t("复制"); glyph: "copy"; enabled: root.hasSelection; onTriggered: root.copy() }

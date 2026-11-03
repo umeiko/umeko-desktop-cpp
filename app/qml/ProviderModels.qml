@@ -9,10 +9,10 @@ ColumnLayout {
     property bool fixedModels: false
     function load(models) {
         entries.clear()
-        models.forEach(m => entries.append({upstream:m.upstream, alias:m.alias || "", contextWindowText:String(m.contextWindow || ""), contextWindowAuto:m.contextWindowAuto !== false, visionValue:m.vision === true, visionAuto:m.visionAuto !== false}))
+        models.forEach(m => entries.append({upstream:m.upstream, alias:m.alias || "", providerContextWindow:Number(m.providerContextWindow || 0), contextWindowText:String(m.contextWindow || ""), contextWindowAuto:m.contextWindowAuto !== false, visionValue:m.vision === true, visionAuto:m.visionAuto !== false}))
         if (!entries.count && !fixedModels) addModel()
     }
-    function addModel() { entries.append({upstream:"", alias:"", contextWindowText:"", contextWindowAuto:true, visionValue:false, visionAuto:true}) }
+    function addModel() { entries.append({upstream:"", alias:"", providerContextWindow:0,contextWindowText:"", contextWindowAuto:true, visionValue:false, visionAuto:true}) }
     function json() {
         let rows = []
         for(let i = 0; i < entries.count; i++) {
@@ -24,16 +24,16 @@ ColumnLayout {
     ListModel { id: entries }
     RowLayout {
         Layout.fillWidth: true
-        Text { text: I18n.t("模型"); color: Theme.ink; font.pixelSize: Theme.font(12) }
-        Text { text: entries.count.toString(); color: Theme.muted; font.pixelSize: Theme.font(11) }
+        Text { font.family: Theme.fontFamily; text: I18n.t("模型"); color: Theme.ink; font.pixelSize: Theme.font(12, visible) }
+        Text { font.family: Theme.fontFamily; text: entries.count.toString(); color: Theme.muted; font.pixelSize: Theme.font(11, visible) }
         HelpButton { help: I18n.t("一个供应商可以添加多个模型。模型 ID 填服务端名称，别名用于聊天选择和 API 代理服务；别名留空时使用模型 ID。") }
         Item { Layout.fillWidth: true }
         ActionButton { visible: !root.fixedModels; objectName: "addProviderModelButton"; text: I18n.t("添加模型"); glyph: "plus"; quiet: true; onClicked: root.addModel() }
     }
     RowLayout {
         Layout.fillWidth: true; spacing: 12
-        Text { text: I18n.t("模型 ID"); color: Theme.muted; font.pixelSize: Theme.font(10); Layout.fillWidth: true; Layout.preferredWidth: 1 }
-        Text { text: I18n.t("别名"); color: Theme.muted; font.pixelSize: Theme.font(10); Layout.fillWidth: true; Layout.preferredWidth: 1 }
+        Text { font.family: Theme.fontFamily; text: I18n.t("模型 ID"); color: Theme.muted; font.pixelSize: Theme.font(10, visible); Layout.fillWidth: true; Layout.preferredWidth: 1 }
+        Text { font.family: Theme.fontFamily; text: I18n.t("别名"); color: Theme.muted; font.pixelSize: Theme.font(10, visible); Layout.fillWidth: true; Layout.preferredWidth: 1 }
         Item { Layout.preferredWidth: 32 }
     }
     Repeater {
@@ -42,6 +42,7 @@ ColumnLayout {
             required property int index
             required property string upstream
             required property string alias
+            required property double providerContextWindow
             required property string contextWindowText
             required property bool contextWindowAuto
             required property bool visionValue
@@ -55,11 +56,12 @@ ColumnLayout {
             }
             RowLayout {
                 Layout.fillWidth: true; spacing: 8
-                Text { text: I18n.t("上下文长度"); color: Theme.muted; font.pixelSize: Theme.font(11) }
+                Text { font.family: Theme.fontFamily; text: I18n.t("上下文长度"); color: Theme.muted; font.pixelSize: Theme.font(11, visible) }
                 HelpButton { help: I18n.t("自动按原始模型名匹配，未知名称使用 128000 token。输入整数、256K 或 1M 可自定义；K=1024，M=1048576。恢复自动后跟随模型名。请按供应商实际额度填写。") }
                 ContextWindowField {
                     objectName: "providerContext_" + index
                     Layout.preferredWidth: 190; Layout.fillWidth: false
+                    providerTokens: providerContextWindow
                     modelName: upstream; customText: contextWindowText; automatic: contextWindowAuto
                     onEdited: (value, automatic) => { entries.setProperty(index, "contextWindowText", value); entries.setProperty(index, "contextWindowAuto", automatic) }
                 }

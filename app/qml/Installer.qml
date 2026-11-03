@@ -36,7 +36,7 @@ ApplicationWindow {
             fillMode: Image.PreserveAspectFit
             smooth: false; mipmap: false
         }
-        Text {
+        Text { font.family: Qt.application.font.family;
             objectName: "installerStatus"
             text: window.statusText
             Accessible.name: installer.status.message || text
@@ -74,7 +74,7 @@ ApplicationWindow {
             text: window.state === "complete" ? (window.english ? "Launch" : "启动") : (window.english ? "Close" : "关闭")
             onClicked: installer.finish()
             background: Rectangle { radius: 7; color: parent.down ? "#436aa9" : parent.hovered ? "#5d85c4" : "#527bbd" }
-            contentItem: Text {
+            contentItem: Text { font.family: Qt.application.font.family;
                 text: parent.text; color: "white"; font.pixelSize: 13
                 horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
             }

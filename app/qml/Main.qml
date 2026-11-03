@@ -75,7 +75,16 @@ ApplicationWindow {
         chatCover.begin(); window.page = "chat"
     }
     function commitSidebarSelection() {
-        if (!sidebarSwitching || !sidebarPrepared || sidebarMotion.moving) return
+        if (!sidebarSwitching || !sidebarPrepared) return
+        if (sidebarMotion.moving) {
+            const value = sidebarMotion.value, target = sidebarMotion.targetRect
+            const current = [value.x, value.y, value.width, value.height]
+            const wanted = [target.x, target.y, target.width, target.height]
+            // Finish a subpixel tail instead of delaying content for the PID's
+            // imperceptible integral settling. Text never interrupts its travel.
+            if (current.some((position, i) => Math.abs(position - wanted[i]) > 0.75 || Math.abs(sidebarMotion.velocity[i]) > 10)) return
+            sidebarMotion.snap()
+        }
         const token = sidebarToken
         let ok = true
         if (pendingSidebarKind === "project") backend.openProject(pendingSidebarId)
@@ -86,7 +95,8 @@ ApplicationWindow {
         chatCover.contentReady()
     }
     // Present the cover before starting disk I/O. Cold reads can overlap the
-    // sidebar motion; activate the latest result only after the PID settles.
+    // sidebar motion. Attach delegates after the highlight settles, so text
+    // layout cannot take frames away from the moving PID.
     FrameAnimation {
         running: window.sidebarSwitching && !window.sidebarStarted
         onTriggered: {
@@ -160,10 +170,9 @@ ApplicationWindow {
     function previewChatWeb(item) {
         const url = backend.normalizeWebUrl(item.url || item.path || "")
         if (!url) return
-        if (!backend.webviewAvailable) { window.notification = I18n.t("网页预览组件尚未安装或无法加载"); toastTimer.restart(); return }
-        window.page = "chat"; webPane.submit(url, item.title || item.name || "")
+        backend.openWebPreview(url, item.title || item.name || "")
     }
-    function previewChatDocument(item) { window.page = "chat"; webPane.showDocument(item) }
+    function previewChatDocument(item, sourceWidget) { if (backend.openExternalHtml(item.path)) return; window.page = "chat"; webPane.showDocument(item, sourceWidget || "") }
     function showSubagentGroup(agents, anchor) {
         if (subagentMatrix.desiredOpen && subagentMatrix.parent === anchor) { subagentMatrix.close(); return }
         subagentMatrix.agents = agents; subagentMatrix.parent = anchor; subagentMatrix.open()
@@ -193,11 +202,14 @@ ApplicationWindow {
     Shortcut { sequence: "Escape"; enabled: backend.pendingApproval.id === undefined && backend.desktopPlugins.hostServices.pendingApproval.id === undefined && !imageViewer.visible; onActivated: { if (window.searchVisible) window.closeConversationSearch(false); else if (window.page === "settings") window.page = "chat"; else modelPopup.close() } }
     Connections { target: backend; function onToast(message) { window.notification = message; toastTimer.restart() }
         function onViewChanged() { window.avatarChatKey = String(Math.random()); if (backend.desktopPlugins.page.id !== "global-agents") webPane.dismiss() }
-        function onWebRequested(url, title) { window.page = "chat"; webPane.submit(url, title) }
-        function onDocumentRequested(path, title, kind) { window.previewChatDocument({path:path, title:title, kind:kind}) } }
+        function onWebRequested(url, title) { if (backend.config.desktop.webDisplay === "external") backend.openWebPreview(url,title); else {window.page = "chat"; webPane.submit(url, title)} }
+        function onDesktopSettingsChanged() { if (backend.config.desktop.webDisplay === "external" && (webPane.mode === "web" || webPane.mode === "document" && backend.documentPreview.state.fileType === "html")) webPane.dismiss() }
+        function onDocumentRequested(path, title, kind) { window.previewChatDocument({path:path, title:title, kind:kind}) }
+        function onWidgetDocumentRequested(path, title, kind, widget) { window.previewChatDocument({path:path, title:title, kind:kind}, widget) } }
     Connections { target: backend; function onLayoutChanged() { window.sidebarPreferredWidth = backend.sidebarWidth; window.sidebarCollapsed = backend.sidebarCollapsed } }
     Timer { id: toastTimer; interval: 4200; onTriggered: window.notification = "" }
     RequestDetails { id: requestInspector }
+    Connections { target: backend; function onRequestDetailsRequested(identifier) { requestInspector.show(identifier) } }
     FolderDialog { id: folderDialog; title: I18n.t("选择工作目录"); onAccepted: backend.setWorkspace(selectedFolder.toString()) }
     FileDialog { id: attachmentDialog; title: I18n.t("添加文件"); fileMode: FileDialog.OpenFiles; onAccepted: window.acceptChatFiles(selectedFiles.map(url => url.toString())) }
     ImagePreview { id: imageViewer }
@@ -231,10 +243,10 @@ ApplicationWindow {
                 x: 16; y: 24; width: parent.width - 32; height: Theme.control(42)
                 text: I18n.t("搜索会话"); glyph: "search"; hint: I18n.t("搜索") + " Ctrl+K"
                 onClicked: window.openConversationSearch()
-                Text { anchors.right: parent.right; anchors.rightMargin: 13; anchors.verticalCenter: parent.verticalCenter; visible: Theme.fontScale <= 1.25; text: "Ctrl K"; color: Theme.muted; font.pixelSize: Theme.font(10) }
-                contentItem: Item { Row { x: 13; width: parent.width - (Theme.fontScale <= 1.25 ? 65 : 26); spacing: 9; anchors.verticalCenter: parent.verticalCenter; Glyph { name: "search"; width: Theme.icon(18); height: Theme.icon(18) } Text { width: Math.max(0, parent.width - Theme.icon(18) - 9); elide: Text.ElideRight; text: I18n.t("搜索会话"); font.pixelSize: Theme.font(12); color: Theme.ink; anchors.verticalCenter: parent.verticalCenter } } }
+                Text { font.family: Theme.fontFamily; anchors.right: parent.right; anchors.rightMargin: 13; anchors.verticalCenter: parent.verticalCenter; visible: Theme.fontScale <= 1.25; text: "Ctrl K"; color: Theme.muted; font.pixelSize: Theme.font(10, visible) }
+                contentItem: Item { Row { x: 13; width: parent.width - (Theme.fontScale <= 1.25 ? 65 : 26); spacing: 9; anchors.verticalCenter: parent.verticalCenter; Glyph { name: "search"; width: Theme.icon(18); height: Theme.icon(18) } Text { font.family: Theme.fontFamily; width: Math.max(0, parent.width - Theme.icon(18) - 9); elide: Text.ElideRight; text: I18n.t("搜索会话"); font.pixelSize: Theme.font(12, visible); color: Theme.ink; anchors.verticalCenter: parent.verticalCenter } } }
             }
-            Text { id: recentLabel; x: 29; y: 52 + Theme.control(42); text: backend.showArchived ? I18n.t("已归档") : I18n.t("项目"); font.pixelSize: Theme.font(10); color: Theme.muted; font.letterSpacing: 1 }
+            Text { font.family: Theme.fontFamily; id: recentLabel; x: 29; y: 52 + Theme.control(42); text: backend.showArchived ? I18n.t("已归档") : I18n.t("项目"); font.pixelSize: Theme.font(10, visible); color: Theme.muted; font.letterSpacing: 1 }
             ActionButton { objectName: "archivedViewButton"; anchors.right: parent.right; anchors.rightMargin: 28 + Theme.control(26); y: recentLabel.y - 7; width: Theme.control(26); height: Theme.control(26); glyph: "archive"; quiet: true; hint: backend.showArchived ? I18n.t("返回项目") : I18n.t("查看归档会话"); onClicked: backend.toggleArchived() }
             ActionButton { anchors.right: parent.right; anchors.rightMargin: 22; y: recentLabel.y - 7; width: Theme.control(26); height: Theme.control(26); glyph: "plus"; quiet: true; hint: I18n.t("打开项目文件夹"); onClicked: folderDialog.open() }
             ListView {
@@ -246,7 +258,7 @@ ApplicationWindow {
                 PidMotion { id: sidebarMotion; objectName: "sidebarPidMotion"; targetRect: Qt.rect(0,sessionList.currentItem ? sessionList.currentItem.y : 0,sessionList.width,sessionList.currentItem ? sessionList.currentItem.height : 34) }
                 highlight: Rectangle { objectName: "sidebarHighlight"; x: sidebarMotion.value.x; y: sidebarMotion.value.y; width: sidebarMotion.value.width; height: sidebarMotion.value.height; radius: 7; color: Theme.surface; visible: sessionList.currentIndex >= 0 && window.page === "chat"; z: -1 }
 
-                Text { visible: sessionList.count === 0; x: 17; y: 8; text: backend.showArchived ? I18n.t("暂无归档会话") : I18n.t("暂无项目"); font.pixelSize: Theme.font(11); color: Theme.muted }
+                Text { font.family: Theme.fontFamily; visible: sessionList.count === 0; x: 17; y: 8; text: backend.showArchived ? I18n.t("暂无归档会话") : I18n.t("暂无项目"); font.pixelSize: Theme.font(11, visible); color: Theme.muted }
                 delegate: Item {
                     required property var modelData
                     objectName: "sidebarRow_" + modelData.id
@@ -256,10 +268,9 @@ ApplicationWindow {
                         onClicked: mouse => { if (mouse.button === Qt.RightButton) { sidebarMenus.openFor(modelData, mapToItem(sidebarMenus, mouse.x, mouse.y)); return } window.selectSidebar(modelData) }
                     }
                     Glyph { visible: modelData.kind === "project"; name: "folder"; x: 15; anchors.verticalCenter: parent.verticalCenter; width: Theme.icon(16); height: Theme.icon(16) }
-                    Text { x: modelData.kind === "label" ? 17 : 42; width: parent.width - x - (modelData.kind === "project" ? Theme.control(56) + (modelData.pinned ? Theme.icon(12) + 12 : 8) : 32); anchors.verticalCenter: parent.verticalCenter; text: modelData.kind === "label" ? I18n.t(modelData.title) : modelData.title; elide: Text.ElideRight; font.pixelSize: Theme.font(modelData.kind === "label" ? 10 : 11); color: modelData.kind === "label" ? Theme.muted : Theme.ink }
-                    ActivitySpinner { objectName: "sessionSpinner_" + modelData.id; anchors.right: parent.right; anchors.rightMargin: 10; anchors.verticalCenter: parent.verticalCenter; width: Theme.icon(15); height: Theme.icon(15); visible: modelData.kind === "session" && modelData.running === true; color: modelData.waiting ? Theme.accent : Theme.muted }
-                    Rectangle { objectName: "sessionUnread_" + modelData.id; anchors.right: parent.right; anchors.rightMargin: 14; anchors.verticalCenter: parent.verticalCenter; width: 6; height: 6; radius: 3; color: "#4c9c6d"; visible: modelData.kind === "session" && modelData.unread === true && !modelData.running }
-                    Glyph { anchors.right: parent.right; anchors.rightMargin: modelData.kind === "project" ? Theme.control(56) + 4 : 11; anchors.verticalCenter: parent.verticalCenter; width: Theme.icon(12); height: Theme.icon(12); name: "pin"; visible: modelData.pinned === true && !modelData.running && !modelData.unread && !(rowMouse.containsMouse) }
+                    Text { font.family: Theme.fontFamily; x: modelData.kind === "label" ? 17 : 42; width: parent.width - x - (modelData.kind === "project" ? Theme.control(56) + (modelData.pinned ? Theme.icon(12) + 12 : 8) : sidebarStatus.visible ? sidebarStatus.implicitWidth + 17 : 32); anchors.verticalCenter: parent.verticalCenter; text: modelData.kind === "label" ? I18n.t(modelData.title) : modelData.title; elide: Text.ElideRight; font.pixelSize: Theme.font(modelData.kind === "label" ? 10 : 11, visible); color: modelData.kind === "label" ? Theme.muted : Theme.ink }
+                    TaskStatus { id: sidebarStatus; objectName: "sessionStatus_" + modelData.id; anchors.right: parent.right; anchors.rightMargin: 10; anchors.verticalCenter: parent.verticalCenter; compact: true; status: ({state: modelData.kind === "session" ? (modelData.running ? (modelData.outcome === "stopping" ? "stopping" : "running") : modelData.outcome || "") : ""}); unread: modelData.unread === true && !modelData.running }
+                    Glyph { anchors.right: parent.right; anchors.rightMargin: modelData.kind === "project" ? Theme.control(56) + 4 : sidebarStatus.visible ? sidebarStatus.implicitWidth + 17 : 11; anchors.verticalCenter: parent.verticalCenter; width: Theme.icon(12); height: Theme.icon(12); name: "pin"; visible: modelData.pinned === true && !modelData.running && !modelData.unread && !(rowMouse.containsMouse) }
                     ActionButton { objectName: "newProjectSession_" + modelData.id; anchors.right: parent.right; anchors.rightMargin: Theme.control(28); anchors.verticalCenter: parent.verticalCenter; width: Theme.control(28); height: Theme.control(28); quiet: true; glyph: "plus"; visible: modelData.kind === "project" && !backend.showArchived; hint: I18n.t("新增会话"); onClicked: window.startProjectChat(modelData) }
                     ActionButton { objectName: "toggleProject_" + modelData.id; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; width: Theme.control(28); height: Theme.control(28); quiet: true; glyph: modelData.collapsed ? "chevron-right" : "chevron-down"; visible: modelData.kind === "project"; onClicked: backend.toggleProject(modelData.id) }
                 }
@@ -271,14 +282,14 @@ ApplicationWindow {
             }
             Rectangle {
                 anchors.fill: parent; anchors.margins: 7; radius: 10; z: 21; visible: projectDrop.containsDrag; color: Theme.accentBg; border.color: Theme.accent
-                Column { anchors.centerIn: parent; spacing: 12; Glyph { name: "folder"; width: Theme.icon(26); height: Theme.icon(26); anchors.horizontalCenter: parent.horizontalCenter } Text { text: I18n.t("打开项目文件夹"); color: Theme.accent; font.pixelSize: Theme.font(12) } }
+                Column { anchors.centerIn: parent; spacing: 12; Glyph { name: "folder"; width: Theme.icon(26); height: Theme.icon(26); anchors.horizontalCenter: parent.horizontalCenter } Text { font.family: Theme.fontFamily; text: I18n.t("打开项目文件夹"); color: Theme.accent; font.pixelSize: Theme.font(12, visible) } }
             }
             Item {
                 id: apiStatus; objectName: "apiProxySidebarStatus"; visible: backend.serverRunning
                 x: 26; anchors.bottom: settingsButton.top; anchors.bottomMargin: 9; width: parent.width - 52; height: 29
                 Rectangle { x: 1; y: 10; width: 6; height: 6; radius: 3; color: "#72a783" }
-                Text { x: 17; y: 5; width: Math.max(0, apiPort.x - x - 8); elide: Text.ElideRight; text: I18n.t("API 代理运行中"); color: Theme.muted; font.pixelSize: Theme.font(10) }
-                Text { id: apiPort; anchors.right: parent.right; y: 5; text: ":" + backend.config.server.port; color: Theme.muted; font.pixelSize: Theme.font(10); font.family: "Consolas" }
+                Text { font.family: Theme.fontFamily; x: 17; y: 5; width: Math.max(0, apiPort.x - x - 8); elide: Text.ElideRight; text: I18n.t("API 代理运行中"); color: Theme.muted; font.pixelSize: Theme.font(10, visible) }
+                Text { id: apiPort; anchors.right: parent.right; y: 5; text: ":" + backend.config.server.port; color: Theme.muted; font.pixelSize: Theme.font(10, visible); font.family: "Consolas" }
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: window.settings(1) }
             }
             ActionButton {
@@ -287,7 +298,7 @@ ApplicationWindow {
                 onClicked: window.page === "settings" ? window.page = "chat" : window.settings(0)
                 contentItem: Item { Row { x: 16; spacing: 12; anchors.verticalCenter: parent.verticalCenter
                     Glyph { name: "settings"; width: Theme.icon(18); height: Theme.icon(18) }
-                    Text { text: I18n.t("设置"); color: Theme.ink; font.pixelSize: Theme.font(12); anchors.verticalCenter: parent.verticalCenter }
+                    Text { font.family: Theme.fontFamily; text: I18n.t("设置"); color: Theme.ink; font.pixelSize: Theme.font(12, visible); anchors.verticalCenter: parent.verticalCenter }
                 } }
                 AppUpdateBadge { anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter }
             }
@@ -372,9 +383,9 @@ ApplicationWindow {
                     }
                     onClicked: window.toggleSidebar()
                 }
-                Text { text: window.page === "chat" ? I18n.t("工作空间") : I18n.t("偏好设置"); color: Theme.muted; font.pixelSize: Theme.font(11); anchors.verticalCenter: parent.verticalCenter }
-                Text { text: "/"; color: Theme.line; font.pixelSize: Theme.font(12); anchors.verticalCenter: parent.verticalCenter }
-                Text { text: window.page === "chat" ? (window.sidebarSwitching ? window.pendingSidebarTitle : backend.sessionTitle) : [I18n.t("账号与供应商"), I18n.t("API 代理服务"), I18n.t("API 代理服务"), "Agent", "Agent", I18n.t("外观"), I18n.t("关于"), I18n.t("Umeko 插件管理")][window.settingsTab]; color: Theme.ink; font.pixelSize: Theme.font(11); width: 225; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter }
+                Text { font.family: Theme.fontFamily; text: window.page === "chat" ? I18n.t("工作空间") : I18n.t("偏好设置"); color: Theme.muted; font.pixelSize: Theme.font(11, visible); anchors.verticalCenter: parent.verticalCenter }
+                Text { font.family: Theme.fontFamily; text: "/"; color: Theme.line; font.pixelSize: Theme.font(12, visible); anchors.verticalCenter: parent.verticalCenter }
+                Text { font.family: Theme.fontFamily; text: window.page === "chat" ? (window.sidebarSwitching ? window.pendingSidebarTitle : backend.sessionTitle) : [I18n.t("账号与供应商"), I18n.t("API 代理服务"), I18n.t("API 代理服务"), "Agent", "Agent", I18n.t("外观"), I18n.t("关于"), I18n.t("Umeko 插件管理")][window.settingsTab]; color: Theme.ink; font.pixelSize: Theme.font(11, visible); width: 225; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter }
             }
             Row { id: windowControls; anchors.right: parent.right; anchors.rightMargin: 14; anchors.top: parent.top; anchors.topMargin: 18; spacing: 2
                 ActionButton { glyph: "minus"; width: Theme.control(32); height: Theme.control(30); quiet: true; hint: I18n.t("最小化"); onClicked: window.showMinimized() }
@@ -401,10 +412,10 @@ ApplicationWindow {
             Item {
                 id: welcome; width: Math.min(parent.width - 70, 620); height: 270
                 x: composer.x + (composer.width - width) / 2; anchors.verticalCenter: parent.verticalCenter; anchors.verticalCenterOffset: -119
-                visible: backend.messages.length === 0
+                visible: backend.messageCount === 0
                 WelcomeMascot { id: welcomeMascot; anchors.horizontalCenter: parent.horizontalCenter; portraitIndex: backend.portrait }
                 Connections { target: backend; function onViewChanged() { welcomeMascot.reset() } }
-                Text { objectName: "welcomeGreeting"; anchors.horizontalCenter: parent.horizontalCenter; y: 231; width: parent.width; text: welcomeMascot.reactionText || welcomeMascot.rareGreeting || Character.greeting(I18n.t(backend.greeting), welcomeMascot.portraitIndex); color: Theme.yanami ? Theme.accent : Theme.muted; font.pixelSize: Theme.font(14); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; lineHeight: 1.35 }
+                Text { font.family: Theme.fontFamily; objectName: "welcomeGreeting"; anchors.horizontalCenter: parent.horizontalCenter; y: 231; width: parent.width; text: welcomeMascot.reactionText || welcomeMascot.rareGreeting || Character.greeting(I18n.t(backend.greeting), welcomeMascot.portraitIndex); color: Theme.yanami ? Theme.accent : Theme.muted; font.pixelSize: Theme.font(14, visible); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; lineHeight: 1.35 }
             }
 
             ListView {
@@ -420,6 +431,14 @@ ApplicationWindow {
                     beginBrowsing()
                     chatSelection.clear()
                     restoring = true; restoreIndex = row; restoreOffset = 0; restoreAttempts = 0
+                    restoreTimer.restart()
+                }
+                function jumpToLatest() {
+                    beginBrowsing()
+                    chatSelection.clear()
+                    followTail = true
+                    restoring = true; restoreIndex = -1; restoreOffset = 0; restoreAttempts = 0
+                    backend.messageModel.requestRange(Math.max(0, count - 4), count - 1)
                     restoreTimer.restart()
                 }
                 function scrollBy(delta) {
@@ -447,15 +466,30 @@ ApplicationWindow {
                     restoreTimer.restart()
                 }
                 acceptedButtons: Qt.NoButton
-                visible: backend.messages.length > 0
-                x: chatWidth.conversationLeft; width: parent.width - chatWidth.conversationLeft - chatWidth.conversationRight
+                visible: backend.messageCount > 0
+                x: chatWidth.conversationLeft
+                // Keep text layout stable while the sidebar moves. Commit the
+                // final wrap width once, without changing the sidebar PID motion.
+                Binding on width {
+                    value: chatPage.width - chatWidth.conversationLeft - chatWidth.conversationRight
+                    when: !conversation.visible || !sidebarWidthMotion.moving || sidebarResizeHandle.resizing
+                    restoreMode: Binding.RestoreNone
+                }
                 anchors.top: parent.top; anchors.topMargin: 20; anchors.bottom: composer.top; anchors.bottomMargin: 24
                 clip: true; spacing: 27; model: backend.messageModel
+                cacheBuffer: Math.max(0, height * 0.5)
                 // A hidden attached ScrollBar still writes contentY when its
                 // size changes. Variable-height rows must have one scroll owner.
                 onAtYEndChanged: if (atYEnd && !restoring && !chatSelection.dragging) followTail = true
                 onFollowTailChanged: saveViewport()
-                onContentYChanged: saveViewport()
+                onContentYChanged: { saveViewport(); pagePrefetch.restart() }
+                Timer { id: pagePrefetch; interval: 0; onTriggered: {
+                    if (conversation.restoring) return
+                    let first = conversation.indexAt(1, conversation.contentY + 1)
+                    let last = conversation.indexAt(1, conversation.contentY + conversation.height - 1)
+                    if (first < 0) first = conversation.atYEnd ? conversation.count - 1 : 0
+                    backend.messageModel.requestRange(first, last < first ? first + 4 : last)
+                } }
                 onContentHeightChanged: if (followTail && !restoring) tailTimer.restart()
                 onCountChanged: if (followTail && !restoring) tailTimer.restart()
                 Timer { id: tailTimer; interval: 0; onTriggered: { if (conversation.followTail && !conversation.restoring) conversation.positionViewAtEnd() } }
@@ -463,9 +497,16 @@ ApplicationWindow {
                     onTriggered: {
                         conversation.forceLayout()
                         conversation.restoreAttempts++
-                        if (conversation.followTail || conversation.restoreIndex < 0) conversation.positionViewAtEnd()
+                        if (conversation.count===0 && conversation.restoreAttempts<200)return
+                        if (conversation.followTail || conversation.restoreIndex < 0) {
+                            backend.messageModel.requestRange(Math.max(0,conversation.count-4),conversation.count-1)
+                            if(!backend.messageModel.rangeReady(Math.max(0,conversation.count-4),conversation.count-1) && conversation.restoreAttempts<200)return
+                            conversation.positionViewAtEnd()
+                        }
                         else {
                             const index = Math.min(conversation.restoreIndex, conversation.count - 1)
+                            backend.messageModel.requestRange(index,index+4)
+                            if(!backend.messageModel.rangeReady(index,index+4) && conversation.restoreAttempts<200)return
                             if (conversation.restoreAttempts === 1) { conversation.positionViewAtIndex(index, ListView.Beginning); conversation.forceLayout(); return }
                             const item = conversation.itemAtIndex(index)
                             if (!item && conversation.restoreAttempts < 5) return
@@ -489,19 +530,32 @@ ApplicationWindow {
                     function onTranscriptChanged() { if (conversation.followTail && !conversation.restoring) tailTimer.restart() }
                     function onViewChanged() { conversation.restoreViewport() }
                 }
+                footer: Item {
+                    width: conversation.width; height: turnStatus.visible ? turnStatus.implicitHeight + 20 : 0
+                    TaskStatus { id: turnStatus; objectName: "turnStatus"; x: 33; y: 8; status: backend.turnStatus }
+                }
                 delegate: Column {
                     id: messageRow
+                readonly property bool compactionNotice: modelData.customType === "umeko-compaction"
                     readonly property var replyMascot: closingMascot
                     required property var modelData
                     required property int index
                     readonly property point hoverPoint: chatSelection.mapToItem(messageRow, chatSelection.pointer.x, chatSelection.pointer.y)
                     readonly property bool hovered: chatSelection.hovering && hoverPoint.x >= 0 && hoverPoint.x <= width && hoverPoint.y >= 0 && hoverPoint.y <= height
                     width: conversation.width - 16; spacing: 10
-                    Row { visible: modelData.role !== "user"; spacing: 9
+                    onImplicitHeightChanged: if (!modelData._loading) backend.messageModel.recordHeight(index, implicitHeight)
+                    Item {
+                        visible: !!modelData._loading
+                        width: parent.width; height: modelData._estimatedHeight || 100
+                        BusyIndicator { objectName: "historyLoading_" + messageRow.index; x: 33; y: 12; width: 22; height: 22; visible: !modelData._loadError; running: visible && messageRow.visible }
+                        ActionButton { x: 33; y: 16; visible: !!modelData._loadError; text: I18n.t("重新加载消息"); glyph: "refresh-cw"; onClicked: backend.messageModel.retryPage(messageRow.index) }
+                    }
+                    Row { visible: !modelData._loading && !messageRow.compactionNotice && !modelData.continuation && modelData.role !== "user"; spacing: 9
                         AssistantAvatar { objectName: "assistantAvatar_" + messageRow.index; messageKey: window.avatarChatKey + "/" + messageRow.index }
-                        SelectableText { selectionController: chatSelection; messageIndex: messageRow.index; blockIndex: -100000; text: "umeko"; anchors.verticalCenter: parent.verticalCenter; color: Theme.ink; font.pixelSize: Theme.font(11); font.weight: Font.DemiBold }
+                        SelectableText { font.family: Theme.fontFamily; selectionController: chatSelection; messageIndex: messageRow.index; blockIndex: -100000; text: "umeko"; anchors.verticalCenter: parent.verticalCenter; color: Theme.ink; font.pixelSize: Theme.font(11, visible); font.weight: Font.DemiBold }
                     }
                     Rectangle {
+                        visible: !modelData._loading && !messageRow.compactionNotice
                         objectName: "messageBubble_" + messageRow.index
                         border.width: 1; border.color: window.searchHighlightRow === messageRow.index ? Theme.accent : "transparent"
                         Behavior on border.color { ColorAnimation { duration: 180 } }
@@ -516,6 +570,7 @@ ApplicationWindow {
                                 text: modelData.role === "user" ? modelData.text : ""; attachments: modelData.attachments || []
                                 selectionController: chatSelection; messageIndex: messageRow.index }
                             MessageBody { id: reply; width: parent.width
+                                preparedBlocks: modelData._rendered || null
                                 selectionController: chatSelection; messageIndex: messageRow.index
                                 visible: modelData.role !== "user" && text.length > 0 && !(modelData.activity || []).length
                                 text: modelData.role === "user" || (modelData.activity || []).length ? "" : modelData.text || (messageRow.index === conversation.count - 1 && backend.busy ? backend.toolStatus + "…" : "")
@@ -530,22 +585,71 @@ ApplicationWindow {
                         x: 33; text: I18n.t("查看请求与返回"); glyph: "code"; quiet: true
                         onClicked: requestInspector.show(modelData.diagnosticId)
                     }
+                    Column {
+                        id: compactionEvent
+                        objectName: "compactionEvent_" + messageRow.index
+                        x: 33; width: parent.width - 33
+                        visible: !modelData._loading && messageRow.compactionNotice
+                        readonly property var record: modelData.compaction || ({})
+                        readonly property string eventState: record.state || "success"
+                        readonly property string heading: eventState === "running" ? I18n.t("正在压缩上下文") : eventState === "failure" ? I18n.t("上下文压缩失败") : I18n.t("上下文已压缩")
+                        property bool expanded: false
+                        spacing: 6
+                        onExpandedChanged: if (!expanded) chatSelection.hideDetails(messageRow.index, 0, 1)
+                        Item {
+                            width: Math.min(parent.width, compactionHeading.implicitWidth); height: Theme.control(24)
+                            Row {
+                                id: compactionHeading; height: parent.height; spacing: 7
+                                ActivitySpinner { visible: compactionEvent.eventState === "running"; width: Theme.icon(12); height: Theme.icon(12); anchors.verticalCenter: parent.verticalCenter }
+                                Text { font.family: Theme.fontFamily; text: compactionEvent.heading; color: compactionHover.interactionHovered ? Theme.ink : Theme.muted; font.pixelSize: Theme.font(12, visible); anchors.verticalCenter: parent.verticalCenter }
+                                Glyph { name: compactionEvent.expanded ? "chevron-down" : "chevron-right"; width: Theme.icon(12); height: Theme.icon(12); anchors.verticalCenter: parent.verticalCenter }
+                            }
+                            ChatHitArea {
+                                id: compactionHover; objectName: "compactionEventToggle_" + messageRow.index
+                                anchors.fill: parent; selectionController: chatSelection
+                                onClicked: compactionEvent.expanded = !compactionEvent.expanded
+                            }
+                            Accessible.role: Accessible.Button; Accessible.name: compactionEvent.heading
+                            Accessible.description: compactionEvent.expanded ? I18n.t("已展开") : I18n.t("已折叠")
+                        }
+                        Item {
+                            visible: compactionEvent.expanded
+                            width: parent.width; height: compactionDetails.implicitHeight
+                            Rectangle { width: 1; height: parent.height; color: Theme.line; x: 6 }
+                            SelectableText {
+                                id: compactionDetails; objectName: "compactionEventDetails_" + messageRow.index
+                                x: 23; width: parent.width - x
+                                text: {
+                                    const detail = compactionEvent.record, lines = []
+                                    if (typeof detail.before === "number") lines.push(I18n.t("压缩前：") + detail.before + " tokens")
+                                    if (typeof detail.after === "number") lines.push(I18n.t("压缩后：") + detail.after + " tokens")
+                                    if (detail.summary) lines.push("\n" + I18n.t("压缩摘要") + "\n" + detail.summary)
+                                    if (detail.error) lines.push("\n" + I18n.t(detail.error))
+                                    return lines.join("\n")
+                                }
+                                color: Theme.muted; font.pixelSize: Theme.font(13, visible); wrapMode: TextEdit.Wrap; textFormat: TextEdit.PlainText
+                                selectionController: chatSelection; messageIndex: messageRow.index; blockIndex: 0
+                                conditionalSelection: true
+                            }
+                        }
+                    }
                     OutputLimitNotice {
                         objectName: "outputLimitNotice_" + messageRow.index
                         x: 33; width: parent.width - 33
-                        visible: modelData.role === "assistant" && modelData.stopReason === "length"
+                        visible: !messageRow.compactionNotice && modelData.role === "assistant" && modelData.stopReason === "length"
                         continuable: messageRow.index === conversation.count - 1 && !backend.busy
                         onContinued: backend.send(I18n.t("继续刚才未完成的回答，从中断处接着输出，不要重复已有内容。"))
                     }
                     Item {
                         objectName: "messageActions_" + messageRow.index
+                        visible: !messageRow.compactionNotice
                         width: parent.width; height: 18
                         opacity: messageRow.hovered || actionHover.hovered ? 1 : 0
                         HoverHandler { id: actionHover }
                         Row {
                             x: modelData.role === "user" ? parent.width - width : 33
                             height: parent.height; spacing: 7
-                            Text { objectName: "messageTime_" + messageRow.index; anchors.verticalCenter: parent.verticalCenter; color: Theme.muted; font.pixelSize: Theme.font(11)
+                            Text { font.family: Theme.fontFamily; objectName: "messageTime_" + messageRow.index; anchors.verticalCenter: parent.verticalCenter; color: Theme.muted; font.pixelSize: Theme.font(11, visible)
                                 text: { if (!modelData.timestamp) return ""; const date = new Date(modelData.timestamp); if (isNaN(date.getTime())) return ""; return Qt.formatDateTime(date, date.toDateString() === new Date().toDateString() ? "hh:mm" : "MM-dd hh:mm") } }
                             ActionButton { objectName: "copyMessage_" + messageRow.index; selectionController: chatSelection; glyph: "copy"; width: Theme.control(22); height: Theme.control(18); quiet: true; enabled: parent.parent.opacity > 0; hint: I18n.t("复制消息")
                                 onClicked: { const activity = modelData.activity || []; const prose = activity.filter(item => item.kind === "text").map(item => item.text).join("\n\n"); backend.copy([prose || modelData.text || "", ...(modelData.attachments || []).map(item => item.name)].filter(part => !!part).join("\n")) } }
@@ -556,7 +660,7 @@ ApplicationWindow {
                         objectName: "replyEndMascot_" + messageRow.index
                         selectionController: chatSelection
                         width: Character.id === "doubao" ? Theme.icon(72) : 56
-                        visible: messageRow.index === conversation.count - 1 && modelData.role === "assistant" && !modelData.error && (modelData.text || "").trim().length > 0 && !backend.running
+                        visible: !modelData._loading && !messageRow.compactionNotice && messageRow.index === conversation.count - 1 && modelData.role === "assistant" && !modelData.error && (modelData.text || "").trim().length > 0 && !backend.running && (backend.turnStatus.state === "finished" || modelData.stopReason === "stop")
                         x: 33
                     }
                 }
@@ -574,6 +678,18 @@ ApplicationWindow {
                 anchors.right: parent.right
                 anchors.top: conversation.top; anchors.bottom: conversation.bottom
                 view: conversation; enabled: !chatCover.visible; z: 20
+            }
+            ActionButton {
+                id: latestMessages; objectName: "latestMessagesButton"
+                readonly property real distanceFromBottom: Math.max(0, conversation.originY + conversation.contentHeight - conversation.height - conversation.contentY)
+                readonly property bool offered: conversation.visible && !conversation.followTail && !conversation.restoring && !chatCover.visible && distanceFromBottom > Math.max(Theme.control(160), conversation.height * 0.65)
+                anchors.horizontalCenter: composer.horizontalCenter; anchors.bottom: composer.top; anchors.bottomMargin: Theme.control(12)
+                z: 35; implicitHeight: Theme.control(31)
+                text: I18n.t("最新消息"); glyph: "arrow-down"
+                opacity: offered ? 1 : 0; visible: opacity > 0.01; enabled: offered
+                Behavior on opacity { NumberAnimation { duration: 140 } }
+                background: Rectangle { radius: height / 2; color: latestMessages.interactionHovered ? Theme.hover : Theme.surface; border.color: Theme.line }
+                onClicked: conversation.jumpToLatest()
             }
 
             Composer {
@@ -593,7 +709,7 @@ ApplicationWindow {
             }
             Row { id: footerActions; x: composer.x + (composer.width - width) / 2; anchors.bottom: parent.bottom; anchors.bottomMargin: 13; spacing: 8
                 ActionButton { height: Theme.control(28); quiet: true; text: "Agent"; glyph: "sliders"; onClicked: window.settings(3) }
-                ActionButton { objectName: "forkSessionButton"; visible: backend.messages.length > 0; enabled: !backend.busy; height: Theme.control(28); quiet: true; text: I18n.t("分支"); glyph: "branch"; onClicked: backend.forkSession() }
+                ActionButton { objectName: "forkSessionButton"; visible: backend.messageCount > 0; enabled: !backend.busy; height: Theme.control(28); quiet: true; text: I18n.t("分支"); glyph: "chat-fork"; onClicked: backend.forkSession() }
             }
             DesktopPluginMenu {
                 id: desktopPluginMenu
@@ -681,6 +797,6 @@ ApplicationWindow {
         width: Math.min(toastLabel.implicitWidth + 40, 750); height: toastLabel.implicitHeight + 24; radius: 10
         color: Theme.ink; visible: window.notification !== ""
         opacity: visible ? 1 : 0
-        Text { id: toastLabel; anchors.centerIn: parent; text: I18n.t(window.notification); color: Theme.bg; font.pixelSize: Theme.font(12); width: Math.min(implicitWidth, 710); wrapMode: Text.Wrap }
+        Text { font.family: Theme.fontFamily; id: toastLabel; anchors.centerIn: parent; text: I18n.t(window.notification); color: Theme.bg; font.pixelSize: Theme.font(12, visible); width: Math.min(implicitWidth, 710); wrapMode: Text.Wrap }
     }
 }

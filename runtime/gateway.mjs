@@ -4,6 +4,7 @@ import { createHash, timingSafeEqual, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { once } from 'node:events';
+import {safeErrorText} from './provider-errors.mjs';
 import { upstreamFailure } from './network-retry.mjs';
 import { fetchProvider, failureReport } from './transport.mjs';
 import { responsesRequest, responsesEvents } from './openai-responses.mjs';
@@ -110,7 +111,7 @@ export async function* anthropicEvents(events) {
 export async function collectOpenAI(events) {
   let content = '', thinking = '', usage = {}, finish = 'stop'; const calls = new Map();
   for await (const event of events) {
-    if (event.error) throw new Error('Upstream returned an error');
+    if (event.error) throw new Error(safeErrorText(JSON.stringify(event.error)));
     Object.assign(usage, event.usage || {});
     for (const choice of event.choices || []) {
       const delta = choice.delta || choice.message || {};
@@ -235,10 +236,10 @@ export class Gateway {
       record.response.headers = Object.fromEntries(response.headers);
       const tracked = async function* () {
         const decoder = new TextDecoder();
-        for await (const chunk of response.body) { record.response.body += decoder.decode(chunk, {stream:true}); yield chunk; }
+        for await (const chunk of response.body) { const text=decoder.decode(chunk, {stream:true}); if(record.response.body.length<MAX_BODY)record.response.body+=(text.slice(0,MAX_BODY-record.response.body.length)); yield chunk; }
         record.response.body += decoder.decode();
       };
-      if (!response.ok) { record.response.body = await response.text(); throw new Error(`Provider returned HTTP ${response.status}`); }
+      if (!response.ok) { for await(const chunk of tracked()){if(record.response.body.length>=MAX_BODY)break;} throw new Error(`Provider returned HTTP ${response.status}`); }
       let events;
       if (response.headers.get('content-type')?.includes('event-stream')) events = parseSSE(tracked());
       else { const raw = await response.text(); record.response.body = raw; if (raw.length > MAX_BODY) throw new Error('Upstream response too large'); events = [JSON.parse(raw)]; }

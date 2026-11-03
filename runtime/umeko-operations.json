@@ -212,9 +212,6 @@
     "appearance.fontFamily": {
       "target": "backend",
       "method": "setFontFamily",
-      "editions": [
-        "python"
-      ],
       "args": [
         [
           "family",
@@ -796,8 +793,33 @@
         ]
       ]
     },
-    "extensions.details": {"target":"management","method":"loadExtensionDetails","async":true,"args":[["id","string"]]},
-    "extensions.activation": {"target":"management","method":"setExtensionMode","idle":"view","async":true,"args":[["id","string"],["mode","string"]]},
+    "extensions.details": {
+      "target": "management",
+      "method": "loadExtensionDetails",
+      "async": true,
+      "args": [
+        [
+          "id",
+          "string"
+        ]
+      ]
+    },
+    "extensions.activation": {
+      "target": "management",
+      "method": "setExtensionMode",
+      "idle": "view",
+      "async": true,
+      "args": [
+        [
+          "id",
+          "string"
+        ],
+        [
+          "mode",
+          "string"
+        ]
+      ]
+    },
     "extensions.scan": {
       "target": "management",
       "method": "scan",
@@ -1076,13 +1098,103 @@
       "async": true,
       "args": []
     },
-    "agent_bus.create": {"target":"global-agents","args":[["requestKey","string"],["name","string",""],["character","string",""],["model","string",""],["instructions","string",""]]},
-    "agent_bus.creation_status": {"target":"global-agents","read":true,"args":[["requestId","string"]]},
-    "agent_bus.connections": {"target":"global-agents","read":true,"args":[]},
-    "agent_bus.set_connection": {"target":"global-agents","args":[["sessionId","string"],["enabled","boolean"]]},
-    "agent_bus.overview": {"target":"global-agents","read":true,"args":[]},
-    "agent_bus.requests": {"target":"global-agents","read":true,"args":[]},
-    "agent_bus.dispatch": {"target":"global-agents","args":[["targetId","string"],["text","string"]]},
-    "agent_bus.reply": {"target":"global-agents","args":[["requestId","string"],["result","string"],["status","string","completed"]]}
+    "agent_bus.create": {
+      "target": "global-agents",
+      "args": [
+        [
+          "requestKey",
+          "string"
+        ],
+        [
+          "name",
+          "string",
+          ""
+        ],
+        [
+          "character",
+          "string",
+          ""
+        ],
+        [
+          "model",
+          "string",
+          ""
+        ],
+        [
+          "instructions",
+          "string",
+          ""
+        ]
+      ]
+    },
+    "agent_bus.creation_status": {
+      "target": "global-agents",
+      "read": true,
+      "args": [
+        [
+          "requestId",
+          "string"
+        ]
+      ]
+    },
+    "agent_bus.connections": {
+      "target": "global-agents",
+      "read": true,
+      "args": []
+    },
+    "agent_bus.set_connection": {
+      "target": "global-agents",
+      "args": [
+        [
+          "sessionId",
+          "string"
+        ],
+        [
+          "enabled",
+          "boolean"
+        ]
+      ]
+    },
+    "agent_bus.overview": {
+      "target": "global-agents",
+      "read": true,
+      "args": []
+    },
+    "agent_bus.requests": {
+      "target": "global-agents",
+      "read": true,
+      "args": []
+    },
+    "agent_bus.dispatch": {
+      "target": "global-agents",
+      "args": [
+        [
+          "targetId",
+          "string"
+        ],
+        [
+          "text",
+          "string"
+        ]
+      ]
+    },
+    "agent_bus.reply": {
+      "target": "global-agents",
+      "args": [
+        [
+          "requestId",
+          "string"
+        ],
+        [
+          "result",
+          "string"
+        ],
+        [
+          "status",
+          "string",
+          "completed"
+        ]
+      ]
+    }
   }
 }

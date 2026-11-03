@@ -287,3 +287,17 @@ JS 依赖和许可证，例如将入口与 `node_modules` 一起放在 `vendor/`
 `change-review` 是默认关闭的内置应用服务。在插件管理启用后，宿主在 Pi 原生 `agent_start` 边界等待独立 Git 基线采集，在 `agent_end`、用户中止或主 Agent 进程退出后比较并请求打开页面。关闭页面不停止采集，停用清理临时快照。仅对应当前聊天可自动打开。全应用只保留最近一轮的临时结果，下一轮开始或退出后清除；不保存历史。页面以文件树展示，点击进入 Widget 内的 diff，再返回文件树；图标、按钮和只读菜单复用官方 Git Widget。
 
 基线是本轮开始前的工作目录，而非 HEAD，可能包含并发编辑。采集最多 5 秒、4000 文件、单文件 2 MiB、总内容 32 MiB；二进制和受限文件只显示状态。使用独立 Git 对象/索引，不改项目暂存区和历史。Git 缺失或采集失败不阻止正常 Agent 工作。详情见内置包的 README.md。
+
+
+### 原生版 0.6.6 会话能力与 Widget 配置
+
+插件页可通过 `sdk.saveConfig(object)` 保存本 Widget 的非秘密配置，使用返回 ID 匹配 `configSaved(request, {ok,error?})`；保存后 `sdk.config` 更新。`liveConfig: true` 的 Widget 收到新配置，其余按原生命周期重启。`context.open_file(relative)` 要求 `workspace.read`，使用系统默认应用打开工作区内文件。
+
+- `pi.tools {id,query?,offset?,limit?}`：只读分页查询插件的工具；原生组使用 `builtin:pi-tools`（兼容 `native`）。返回 `tools/total/hasMore/loading/sessionEnabled/profile`；每项有 `name/description/enabled/visible/editable/owner`，说明最多 1024 字，最多 200 项。初始化通过 `pi.inventory` 单独发起，不发送模型请求。
+- `pi.preset {preset}`：`standard/minimal/full/custom` 四种会话预设；`full` 在界面显示“默认”。切换预设保留上次自定义设置。
+- `pi.plugin {id,enabled:boolean}`：当前聊天的插件总开关，关闭可选插件后不加载其模块和钩子。
+- `pi.tool {name,enabled:boolean}`：当前聊天的逐工具开关；关闭后从实际注册表和嵌套执行入口排除。插件总开关优先于工具开关。
+
+这三个会话写操作要求 `pi.manage` 及当前任务、子代理、管理操作均空闲；官方内置 Pi Widget 的用户开关直接生效，其他 Widget 仍需宿主确认。配置保存到本聊天元数据，不改写全局或项目设置，兼容旧版 `blockedTools`。所有 Pi 扩展与工具（包括 Umeko 内置扩展）都可按当前会话设置；标准 Pi 仅保留 8 个原生工具，极简仅保留 read/bash/edit/write。
+
+Skills 目录管理使用 `skills.read/skills.manage` 权限；浏览、预览、打开、复制、附加为只读操作，不启动模型。`skills.attach {id,enabled}` 的内置页面用户选择即时保存到当前聊天。导入、重命名、删除重新核验聊天、工作区、目录身份和空闲状态，保留宿主确认；任务结果使用 `skills.job {id,offset?,limit?}` 分页获取。关闭 Widget 释放目录快照和导入计划。

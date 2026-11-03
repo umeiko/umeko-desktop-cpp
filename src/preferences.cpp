@@ -1,5 +1,7 @@
 #include "backend.hpp"
 #include <cmath>
+#include <QFontDatabase>
+#include <QGuiApplication>
 #include <stdexcept>
 #include <QSslCertificate>
 bool Backend::setReasoningEffort(QString value) {
@@ -30,14 +32,39 @@ void Backend::setLanguage(QString language) {
 void Backend::setFontScale(double scale) {
   if (!std::isfinite(scale))
     return;
-  scale = qRound(qBound(0.5, scale, 2.0) * 100) / 100.;
+  scale = qRound(qBound(0.3, scale, 2.0) * 100) / 100.;
   if (scale == fontScale())
     return;
   auto ui = store.data["ui"].toMap();
   ui["fontScale"] = scale;
   store.data["ui"] = ui;
-  emit appearanceChanged();
+  emit typographyChanged();
   appearanceSave.start();
+}
+QStringList Backend::availableFonts() const {
+  static const auto result=[] {
+    const auto installed=QFontDatabase::families();QStringList names{"系统默认"};
+    for(const auto &family:QStringList{"Noto Sans CJK SC","Noto Sans SC","Microsoft YaHei UI","WenQuanYi Micro Hei","WenQuanYi Zen Hei","PingFang SC","SimSun","sans-serif","serif"})
+      if(installed.contains(family) || family=="sans-serif" || family=="serif")names<<family;
+    return names;
+  }();return result;
+}
+void Backend::setFontFamily(QString family) {
+  if(family=="系统默认")family.clear();
+  if(family.size()>128 || (!family.isEmpty() && family!="sans-serif" && family!="serif" && !QFontDatabase::families().contains(family)))return;
+  if(family==fontFamily())return;
+  store.data["fontFamily"]=family;
+  auto font=family.isEmpty() ? QFontDatabase::systemFont(QFontDatabase::GeneralFont) : QGuiApplication::font();
+#ifdef Q_OS_WIN
+  if(family.isEmpty())font=QFont("Microsoft YaHei UI",10);
+#endif
+  if(!family.isEmpty())font.setFamily(family);
+  QGuiApplication::setFont(font);emit typographyChanged();emit changed();appearanceSave.start();
+}
+void Backend::setLineSpacing(QString spacing) {
+  if(!QStringList{"compact","standard","relaxed"}.contains(spacing) || spacing==lineSpacing())return;
+  auto ui=store.data["ui"].toMap();ui["lineSpacing"]=spacing;store.data["ui"]=ui;
+  emit typographyChanged();appearanceSave.start();
 }
 bool Backend::setProviderProxy(QString id, QString mode, QString address) {
   return setProviderNetwork(id, mode, address, provider(id)["proxy"].toMap()["caFile"].toString());
@@ -104,4 +131,42 @@ QString Backend::requestReport(QString id) const {
   QFile file(store.directory + "/request-errors/" + id + ".json");
   return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll())
                                         : QString();
+}
+
+bool Backend::saveDesktopSettings(QString raw) {
+  QJsonParseError error;auto doc=QJsonDocument::fromJson(raw.toUtf8(),&error);
+  if(error.error!=QJsonParseError::NoError || !doc.isObject())return false;
+  auto values=doc.object().toVariantMap(), desktop=store.data["desktop"].toMap();
+  for(auto it=values.cbegin();it!=values.cend();++it) {
+    if(QStringList{"autoOpenSubmissions","chatWidthHints"}.contains(it.key())){if(it.value().metaType().id()!=QMetaType::Bool)return false;}
+    else if(it.key()=="webDisplay"){if(!QStringList{"embedded","external"}.contains(it.value().toString()))return false;}
+    else return false;
+    desktop[it.key()]=it.value();
+  }
+  store.data["desktop"]=desktop;store.save();
+  for(const auto &s:records){auto web=webviewConfiguration();web["autoOpen"]=desktop.value("autoOpenSubmissions",true);web["display"]=desktop.value("webDisplay","embedded");writePi(s,{{"type","desktop_settings"},{"webview",web}});}
+  emit changed();emit desktopSettingsChanged();return true;
+}
+bool Backend::openExternalHtml(QString path) {
+  if(store.data["desktop"].toMap()["webDisplay"]!="external" || !QStringList{"html","htm"}.contains(QFileInfo(path).suffix().toLower()))return false;
+  openChatboxPath(path,false);return true;
+}
+void Backend::openWebPreview(QString raw,QString title) {
+  const auto url=normalizeWebUrl(raw);if(url.isEmpty())return;
+  if(store.data["desktop"].toMap()["webDisplay"]=="external")QDesktopServices::openUrl(QUrl(url));
+  else if(webviewAvailable())emit webRequested(url,title);
+  else QDesktopServices::openUrl(QUrl(url));
+}
+
+void Backend::setToolPermissionMode(QString mode) {
+  if(!QStringList{"auto","ask"}.contains(mode)){emit toast("工具执行权限模式无效");return;}
+  auto agent=store.data["agent"].toMap();if(agent.value("toolPermissionMode","auto")==mode)return;
+  const auto previous=agent;agent["toolPermissionMode"]=mode;store.data["agent"]=agent;
+  if(!store.save()){store.data["agent"]=previous;emit toast("工具执行权限保存失败："+store.error);return;}
+  emit changed();
+  for(auto session:records)writePi(session,{{"type","tool_permission_mode"},{"mode",mode},{"language",language()},{"dataDir",store.directory}});
+}
+void Backend::compactSession() {
+  if(!compactionAvailable() || view->busy())return;
+  command(view,"compact");
 }

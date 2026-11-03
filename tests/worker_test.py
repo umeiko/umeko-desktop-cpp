@@ -114,6 +114,8 @@ class WorkerTests(unittest.TestCase):
             self.assertNotEqual(result.returncode,0)
             report=events[-1]['diagnostics'][0]
             self.assertEqual(report['response']['status'],429)
+            self.assertIn('HTTP 429',events[-1]['message'])
+            self.assertIn('upstream-details',events[-1]['message'])
             self.assertEqual(report['response']['body'],'upstream-details [REDACTED]')
             self.assertNotIn('synthetic-llm-token',result.stdout)
             self.assertEqual(json.loads(report['request']['body'])['messages'][0]['content'],'full prompt')

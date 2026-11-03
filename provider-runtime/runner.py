@@ -113,7 +113,7 @@ def main():
         send("result", data=result)
         return 0
     except Exception as exc:
-        message = str(exc)[:400] if isinstance(exc, ProviderError) else "供应商运行失败，请检查 Python 依赖、插件配置与网络"
+        message = str(exc)[:1000] if isinstance(exc, ProviderError) else "供应商运行失败，请检查 Python 依赖、插件配置与网络"
         def redact(value):
             nonlocal message
             if isinstance(value, dict):

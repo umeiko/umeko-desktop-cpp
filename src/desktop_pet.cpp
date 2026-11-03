@@ -1,4 +1,5 @@
 #include "desktop_pet.hpp"
+#include "pet_reminders.hpp"
 #include "backend.hpp"
 #include "desktop_plugins.hpp"
 #include "miniz.h"
@@ -11,7 +12,7 @@ namespace {
 const QStringList states{"idle",    "thinking", "working",
                          "waiting", "done",     "error"};
 const QStringList builtinAppearances{"yanami", "komari", "tiara", "whale-girl", "doubao"};
-const QVariantMap defaults{{"visible", false},      {"appearance", "yanami"},
+const QVariantMap defaults{{"reminderNotificationsEnabled", true}, {"visible", false},      {"appearance", "yanami"},
                            {"size", 192},           {"alwaysOnTop", true},
                            {"paused", false},       {"sampleIntervalMs", 1500},
                            {"minimumStateMs", 3000}};
@@ -301,6 +302,17 @@ DesktopPet::DesktopPet(DesktopPlugins *manager) : QObject(manager), m(manager) {
     lastError = "桌宠配置或形象不可用，已恢复默认设置";
     options = defaults;
   }
+  reminders=new PetReminders(directory,this);
+  reminders->visible=[this]{return visible();};
+  reminders->notifications=[this]{return options["reminderNotificationsEnabled"].toBool();};
+  connect(reminders,&PetReminders::changed,this,&DesktopPet::syncReminders);
+  connect(reminders,&PetReminders::due,this,[this](QVariantList rows){
+    if(!visible() || !options["reminderNotificationsEnabled"].toBool())return;
+    for(const auto &row:rows){bool found=false;for(auto &old:card)if(old.toMap()["id"]==row.toMap()["id"]){old=row;found=true;break;}if(!found)card<<row;}
+    emit reminderCardChanged();emit reminderPresented(rows);
+  });
+  connect(qGuiApp,&QGuiApplication::applicationStateChanged,this,[this](Qt::ApplicationState state){if(running && state==Qt::ApplicationActive)reminders->check();});
+
 }
 void DesktopPet::loadPacks() {
   packs.clear();
@@ -365,11 +377,30 @@ QVariantMap DesktopPet::state() const {
           {"importing", importing},
           {"error", lastError}};
 }
+QVariantList DesktopPet::reminderItems() const {
+  try {return reminders->handle("listItems",{})["items"].toList();}catch(...){return {};}
+}
+void DesktopPet::syncReminders() {
+  const auto rows=reminderItems();QVariantList next;
+  for(const auto &old:card)for(const auto &row:rows)if(row.toMap()["id"]==old.toMap()["id"] && row.toMap()["revision"]==old.toMap()["revision"])next<<row;
+  if(card!=next){card=next;emit reminderCardChanged();}emit changed();
+}
+void DesktopPet::openReminders(QString id,bool create) {
+  selection={{"id",id},{"create",create},{"serial",selection["serial"].toInt()+1}};emit changed();emit settingsRequested();
+}
+void DesktopPet::dismissReminders(){if(!card.isEmpty()){card.clear();emit reminderCardChanged();}}
+void DesktopPet::completeReminder(QString id,int revision) {
+  try {
+    const auto item=reminders->handle("getItem",{{"id",id}})["item"].toMap();
+    if(item["revision"].toInt()==revision)reminders->handle("completeItem",{{"id",id}});else syncReminders();
+  }catch(const std::exception &e){lastError=QString::fromUtf8(e.what());emit changed();}
+}
 QVariantMap DesktopPet::status() const {
   return {{"config", options},
           {"state", state()},
           {"appearances", appearances()},
-          {"visible", visible()}};
+          {"visible", visible()},{"reminders",reminders ? reminders->summary() : QVariantMap{}},{"reminderSelection",selection},
+          {"now",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},{"localNow",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)}};
 }
 QVariantMap DesktopPet::configure(QVariantMap patch, bool persist) {
   auto value = options;
@@ -377,7 +408,7 @@ QVariantMap DesktopPet::configure(QVariantMap patch, bool persist) {
     need(defaults.contains(it.key()), "未知的桌宠配置项");
     value[it.key()] = it.value();
   }
-  for (auto key : {"visible", "alwaysOnTop", "paused"})
+  for (auto key : {"visible", "alwaysOnTop", "paused", "reminderNotificationsEnabled"})
     need(value[key].typeId() == QMetaType::Bool,
          QString(key) + " 必须是布尔值");
   const QList<std::tuple<QString, int, int>> limits{
@@ -407,6 +438,7 @@ QVariantMap DesktopPet::configure(QVariantMap patch, bool persist) {
     rareIdleActive = false;
   }
   options = value;
+  if(!options["visible"].toBool() || !options["reminderNotificationsEnabled"].toBool())dismissReminders();
   timer.setInterval(value["sampleIntervalMs"].toInt());
   emit changed();
   emit m->changed();
@@ -416,12 +448,14 @@ void DesktopPet::start() {
   if (running || closed)
     return;
   running = true;
+  reminders->start();
   timer.start(options["sampleIntervalMs"].toInt());
   sample();
   emit changed();
 }
 void DesktopPet::stop() {
   running = false;
+  reminders->stop();dismissReminders();
   rareIdleActive = false;
   emit reaction("");
   timer.stop();
@@ -551,6 +585,7 @@ QVariantMap DesktopPet::handle(QString method, QVariantMap args) {
                   .toMap()[method]
                   .toMap();
   need(!spec.isEmpty(), "未知的桌宠方法，请读取 widgets.docs");
+  if(QStringList{"listItems","getItem","createItem","updateItem","completeItem","deleteItem"}.contains(method))return reminders->handle(method,args);
   auto schema = spec["parameters"].toMap(),
        properties = schema["properties"].toMap();
   for (auto key : schema["required"].toStringList())

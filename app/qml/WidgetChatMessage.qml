@@ -21,12 +21,12 @@ Column {
             width: Theme.icon(40); height: width; sourceSize: Qt.size(96,96)
             fillMode: Image.PreserveAspectFit; smooth: false
         }
-        Text {
+        Text { font.family: Theme.fontFamily;
             anchors.verticalCenter: parent.verticalCenter
             width: Math.max(0,root.width-Theme.icon(40)-9);elide: Text.ElideRight
             text: root.message.role === "custom" ? I18n.t("智能体总线") : root.assistantName
             textFormat: Text.PlainText; color: Theme.ink
-            font.pixelSize: Theme.font(11); font.weight: Font.DemiBold
+            font.pixelSize: Theme.font(11, visible); font.weight: Font.DemiBold
         }
     }
     Rectangle {
@@ -50,6 +50,13 @@ Column {
             }
             ActivitySpinner { visible: !root.user && root.last && root.busy && !(root.message.activity || []).length && !(root.message.text || "").length; width: Theme.icon(14); height: width }
         }
+    }
+    ActionButton {
+        objectName: "widgetRequestDetails_" + root.messageIndex
+        x: 33
+        visible: !root.user && !!root.message.error && (root.message.diagnosticId || "").length > 0
+        text: I18n.t("查看请求与返回"); glyph: "code"; quiet: true
+        onClicked: backend.showRequestDetails(root.message.diagnosticId)
     }
     ActionButton {
         objectName: "widgetCopyMessage_" + root.messageIndex

@@ -300,20 +300,35 @@ QVariantMap U::visionSuggestion(QString name) {
                              .match(name)
                              .hasMatch()}};
 }
+qint64 U::providerContext(QVariantMap model) {
+  qint64 minimum=0;
+  const QStringList keys{"providerContextWindow","contextWindow","max_model_len","context_length","context_window","max_context_length","max_input_tokens","inputTokenLimit"};
+  const QStringList containers{"top_provider","limits","capabilities","model_info","metadata","parameters"};
+  std::function<void(QVariantMap,int)> collect=[&](QVariantMap row,int depth){
+    if(depth>3 || row.isEmpty())return;
+    for(const auto &key:keys){const auto v=row.value(key);if(v.isNull() || v.metaType().id()==QMetaType::Bool)continue;bool ok=false;double n=v.toDouble(&ok);if(ok && std::isfinite(n) && n>0 && n<9007199254740991. && std::floor(n)==n && (v.metaType().id()!=QMetaType::QString || QRegularExpression("^\\s*\\d+\\s*$").match(v.toString()).hasMatch()))minimum=minimum?qMin(minimum,qint64(n)):qint64(n);}
+    for(const auto &key:containers){const auto nested=row.value(key).toMap();if(!nested.isEmpty())collect(nested,depth+1);}
+  };collect(model,0);return minimum;
+}
 QVariantMap U::normalizeModel(QVariantMap m, QVariantMap previous) {
   auto ctx = m.contains("contextWindow") || m.contains("contextWindowAuto")
                  ? m
                  : previous;
   bool automatic =
       ctx.value("contextWindowAuto", !ctx.contains("contextWindow")).toBool();
-  int count = automatic ? contextSuggestion(m.value("upstream").toString())
+  auto reportedSource=previous.isEmpty()?m:previous;
+  if(!previous.isEmpty() && previous.value("upstream",m["upstream"])!=m["upstream"])reportedSource.clear();
+  const auto reported=reportedSource.contains("providerContextWindow")?providerContext({{"providerContextWindow",reportedSource.value("providerContextWindow")}}):0;
+  qint64 count = automatic ? contextSuggestion(m.value("upstream").toString())
                               .value("tokens")
-                              .toInt()
+                              .toLongLong()
                         : parseContext(ctx.value("contextWindow"));
   if (!count)
     throw std::runtime_error("上下文长度需为 1024–16777216，可填写 256K、1M");
   auto vis = m.contains("vision") || m.contains("visionAuto") ? m : previous;
   bool va = vis.value("visionAuto", !vis.contains("vision")).toBool();
+  if(automatic && reported)count=reported;
+  if(reported)m["providerContextWindow"]=reported;else m.remove("providerContextWindow");
   m["contextWindow"] = count;
   m["contextWindowAuto"] = automatic;
   m["visionAuto"] = va;
@@ -428,6 +443,24 @@ static QString textOf(QVariant content, QString type = "text",
   }
   return out.join('\n');
 }
+QVariantMap U::compactionView(QVariantMap entry) {
+  if(entry["type"]!="custom" || entry["customType"]!="umeko-compaction")return {};
+  const auto data=entry["data"].toMap();const auto version=data["version"].toInt();
+  const auto numeric=[](QVariant v,bool nullable){if(v.isNull())return nullable;if(v.metaType().id()==QMetaType::Bool || v.metaType().id()==QMetaType::QString)return false;bool ok=false;double d=v.toDouble(&ok);return ok && std::isfinite(d) && d>=0;};
+  QString text;
+  if(version==1){
+    if(!numeric(data["before"],false)||!numeric(data["after"],false)||std::floor(data["before"].toDouble())!=data["before"].toDouble()||std::floor(data["after"].toDouble())!=data["after"].toDouble())return {};
+    text=QString("已压缩：%1 → %2 tokens").arg(data["before"].toLongLong()).arg(data["after"].toLongLong());
+  } else if(version==2){
+    if(QUuid(data["eventId"].toString()).isNull() || !QStringList{"running","success","failure"}.contains(data["state"].toString()) || !QStringList{"manual","auto"}.contains(data["mode"].toString()) || data["afterEstimated"].metaType().id()!=QMetaType::Bool || !data["afterEstimated"].toBool() || !numeric(data["before"],true)||!numeric(data["after"],true) || data["summary"].metaType().id()!=QMetaType::QString || data["error"].metaType().id()!=QMetaType::QString)return {};
+  } else return {};
+  return {{"role","assistant"},{"text",text},{"error",false},{"customType","umeko-compaction"},{"compaction",data},{"entryId",entry["id"]},{"timestamp",entry["timestamp"]}};
+}
+QVariantMap U::compactionStatus(QVariantMap row,QString active) {
+  auto data=row["compaction"].toMap();
+  if(row["customType"]=="umeko-compaction" && data["version"].toInt()==2 && data["state"]=="running" && data["eventId"]!=active){data["state"]="failure";data["error"]="Compaction interrupted";row["compaction"]=data;}
+  return row;
+}
 QPair<QVariantList, QVariantList> U::preview(const QString &file, qint64 limit) {
   QFile f(file);
   if (!f.open(QIODevice::ReadOnly))
@@ -474,8 +507,10 @@ QPair<QVariantList, QVariantList> U::preview(const QString &file, qint64 limit) 
       results[m["toolCallId"].toString()] = m;
     }
   }
-  QVariantList rows, tree;
+  QVariantList rows, tree;QHash<QString,int> compactions;
   for (auto e : branch) {
+    auto receipt=compactionView(e);
+    if(!receipt.isEmpty()){auto data=receipt["compaction"].toMap();const auto event=data["eventId"].toString();if(data["version"].toInt()==2 && compactions.contains(event)){auto row=rows[compactions[event]].toMap();row["compaction"]=data;rows[compactions[event]]=row;}else{if(data["version"].toInt()==2)compactions[event]=rows.size();rows<<receipt;}continue;}
     if (e["type"] != "message")
       continue;
     auto m = e["message"].toMap();
@@ -530,6 +565,7 @@ QPair<QVariantList, QVariantList> U::preview(const QString &file, qint64 limit) 
       row["tools"] = tools;
     rows << row;
   }
+  for(auto &row:rows)row=compactionStatus(row.toMap());
   // Durable child snapshots update the original launch card across resumptions.
   QHash<QString,int> owners, calls, children;
   for(int i=0;i<rows.size();++i){auto row=rows[i].toMap();owners[row["entryId"].toString()]=i;for(auto tool:row["tools"].toList())calls[tool.toMap()["id"].toString()]=i;}

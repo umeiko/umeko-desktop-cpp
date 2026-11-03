@@ -767,6 +767,8 @@ bool Providers::applyModels(QString id, QVariantList rows, QString label) {
         throw std::runtime_error("模型 ID 缺失或重复");
       ids.insert(upstream);
       auto previous = old.value(upstream);
+      const auto reported=U::providerContext(m);
+      if(reported){previous["providerContextWindow"]=reported;m["providerContextWindow"]=reported;m["contextWindowAuto"]=true;}
       auto alias = previous.value("alias", upstream).toString();
       if (taken.contains(alias))
         alias = id.left(8) + "/" + upstream;
@@ -778,7 +780,7 @@ bool Providers::applyModels(QString id, QVariantList rows, QString label) {
       for (auto key : {QString("contextWindow"), QString("vision")}) {
         auto automatic = key == "vision" ? "visionAuto" : "contextWindowAuto";
         auto source = key + "Source";
-        if (m.contains(key)) {
+        if (m.contains(key) && key!="contextWindow") {
           m[automatic] = false;
           m[source] = "provider";
         }

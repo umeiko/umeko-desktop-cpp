@@ -1,4 +1,6 @@
 #include "chatmodel.hpp"
+#include "pet_reminders.hpp"
+#include "pi_capabilities.hpp"
 #include "common.hpp"
 #include "store.hpp"
 #include "document_preview.hpp"
@@ -8,6 +10,107 @@
 class CoreTests : public QObject {
   Q_OBJECT
 private slots:
+  void longRuntimePaths() {
+    QTemporaryDir temp;QString path=temp.path();
+    while(path.size()<340)path+="/native-runtime-with-long-project-name";
+    QVERIFY(QDir().mkpath(path));QVERIFY(U::writeJson(path+"/settings.json",QVariantMap{{"fixture",true}}));
+    QCOMPARE(U::readJson(path+"/settings.json").toMap()["fixture"].toBool(),true);
+    QString error;QVERIFY2(U::copyTree(path,temp.filePath("copied"),&error),qPrintable(error));
+    QCOMPARE(U::readJson(temp.filePath("copied/settings.json")).toMap()["fixture"].toBool(),true);
+    QProcess node;node.setWorkingDirectory(path);U::hideConsole(&node);
+    node.start(U::node(),{"-e","const fs=require('node:fs');process.stdout.write(fs.readFileSync('settings.json','utf8'));"});
+    QVERIFY2(node.waitForStarted(15000),qPrintable(node.errorString()));QVERIFY(node.waitForFinished(30000));QCOMPARE(node.exitCode(),0);
+    QCOMPARE(QJsonDocument::fromJson(node.readAllStandardOutput()).object()["fixture"].toBool(),true);
+  }
+  void compactionHistoryAndContextMetadata() {
+    QVariantMap data{{"version",2},{"eventId",U::uuid()},{"state","running"},{"mode","manual"},{"before",12345},{"after",QVariant()},{"afterEstimated",true},{"summary",""},{"error",""}};
+    QVariantMap entry{{"type","custom"},{"customType","umeko-compaction"},{"id","first"},{"timestamp","2026-11-02T01:00:00Z"},{"data",data}};
+    const auto row=U::compactionView(entry);QVERIFY(!row.isEmpty());
+    QCOMPARE(U::compactionStatus(row)["compaction"].toMap()["state"].toString(),QString("failure"));
+    QCOMPARE(U::compactionStatus(row,data["eventId"].toString())["compaction"].toMap()["state"].toString(),QString("running"));
+    QTemporaryDir temp;QFile file(temp.filePath("history.jsonl"));QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument::fromVariant(entry).toJson(QJsonDocument::Compact)+'\n');
+    QVariantMap message{{"type","message"},{"id","message"},{"parentId","first"},{"message",QVariantMap{{"role","assistant"},{"content","Work after compaction"}}}};
+    file.write(QJsonDocument::fromVariant(message).toJson(QJsonDocument::Compact)+'\n');
+    data["state"]="success";data["after"]=2000;data["summary"]="Summary";entry["data"]=data;entry["id"]="last";entry["parentId"]="message";
+    file.write(QJsonDocument::fromVariant(entry).toJson(QJsonDocument::Compact)+'\n');file.close();
+    auto rows=U::preview(file.fileName()).first;QCOMPARE(rows.size(),2);QCOMPARE(rows[0].toMap()["entryId"].toString(),QString("first"));QCOMPARE(rows[0].toMap()["compaction"].toMap()["state"].toString(),QString("success"));QCOMPARE(ChatModel::project(rows).size(),2);
+    for(const auto &invalid:QVariantList{true,-1,"42"}){auto bad=data;bad["before"]=invalid;entry["data"]=bad;QVERIFY(U::compactionView(entry).isEmpty());}
+    QCOMPARE(U::providerContext({{"context_length",500000},{"limits",QVariantMap{{"max_input_tokens",262144},{"max_tokens",7}}}}),qint64(262144));
+    QVariantMap model{{"upstream","unknown"},{"providerContextWindow",1048576},{"contextWindowAuto",true}};
+    QCOMPARE(U::normalizeModel(model)["contextWindow"].toLongLong(),qint64(1048576));
+    auto previous=U::normalizeModel(model);model["contextWindowAuto"]=false;model["contextWindow"]="256K";
+    QCOMPARE(U::normalizeModel(model,previous)["contextWindow"].toLongLong(),qint64(262144));
+    model["providerContextWindow"]=42;model["contextWindowAuto"]=true;
+    QCOMPARE(U::normalizeModel(model,previous)["contextWindow"].toLongLong(),qint64(1048576));
+  }
+  void nativePiCapabilityPolicies() {
+    using namespace PiCapabilities;
+    auto migrated=normalize({},QStringList{"write"});QCOMPARE(migrated["preset"].toString(),QString("custom"));
+    QVERIFY(!toolEnabled(migrated,{{"name","write"},{"owner","native"}}));
+    for(const auto &preset:QStringList{"minimal","standard","full"}) {
+      const QVariantMap profile{{"preset",preset}};int count=0;
+      for(const auto &name:core)count+=toolEnabled(profile,{{"name",name},{"owner","native"}});
+      QCOMPARE(count,preset=="minimal"?4:8);QCOMPARE(pluginEnabled(profile,"builtin:umeko-control"),preset=="full");
+      QCOMPARE(pluginEnabled(profile,"/optional",true),preset=="full");
+    }
+    const QVariantList rows{QVariantMap{{"id","optional"},{"path","/optional"}},QVariantMap{{"id","desktop"},{"path","builtin:chatbox"}}};
+    const QVariantMap resources{{"toolCatalog",QVariantList{QVariantMap{{"name","one"},{"owner","/optional"}},QVariantMap{{"name","two"},{"owner","/optional"}},QVariantMap{{"name","submit_to_chatbox"},{"owner","builtin:chatbox"}}}}};
+    auto profile=change({},"pi.tool",{{"name","one"},{"enabled",false}},rows,resources);
+    QVERIFY(!toolEnabled(profile,{{"name","one"},{"owner","/optional"}}));QVERIFY(toolEnabled(profile,{{"name","two"},{"owner","/optional"}}));
+    const auto custom=profile;profile=change(profile,"pi.preset",{{"preset","full"}},rows,resources);
+    QVERIFY(toolEnabled(profile,{{"name","one"},{"owner","/optional"}}));
+    QCOMPARE(change(profile,"pi.preset",{{"preset","custom"}},rows,resources),custom);
+    profile=change(custom,"pi.plugin",{{"id","optional"},{"enabled",false}},rows,resources);
+    QVERIFY(!toolEnabled(profile,{{"name","two"},{"owner","/optional"}}));
+    QCOMPARE(catalog(mergeResources(resources,{{"toolCatalog",QVariantList{}}},profile)).size(),10);
+    profile=change(profile,"pi.plugin",{{"id","desktop"},{"enabled",false}},rows,resources);
+    QVERIFY(!toolEnabled(profile,{{"name","submit_to_chatbox"},{"owner","builtin:chatbox"}}));
+    profile=change(profile,"pi.plugin",{{"id","desktop"},{"enabled",true}},rows,resources);
+    profile=change(profile,"pi.tool",{{"name","submit_to_chatbox"},{"enabled",false}},rows,resources);
+    QVERIFY(pluginEnabled(profile,"builtin:chatbox"));QVERIFY(!toolEnabled(profile,{{"name","submit_to_chatbox"},{"owner","builtin:chatbox"}}));
+    QVERIFY_EXCEPTION_THROWN(change(profile,"pi.tool",{{"name","*"},{"enabled",false}},rows,resources),std::runtime_error);
+    QVERIFY_EXCEPTION_THROWN(change(profile,"pi.tool",{{"name","read"},{"enabled",1}},rows,resources),std::runtime_error);
+  }
+  void nativePetReminderPersistenceAndOccurrences() {
+    QTemporaryDir temp;auto now=QDateTime::fromString("2026-11-02T08:00:00Z",Qt::ISODate);bool visible=true,enabled=true;
+    const auto folder=temp.filePath("reminders");PetReminders service(folder,nullptr,[&]{return now;});
+    service.visible=[&]{return visible;};service.notifications=[&]{return enabled;};QSignalSpy due(&service,&PetReminders::due);service.start();
+    auto result=service.handle("createItem",{{"title","  离线事项  "},{"notes","中文备注"},{"dueAt","2026-11-02T16:00:01+08:00"}});
+    auto item=result["item"].toMap();const auto id=item["id"].toString();QCOMPARE(item["title"].toString(),QString("离线事项"));
+    QCOMPARE(item["dueAt"].toString(),QString("2026-11-02T08:00:01Z"));QCOMPARE(due.size(),0);
+    now=now.addSecs(2);service.check();QCOMPARE(due.size(),1);
+    item=service.handle("getItem",{{"id",id}})["item"].toMap();QCOMPARE(item["notificationOutcome"].toString(),QString("presentation_requested"));
+    service.check();QCOMPARE(due.size(),1);service.stop();
+    PetReminders restored(folder,nullptr,[&]{return now;});restored.visible=[] {return true;};QSignalSpy replay(&restored,&PetReminders::due);restored.start();QCOMPARE(replay.size(),0);
+    item=restored.handle("updateItem",{{"id",id},{"dueAt",now.addSecs(1).toString(Qt::ISODate)}})["item"].toMap();QCOMPARE(item["occurrence"].toInt(),2);
+    now=now.addSecs(2);restored.check();QCOMPARE(replay.size(),1);
+    restored.handle("completeItem",{{"id",id}});QCOMPARE(restored.handle("listItems",{})["items"].toList().size(),0);
+    QCOMPARE(restored.handle("listItems",{{"status","completed"}})["items"].toList().size(),1);
+    restored.handle("deleteItem",{{"id",id}});QCOMPARE(restored.handle("listItems",{{"status","all"}})["items"].toList().size(),0);
+    for(const auto &bad:QStringList{"2026-11-02T08:00:00","2026-11-02T08:00:00+01:60","2026-02-30T08:00:00Z","2026-11-02T24:00:00Z","2026-11-02T08:60:00Z","2026-11-02T08:00:60Z"})
+      QVERIFY_EXCEPTION_THROWN(restored.handle("createItem",{{"title","bad"},{"dueAt",bad}}),std::runtime_error);
+    QVERIFY_EXCEPTION_THROWN(restored.handle("createItem",{{"title",QString(201,'x')}}),std::runtime_error);
+    auto todo=restored.handle("createItem",{{"title","without time"}})["item"].toMap();
+    QVERIFY_EXCEPTION_THROWN(restored.handle("updateItem",{{"id",todo["id"]},{"clearDueAt",false}}),std::runtime_error);
+  }
+  void nativePetReminderSuppressionAndWriteFailure() {
+    QTemporaryDir temp;auto now=QDateTime::fromString("2026-11-02T08:00:00Z",Qt::ISODate);bool show=false,enabled=true;
+    PetReminders service(temp.filePath("ok"),nullptr,[&]{return now;});service.visible=[&]{return show;};service.notifications=[&]{return enabled;};service.start();
+    QSignalSpy due(&service,&PetReminders::due);
+    auto create=[&](QString title){return service.handle("createItem",{{"title",title},{"dueAt",now.toString(Qt::ISODate)}})["item"].toMap();};
+    auto item=create("hidden");QCOMPARE(item["notificationOutcome"].toString(),QString("suppressed_hidden"));show=true;service.check();QCOMPARE(due.size(),0);
+    enabled=false;item=create("disabled");QCOMPARE(item["notificationOutcome"].toString(),QString("suppressed_preference"));enabled=true;service.check();QCOMPARE(due.size(),0);
+    service.stop();create("stopped");QCOMPARE(due.size(),0);service.start();QCOMPARE(due.size(),1);
+    // Replacing the target directory with a file simulates a durable write failure.
+    service.stop();const auto folder=temp.filePath("blocked");PetReminders blocked(folder,nullptr,[&]{return now;});
+    QFile obstruction(folder);QVERIFY(obstruction.open(QIODevice::WriteOnly));obstruction.write("keep");obstruction.close();
+    QVERIFY_EXCEPTION_THROWN(blocked.handle("createItem",{{"title","cannot persist"}}),std::runtime_error);
+    QCOMPARE(blocked.handle("listItems",{})["items"].toList().size(),0);
+    const auto corrupt=temp.filePath("corrupt");QDir().mkpath(corrupt);QFile broken(corrupt+"/reminders.json");QVERIFY(broken.open(QIODevice::WriteOnly));broken.write("broken");broken.close();
+    PetReminders invalid(corrupt);QVERIFY_EXCEPTION_THROWN(invalid.handle("createItem",{{"title","must not overwrite"}}),std::runtime_error);
+    QVERIFY(broken.open(QIODevice::ReadOnly));QCOMPARE(broken.readAll(),QByteArray("broken"));
+  }
   void staticHtmlPreviewBoundary() {
     configureWebView(QDir::currentPath());
     QTemporaryDir temp;
@@ -268,14 +371,15 @@ private slots:
     QVERIFY(markdown["html"].toString().contains("Hello"));
     QVERIFY(!markdown["html"].toString().contains("<img"));
     auto complex = DocumentPreview::read(write("complex.md", QByteArray(15000, '|')), "file");
-    QVERIFY(complex["simple"].toBool()); QVERIFY(complex["html"].toString().isEmpty());
+    QVERIFY(complex["chunked"].toBool()); QVERIFY(complex["html"].toString().isEmpty());
+    QCOMPARE(complex["text"].toString().size(),15000);
     const auto big = write("huge.py", QByteArray(270000, 'x'));
     QFile huge(big); QVERIFY(huge.open(QIODevice::ReadWrite)); QVERIFY(huge.resize(512ll * 1024 * 1024)); huge.close();
     auto limited = DocumentPreview::read(big, "file");
     QVERIFY(limited["truncated"].toBool()); QVERIFY(limited["text"].toString().size() <= 48002);
     QVERIFY(!limited["highlight"].toBool());
     auto lines = DocumentPreview::read(write("lines.txt", QByteArray("line\n").repeated(2000)), "file");
-    QVERIFY(lines["truncated"].toBool()); QVERIFY(lines["text"].toString().count('\n') < 1000);
+    QVERIFY(!lines["truncated"].toBool()); QVERIFY(lines["chunked"].toBool()); QCOMPARE(lines["text"].toString().count('\n'),2000);
     auto binary = DocumentPreview::read(write("binary.txt", QByteArray("a\0b", 3)), "text");
     QVERIFY(!binary["error"].toString().isEmpty());
     QVERIFY(!DocumentPreview::read(temp.filePath("missing.md"), "markdown")["error"].toString().isEmpty());
