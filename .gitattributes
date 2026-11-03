@@ -7,3 +7,5 @@
 *.py text eol=lf
 *.md text eol=lf
 *.yml text eol=lf
+# Vendored Skill checksums cover the exact upstream bytes on every platform.
+/bundled-skills/** -text
