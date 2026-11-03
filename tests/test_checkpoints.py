@@ -100,7 +100,9 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual((self.work / 'src/app.py').read_text(encoding='utf-8'), 'version = 3\n')
         self.assertFalse((self.work / 'src/new.py').exists())
         self.assertFalse((self.work / 'docs.txt').exists())
-        self.assertTrue(self.call('timeline', {})['entries'][1]['current'])
+        timeline = self.call('timeline', {})
+        self.assertTrue(timeline['entries'][1]['current'])
+        self.assertEqual(timeline['futureCount'], 1)
 
         redone = self.call('restore', {'checkpointId': third['checkpointId'], 'lockToken': uuid.uuid4().hex})
         self.assertTrue(redone['ok'], redone)

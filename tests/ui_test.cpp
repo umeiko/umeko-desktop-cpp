@@ -1,7 +1,10 @@
 #include "terminal_view.hpp"
 #include "widget_channel.hpp"
 #include "widget_host.hpp"
+#include "input_method.hpp"
 #include <QDirIterator>
+#include <QQmlComponent>
+#include <QQuickView>
 #include "desktop_pet.hpp"
 #include "global_agents.hpp"
 #include "backend.hpp"
@@ -21,6 +24,28 @@
 #include <QQuickStyle>
 #include <QWheelEvent>
 #include <QtTest>
+
+class EditorSdk : public QObject {
+  Q_OBJECT
+  Q_PROPERTY(bool active READ active NOTIFY activeChanged)
+  Q_PROPERTY(double scale READ scale CONSTANT)
+  Q_PROPERTY(QString language READ language NOTIFY languageChanged)
+  Q_PROPERTY(QVariantMap colors READ colors CONSTANT)
+  Q_PROPERTY(QVariantMap hostCapabilities READ hostCapabilities CONSTANT)
+public:
+  bool active() const { return false; }
+  double scale() const { return 1.0; }
+  QString language() const { return "en"; }
+  QVariantMap colors() const {
+    return {{"surface", "#202521"}, {"bg", "#181d19"}, {"ink", "#e4e9e3"},
+            {"muted", "#929e94"}, {"accent", "#9cc69f"},
+            {"accentBg", "#334636"}, {"hover", "#29362b"}, {"line", "#465148"}};
+  }
+  QVariantMap hostCapabilities() const { return {{"operations", QVariantMap{}}}; }
+signals:
+  void activeChanged();
+  void languageChanged();
+};
 
 class NativeUiTests : public QObject {
   Q_OBJECT
@@ -3715,35 +3740,244 @@ Item {
     QVERIFY2(lastText().contains("Echo: provider compatibility fixture"),
              qPrintable(lastText()));
   }
+  void inputMethodCaretUpdates() {
+    InputMethodUpdates updates(qApp);
+    QQuickView composer;
+    composer.engine()->rootContext()->setContextProperty("backend", backend.get());
+    composer.setResizeMode(QQuickView::SizeRootObjectToView);
+    QQmlComponent component(composer.engine());
+    const auto url = QUrl::fromLocalFile(root + "/tests/fixtures/input-method.qml");
+    component.setData("import QtQuick\n"
+                      "import \"../../app/qml\" as Umeko\n"
+                      "Item {\n"
+                      "  Umeko.Composer {\n"
+                      "    objectName: \"composer\"; x: 20; width: parent.width - 40\n"
+                      "    anchors.bottom: parent.bottom; anchors.bottomMargin: 20\n"
+                      "  }\n"
+                      "}", url);
+    QVERIFY2(component.isReady(), qPrintable(component.errors().isEmpty() ? QString() : component.errors().first().toString()));
+    composer.setContent(url, &component, component.create());
+    composer.resize(840, 400);
+    composer.show();
+    composer.requestActivate();
+    auto *rootItem = composer.rootObject();
+    QVERIFY(rootItem);
+    auto locate = [](QQuickItem *root, const QString &name) {
+      QList<QQuickItem *> items{root};
+      while (!items.isEmpty()) {
+        auto *item = items.takeLast();
+        if (item->objectName() == name)
+          return item;
+        items.append(item->childItems());
+      }
+      return static_cast<QQuickItem *>(nullptr);
+    };
+    auto *prompt = locate(rootItem, "promptInput");
+    auto *composerItem = locate(rootItem, "composer");
+    QVERIFY(prompt && composerItem);
+    QSignalSpy cursor(qApp->inputMethod(), &QInputMethod::cursorRectangleChanged);
+    QSignalSpy anchor(qApp->inputMethod(), &QInputMethod::anchorRectangleChanged);
+    auto flush = [&] {
+      QCoreApplication::sendPostedEvents();
+      QCoreApplication::processEvents();
+      QCoreApplication::sendPostedEvents();
+      QCoreApplication::processEvents();
+    };
+    auto check = [&](QQuickItem *item) {
+      const auto actual = qApp->inputMethod()->cursorRectangle();
+      const auto mapped = item->mapRectToScene(item->inputMethodQuery(Qt::ImCursorRectangle).toRectF());
+      const auto caret = item->mapRectToScene(item->property("cursorRectangle").toRectF());
+      for (const auto &expected : {mapped, caret}) {
+        QString message;
+        QDebug(&message) << actual << "!=" << expected;
+        QVERIFY2(qAbs(actual.x() - expected.x()) <= 1 &&
+                 qAbs(actual.y() - expected.y()) <= 1 &&
+                 qAbs(actual.width() - expected.width()) <= 1 &&
+                 qAbs(actual.height() - expected.height()) <= 1,
+                 qPrintable(message));
+      }
+      QVERIFY(actual.width() > 0 && actual.height() > 0);
+    };
+    QMetaObject::invokeMethod(composerItem, "focusInput");
+    flush();
+    QVERIFY(prompt->hasActiveFocus());
+    prompt->setFocus(false);
+    flush();
+    QVERIFY(!prompt->hasActiveFocus());
+    const auto before = cursor.count();
+    const auto anchorBefore = anchor.count();
+    QMetaObject::invokeMethod(composerItem, "focusInput");
+    flush();
+    check(prompt);
+    QVERIFY(prompt->hasActiveFocus());
+    QVERIFY(prompt->property("text").toString().isEmpty());
+    QVERIFY(cursor.count() > before && anchor.count() > anchorBefore);
+    const auto beforeResize = cursor.count();
+    composer.resize(740, 520);
+    flush();
+    check(prompt);
+    QVERIFY(cursor.count() > beforeResize);
+    const auto beforeText = cursor.count();
+    prompt->setProperty("text", "中");
+    prompt->setProperty("cursorPosition", 1);
+    flush();
+    check(prompt);
+    QVERIFY(cursor.count() > beforeText);
+    prompt->setProperty("text", QString("line 0\nline 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12\nline 13\nline 14\nline 15\nline 16\nline 17\nline 18\nline 19\nline 20\nline 21\nline 22\nline 23\nline 24\nline 25\nline 26\nline 27\nline 28\nline 29"));
+    prompt->setProperty("cursorPosition", 20);
+    flush();
+    auto *scroll = prompt->parentItem();
+    while (scroll && !scroll->property("contentY").isValid())
+      scroll = scroll->parentItem();
+    QVERIFY(scroll);
+    const auto contentY = scroll->property("contentY").toDouble();
+    const auto beforeScroll = cursor.count();
+    scroll->setProperty("contentY", contentY + 12);
+    flush();
+    QVERIFY(scroll->property("contentY").toDouble() > contentY);
+    check(prompt);
+    QVERIFY(cursor.count() > beforeScroll);
+    prompt->setProperty("text", "");
+    flush();
+
+    EditorSdk sdk;
+    QQuickView widget;
+    widget.engine()->rootContext()->setContextProperty("backend", backend.get());
+    widget.setResizeMode(QQuickView::SizeRootObjectToView);
+    widget.setInitialProperties({{"sdk", QVariant::fromValue<QObject *>(&sdk)}});
+    widget.setSource(QUrl::fromLocalFile(root + "/umeko-plugins/skill-manager/qml/Main.qml"));
+    QVERIFY2(widget.status() == QQuickView::Ready,
+             qPrintable(widget.errors().isEmpty() ? QString() : widget.errors().first().toString()));
+    widget.resize(500, 800);
+    widget.show();
+    widget.requestActivate();
+    flush();
+    auto *field = locate(widget.rootObject(), "skillManagerSearch");
+    QVERIFY(field);
+    field->forceActiveFocus();
+    flush();
+    QVERIFY(field->hasActiveFocus());
+    field->setFocus(false);
+    flush();
+    QVERIFY(!field->hasActiveFocus());
+    const auto beforeWidget = cursor.count();
+    const auto widgetAnchorBefore = anchor.count();
+    field->forceActiveFocus();
+    flush();
+    check(field);
+    QVERIFY(cursor.count() > beforeWidget && anchor.count() > widgetAnchorBefore);
+    QMetaObject::invokeMethod(composerItem, "focusInput");
+    composer.requestActivate();
+    flush();
+    check(prompt);
+    QVERIFY(qApp->focusWindow() == &composer);
+    widget.close();
+    composer.close();
+  }
   void interactiveProviderLogin() {
     auto manager = qobject_cast<Providers *>(backend->providerPlugins());
     const auto archive = directory.filePath("interactive-login.zip");
-    const QByteArray code = R"PY(from umeko_provider_sdk import Provider,ProviderError
+    const QByteArray code = R"PY(from pathlib import Path
+from umeko_provider_sdk import Provider,ProviderError
 class Interactive(Provider):
+ def __init__(self,context):
+  super().__init__(context); self.model_calls=0
  def authenticate(self, credentials):
   self.context.secrets.set('session',{'token':'synthetic-pending-token'})
+  if credentials['username']=='provider-close':
+   self.close()
+   raise ProviderError('Sign-in interrupted: '+credentials['username'])
   self.context.report_status('Waiting for browser confirmation')
-  while not self.context.cancelled.wait(.05): pass
-  raise ProviderError('Login cancelled')
- def list_models(self, refresh=False): return []
+  while not self.context.request_cancelled.wait(.05): pass
+  raise ProviderError('Sign-in interrupted: '+credentials['username'])
+ def list_models(self, refresh=False):
+  self.model_calls+=1
+  Path(self.context.state_dir/'models-called').write_text('called')
+  return []
 def create_provider(context): return Interactive(context)
 )PY";
     QVERIFY(package(archive, false, false, "example-interactive", "0.1.0", {}, code));
     QVERIFY(manager->importZip(QUrl::fromLocalFile(archive).toString()));
     const auto id = manager->rows().last().toMap()["id"].toString();
-    manager->login(id, "{\"username\":\"fixture-user\"}");
-    QTRY_COMPARE_WITH_TIMEOUT(manager->rows().last().toMap()["status"].toString(), QString("Waiting for browser confirmation"), 15000);
-    QVERIFY(manager->rows().last().toMap()["loggingIn"].toBool());
+    const auto other = manager->addAccount("example-interactive", "0.1.0") ? manager->rows().last().toMap()["id"].toString() : QString();
+    QVERIFY(!other.isEmpty() && other != id);
+    auto row = [manager](const QString &identifier) {
+      for (const auto &value : manager->rows())
+        if (value.toMap()["id"] == identifier)
+          return value.toMap();
+      return QVariantMap();
+    };
+    QSignalSpy notices(backend.get(), &Backend::toast);
+    const auto previousPage = window->property("page");
+    const auto previousTab = window->property("settingsTab");
+    const auto language = backend->language();
+    auto restore = qScopeGuard([&] {
+      manager->cancelLogin(id);
+      manager->cancelLogin(other);
+      backend->setLanguage(language);
+      window->setProperty("page", previousPage);
+      window->setProperty("settingsTab", previousTab);
+    });
+    backend->setLanguage("en");
+    window->setProperty("page", "settings");
+    window->setProperty("settingsTab", 0);
+    manager->login(id, "{\"username\":\"fixture-secret\"}");
+    manager->login(other, "{\"username\":\"other-secret\"}");
+    QTRY_COMPARE_WITH_TIMEOUT(row(id)["status"].toString(), QString("Waiting for browser confirmation"), 15000);
+    QVERIFY(row(id)["loggingIn"].toBool() && row(other)["loggingIn"].toBool());
     bool bounded = false;
     for (auto process : manager->findChildren<QProcess *>())
       for (auto timer : process->findChildren<QTimer *>())
         bounded |= timer->interval() == 600000 && timer->isActive();
     QVERIFY(bounded);
-    manager->cancelLogin(id);
-    QTRY_VERIFY_WITH_TIMEOUT(!manager->rows().last().toMap()["busy"].toBool(), 5000);
-    QCOMPARE(manager->rows().last().toMap()["status"].toString(), QString("登录已取消"));
+    const auto before = notices.count();
+    QTRY_VERIFY_WITH_TIMEOUT(find("loginPlugin_" + id) != nullptr, 5000);
+    auto button = find("loginPlugin_" + id);
+    QTRY_COMPARE_WITH_TIMEOUT(button->property("text").toString(), QString("Cancel sign-in"), 5000);
+    QVERIFY(button->isEnabled());
+    auto scroll = find("settingsScroll");
+    QVERIFY(scroll);
+    auto flick = qobject_cast<QQuickItem *>(scroll->property("contentItem").value<QObject *>());
+    QVERIFY(flick);
+    scroll->forceActiveFocus();
+    QMetaObject::invokeMethod(flick, "cancelFlick");
+    bool revealed = false;
+    for (int attempt = 0; attempt < 12 && !revealed; ++attempt) {
+      QTest::qWait(100);
+      button = find("loginPlugin_" + id);
+      QVERIFY(button);
+      flick->ensurePolished();
+      button->ensurePolished();
+      const auto center = button->boundingRect().center();
+      const auto local = button->mapToItem(flick, center);
+      const auto scene = button->mapToScene(center);
+      if (flick->contains(local) && QRectF(0, 0, window->width(), window->height()).contains(scene)) {
+        revealed = true;
+        break;
+      }
+      const auto y = flick->property("contentY").toReal() + local.y() - flick->height() / 2;
+      flick->setProperty("contentY", qBound(0.0, y, qMax(0.0, flick->property("contentHeight").toReal() - flick->height())));
+    }
+    QVERIFY(revealed);
+    click("loginPlugin_" + id);
+    QTRY_VERIFY_WITH_TIMEOUT(!row(id)["busy"].toBool(), 5000);
+    QCOMPARE(row(id)["status"].toString(), QString("Sign-in interrupted: ***"));
+    QVERIFY(!row(id)["loggingIn"].toBool());
+    QVERIFY(row(other)["loggingIn"].toBool());
     QVERIFY(backend->store.secret("account:" + id).isEmpty());
-    QVERIFY(!manager->rows().last().toMap()["loggingIn"].toBool());
+    QCOMPARE(notices.count(), before);
+    QVERIFY(!QFileInfo::exists(directory.filePath("provider-plugins/state/" + U::sha(id.toUtf8()) + "/models-called")));
+    manager->cancelLogin(other);
+    QTRY_VERIFY_WITH_TIMEOUT(!row(other)["busy"].toBool(), 5000);
+    QCOMPARE(notices.count(), before);
+    const auto providerClosed = manager->addAccount("example-interactive", "0.1.0") ? manager->rows().last().toMap()["id"].toString() : QString();
+    QVERIFY(!providerClosed.isEmpty());
+    manager->login(providerClosed, "{\"username\":\"provider-close\"}");
+    QTRY_VERIFY_WITH_TIMEOUT(!row(providerClosed)["busy"].toBool(), 5000);
+    QCOMPARE(row(providerClosed)["status"].toString(), QString("Sign-in interrupted: ***"));
+    QCOMPARE(notices.count(), before);
+    QVERIFY(backend->store.secret("account:" + providerClosed).isEmpty());
+    QVERIFY(!QFileInfo::exists(directory.filePath("provider-plugins/state/" + U::sha(providerClosed.toUtf8()) + "/models-called")));
     QVERIFY(manager->uninstall("example-interactive", "0.1.0"));
   }
   void providerPackageReinstallation() {

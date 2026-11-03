@@ -38,13 +38,17 @@ class ProviderContext:
     state_dir: Path
     secrets: Secrets
     cancelled: Event = field(default_factory=Event)
+    request_cancelled: Event = field(default_factory=Event)
     report_status: Callable[[str], None] | None = None
 
 
 class Provider:
     def __init__(self, context: ProviderContext): self.context = context
     def authenticate(self, credentials: dict[str, str]) -> dict:
-        """Return public account details; persist tokens with context.secrets."""
+        """Return public account details; persist tokens with context.secrets.
+
+        Observe context.request_cancelled to stop sign-in cooperatively.
+        """
         raise NotImplementedError
     def list_models(self, refresh: bool = False) -> list[dict]:
         """Each model needs id; contextWindow and vision are optional metadata."""

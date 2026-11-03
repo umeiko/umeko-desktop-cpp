@@ -4,6 +4,7 @@
 #include "webview_support.hpp"
 #include "syntaxhighlighter.hpp"
 #include "text_spacing.hpp"
+#include "input_method.hpp"
 #include "update.hpp"
 #include "tray.hpp"
 #include "notifications.hpp"
@@ -45,6 +46,7 @@ int main(int argc, char **argv) {
   configureWebView(U::cleanPath(earlyRoot));
   QQuickStyle::setStyle("Basic");
   QApplication app(argc, argv);
+  InputMethodUpdates inputUpdates(&app);
   app.setApplicationName("Umeko-Desktop");
   app.setApplicationDisplayName("Umeko-Desktop");
   app.setApplicationVersion(UMEKO_VERSION);

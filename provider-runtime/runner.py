@@ -10,7 +10,7 @@ import sys
 import traceback
 import types
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 
 wire = sys.stdout
 
@@ -47,6 +47,24 @@ def main():
             send("secrets", data=secrets)
 
     cancelled = Event()
+    request_cancelled = Event()
+    if request.get("method") == "login":
+        def watch_cancel():
+            try:
+                while True:
+                    line = sys.stdin.readline()
+                    if not line:
+                        break
+                    try:
+                        command = json.loads(line)
+                    except ValueError:
+                        continue
+                    if command.get("cancel"):
+                        request_cancelled.set()
+                        break
+            except (OSError, ValueError):
+                pass
+        Thread(target=watch_cancel, daemon=True).start()
     if hasattr(signal, "SIGTERM"):
         def stop(*_):
             cancelled.set()
@@ -71,7 +89,7 @@ def main():
         with contextlib.redirect_stdout(sys.stderr), network_scope(request.get("proxy"), records if request.get("method") == "events" else None):
             implementation = importlib.import_module(namespace + "." + entry[:-3].replace("/", "."))
             def report_status(message):
-                if request.get("method") == "login" and not cancelled.is_set():
+                if request.get("method") == "login" and not cancelled.is_set() and not request_cancelled.is_set():
                     # Status is public UI text. Providers must never submit
                     # credentials, authentication URLs, or raw server bodies.
                     known = []
@@ -84,16 +102,20 @@ def main():
                     for value in sensitive: collect(value)
                     send("auth_status", message=redact_data(str(message), known)[:300])
             provider = getattr(implementation, factory)(ProviderContext(config, Path(request["state_dir"]), MemorySecrets(), cancelled,
-                report_status=report_status))
+                request_cancelled=request_cancelled, report_status=report_status))
             if not isinstance(provider, Provider):
                 raise ProviderError("供应商实现必须继承 umeko_provider_sdk.Provider")
             method, params = request["method"], request.get("params") or {}
             if method == "login":
-                credentials = params["credentials"]
-                details = provider.authenticate(credentials) or {}
-                models = provider.list_models(refresh=True)
-                provider.context.secrets.set("credentials", credentials)
-                result = {"models": models, "label": str(details.get("label", "已登录"))[:100]}
+                result = None
+                if not request_cancelled.is_set() and not cancelled.is_set():
+                    credentials = params["credentials"]
+                    details = provider.authenticate(credentials) or {}
+                    if not request_cancelled.is_set() and not cancelled.is_set():
+                        models = provider.list_models(refresh=True)
+                        if not request_cancelled.is_set() and not cancelled.is_set():
+                            provider.context.secrets.set("credentials", credentials)
+                            result = {"models": models, "label": str(details.get("label", "已登录"))[:100]}
             elif method == "models":
                 result = {"models": provider.list_models(refresh=True)}
             elif method == "events":
@@ -110,7 +132,10 @@ def main():
                 result = {}
             else:
                 raise ProviderError("不支持的 Provider 操作")
-        send("result", data=result)
+        if result is None:
+            send("cancelled", message="登录已取消")
+        else:
+            send("result", data=result)
         return 0
     except Exception as exc:
         message = str(exc)[:1000] if isinstance(exc, ProviderError) else "供应商运行失败，请检查 Python 依赖、插件配置与网络"
@@ -136,7 +161,10 @@ def main():
             elif isinstance(value, str): known.append(value)
         for value in sensitive: collect(value)
         diagnostics = redact_data(records + [{"exception": traceback.format_exc()}], known) if request.get("method") == "events" else []
-        send("error", message=message, diagnostics=diagnostics)
+        if request_cancelled.is_set() or cancelled.is_set():
+            send("cancelled", message=message)
+        else:
+            send("error", message=message, diagnostics=diagnostics)
         return 1
     finally:
         if provider is not None:
