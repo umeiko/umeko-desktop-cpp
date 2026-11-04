@@ -23,9 +23,7 @@ std::shared_ptr<Session> Backend::fresh(QString workspace) {
   s->provider = store.data["selectedProvider"].toString();
   auto effort =
       store.data["ui"].toMap().value("reasoningEffort", "off").toString();
-  s->reasoningEffort = QStringList{"off", "low", "high", "max"}.contains(effort)
-                           ? effort
-                           : "off";
+  s->reasoningEffort = U::reconcileEffort(effort, reasoningLevelsFor(s));
   static const QStringList greetings = {
       "来啦？今天想先做点什么？",
       "先把今天的难题解决掉，再去吃点好吃的吧。",
@@ -89,6 +87,7 @@ void Backend::activate(std::shared_ptr<Session> s) {
     store.data["selectedProvider"] = s->provider;
     store.data["selectedModel"] = s->model;
   }
+  reconcileReasoning(s);
   markRead(s);
   store.save();
   emit changed();
@@ -143,6 +142,7 @@ void Backend::invalidate() {
     else {
       retire(s);
       s->usage.clear();
+      reconcileReasoning(s);
     }
   }
   emit contextUsageChanged();
@@ -273,6 +273,7 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   s->status = s->phase == "loading" ? "正在加载 Pi" : "正在生成";
   values["type"] = action;
   values["model"] = s->model;
+  reconcileReasoning(s);
   values["reasoningEffort"] = s->reasoningEffort;
   if (s->process) {
     controlNativeWork[s->key] = beginControlWork();

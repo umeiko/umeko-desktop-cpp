@@ -4,8 +4,24 @@
 #include <QGuiApplication>
 #include <stdexcept>
 #include <QSslCertificate>
+QStringList Backend::reasoningLevelsFor(std::shared_ptr<Session> session) const {
+  for (const auto &p : store.data["providers"].toList()) if (p.toMap()["id"] == session->provider)
+    for (const auto &m : p.toMap()["models"].toList()) if (m.toMap()["alias"] == session->model)
+      return U::reasoningLevels(m.toMap());
+  return U::reasoningLevels({});
+}
+void Backend::reconcileReasoning(std::shared_ptr<Session> session) {
+  const auto value = U::reconcileEffort(session->reasoningEffort, reasoningLevelsFor(session));
+  if (value == session->reasoningEffort) return;
+  session->reasoningEffort = value;
+  if (!session->id.isEmpty()) setMetadata(session->id, {{"reasoningEffort", value}});
+  if (session == view) {
+    auto ui = store.data["ui"].toMap(); ui["reasoningEffort"] = value; store.data["ui"] = ui;
+    emit reasoningChanged();
+  }
+}
 bool Backend::setReasoningEffort(QString value) {
-  if (!QStringList{"off", "low", "high", "max"}.contains(value))
+  if (value != "off" && !reasoningLevels().contains(value))
     return false;
   view->reasoningEffort = value;
   auto ui = store.data["ui"].toMap();

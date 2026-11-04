@@ -2797,6 +2797,42 @@ Item {
     QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 1500);
     QCOMPARE(requests.size(), before);
   }
+  void customModelReasoningRequests() {
+    configureAPI();
+    const auto id = backend->config()["selectedProvider"].toString();
+    auto provider = backend->provider(id);
+    const auto original = provider["models"].toList();
+    auto models = original;
+    auto model = models[0].toMap(); model["reasoningLevels"] = QVariantList{"medium", "xhigh", "vendor-custom"}; models[0] = model;
+    const auto save = [&](QVariantList values) {
+      return backend->saveProvider(id, provider["name"].toString(), "openai", provider["baseUrl"].toString(), "", QString::fromUtf8(QJsonDocument::fromVariant(values).toJson()));
+    };
+    QVERIFY(save(models));
+    QCOMPARE(backend->reasoningLevels(), (QStringList{"medium", "xhigh", "vendor-custom"}));
+    QVERIFY(!backend->setReasoningEffort("high"));
+    for (const auto &level : QStringList{"medium", "xhigh", "vendor-custom", "off"}) {
+      QVERIFY(backend->setReasoningEffort(level)); backend->newSession();
+      QCOMPARE(backend->reasoningEffort(), level);
+      const auto before = requests.size(); backend->send("custom reasoning " + level);
+      QTRY_VERIFY_WITH_TIMEOUT(requests.size() > before, 15000);
+      QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+      const auto request = requests.last().toMap();
+      if (level == "off") QVERIFY(!request.contains("reasoning_effort"));
+      else QCOMPARE(request["reasoning_effort"].toString(), level);
+    }
+    Store reloaded(directory.path());
+    bool persisted = false;
+    for (const auto &p : reloaded.data["providers"].toList()) if (p.toMap()["id"] == id)
+      persisted = U::reasoningLevels(p.toMap()["models"].toList()[0].toMap()) == backend->reasoningLevels();
+    QVERIFY(persisted);
+    QVERIFY(backend->setReasoningEffort("xhigh"));
+    model["reasoningLevels"] = QVariantList{}; models[0] = model; QVERIFY(save(models));
+    QVERIFY(backend->reasoningLevels().isEmpty()); QCOMPARE(backend->reasoningEffort(), QString("off"));
+    QVERIFY(!backend->setReasoningEffort("xhigh"));
+    auto restored = original; auto defaults = restored[0].toMap();
+    defaults["reasoningLevels"] = QStringList{"low", "high", "max"}; restored[0] = defaults;
+    QVERIFY(save(restored));
+  }
   void reasoningEffortRequests() {
     if (backend->config()["selectedModel"] != "native-fixture")
       configureAPI();

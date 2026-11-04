@@ -10,6 +10,21 @@
 class CoreTests : public QObject {
   Q_OBJECT
 private slots:
+  void modelReasoningLevels() {
+    QCOMPARE(U::reasoningLevels(U::normalizeModel({})), (QStringList{"low", "high", "max"}));
+    const auto custom = U::normalizeModel({{"reasoningLevels", QVariantList{" medium ", "xhigh", "vendor-custom"}}});
+    QCOMPARE(U::reasoningLevels(custom), (QStringList{"medium", "xhigh", "vendor-custom"}));
+    QCOMPARE(U::reasoningLevels(U::normalizeModel({{"alias", "renamed"}}, custom)), U::reasoningLevels(custom));
+    QVERIFY(U::reasoningLevels(U::normalizeModel({{"reasoningLevels", QVariantList{}}}, custom)).isEmpty());
+    for (const auto &bad : QVariantList{QVariant(), "low", QVariantList{false}, QVariantList{""}, QVariantList{"OFF"}, QVariantList{"low", "LOW"}, QVariantList{"two words"}, QVariantList{QString(65, 'a')}}) {
+      QVERIFY_EXCEPTION_THROWN(U::normalizeModel({{"reasoningLevels", bad}}), std::runtime_error);
+    }
+    QCOMPARE(U::reconcileEffort("high", {"low", "medium"}), QString("medium"));
+    QCOMPARE(U::reconcileEffort("xhigh", {"high", "max"}), QString("high"));
+    QCOMPARE(U::reconcileEffort("vendor-custom", {"vendor-custom"}), QString("vendor-custom"));
+    QCOMPARE(U::reconcileEffort("vendor-custom", {"medium"}), QString("off"));
+    QCOMPARE(U::reconcileEffort("max", {}), QString("off"));
+  }
   void longRuntimePaths() {
     QTemporaryDir temp;QString path=temp.path();
     while(path.size()<340)path+="/native-runtime-with-long-project-name";
