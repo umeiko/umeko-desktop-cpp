@@ -294,10 +294,11 @@ QVariantMap Backend::umekoRequestImpl(QVariantMap request, QString callerKey, bo
         for (auto m : modelCatalog()) if (m.toMap()["provider"] == args["provider"] && m.toMap()["id"] == args["model"]) valid = true;
         require(valid, "Configured model ID does not exist");
         target->provider = args["provider"].toString(); target->model = args["model"].toString(); target->usage.clear();
+        reconcileReasoning(target);
         if (target == view) { store.data["selectedProvider"] = target->provider; store.data["selectedModel"] = target->model; }
       } else {
         auto value = args["value"].toString();
-        require(QStringList{"off", "low", "high", "max"}.contains(value), "Reasoning must be off, low, high or max");
+        require(value == "off" || reasoningLevelsFor(target).contains(value), "Reasoning must be off or one of the configured model levels");
         target->reasoningEffort = value;
         if (!target->id.isEmpty()) setMetadata(target->id, {{"reasoningEffort", value}});
         if (target == view) { auto ui = store.data["ui"].toMap(); ui["reasoningEffort"] = value; store.data["ui"] = ui; }

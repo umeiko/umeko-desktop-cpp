@@ -697,6 +697,7 @@ void Backend::selectModel(QString id, QString model) {
       store.data["selectedModel"] = model;
       view->provider = id;
       view->model = model;
+      reconcileReasoning(view);
       view->usage.clear();
       store.save();
       emit changed();

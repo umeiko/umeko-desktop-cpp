@@ -95,6 +95,7 @@ bool SessionPreview::activate(int token, bool readOnly) {
     s->title = saved["title"].toString();
     s->model = saved["model"].toString();
     s->provider = saved["provider"].toString();
+    s->reasoningEffort = b->metadata(id).value("reasoningEffort", s->reasoningEffort).toString();
     s->messages = prepared["messages"].toList();
     s->displaySnapshot = prepared["displaySnapshot"].toList();
     const auto viewport=b->metadata(id)["viewport"].toMap();

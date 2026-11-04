@@ -342,7 +342,39 @@ qint64 U::providerContext(QVariantMap model) {
     for(const auto &key:containers){const auto nested=row.value(key).toMap();if(!nested.isEmpty())collect(nested,depth+1);}
   };collect(model,0);return minimum;
 }
+QStringList U::reasoningLevels(QVariantMap model) {
+  return model.contains("reasoningLevels") ? model["reasoningLevels"].toStringList() : QStringList{"low", "high", "max"};
+}
+QString U::reconcileEffort(QString value, const QStringList &levels) {
+  if (value == "off" || levels.contains(value)) return value;
+  const QStringList order{"minimal", "low", "medium", "high", "xhigh", "max"};
+  if (order.contains(value)) {
+    QString nearest = "off"; int distance = 100;
+    for (const auto &level : order) if (levels.contains(level)) {
+      const int delta = qAbs(order.indexOf(level) - order.indexOf(value));
+      if (delta < distance) { nearest = level; distance = delta; }
+    }
+    return nearest;
+  }
+  return "off";
+}
 QVariantMap U::normalizeModel(QVariantMap m, QVariantMap previous) {
+  const auto source = m.contains("reasoningLevels") ? m : previous;
+  if (source.contains("reasoningLevels")) {
+    const auto raw = source["reasoningLevels"];
+    if ((raw.metaType().id() != QMetaType::QVariantList && raw.metaType().id() != QMetaType::QStringList) || raw.toList().size() > 32)
+      throw std::runtime_error("思考档位必须是最多 32 项的列表");
+    QStringList levels, seen;
+    for (const auto &entry : raw.toList()) {
+      const auto level = entry.toString().trimmed();
+      if (entry.metaType().id() != QMetaType::QString || level.isEmpty() || level.size() > 64 || level.contains(QRegularExpression("[\\s\\x{0000}-\\x{001f}\\x{007f}]")))
+        throw std::runtime_error("档位名称需为 1–64 个字符，不能包含空白");
+      if (level.toLower() == "off" || seen.contains(level.toCaseFolded()))
+        throw std::runtime_error("档位名称不能重复，也不能使用保留名称 off");
+      levels << level; seen << level.toCaseFolded();
+    }
+    m["reasoningLevels"] = levels;
+  }
   auto ctx = m.contains("contextWindow") || m.contains("contextWindowAuto")
                  ? m
                  : previous;

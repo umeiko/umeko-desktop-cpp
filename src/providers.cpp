@@ -810,6 +810,7 @@ bool Providers::applyModels(QString id, QVariantList rows, QString label) {
           m[source] = "custom";
         }
       }
+      if (previous.contains("reasoningLevels")) m["reasoningLevels"] = previous["reasoningLevels"];
       models << U::normalizeModel(m, previous);
     }
     for (auto &v : providers) {

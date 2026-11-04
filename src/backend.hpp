@@ -290,6 +290,7 @@ class Backend : public QObject {
   Q_PROPERTY(QString toolStatus READ toolStatus NOTIFY chatChanged)
   Q_PROPERTY(
       QString reasoningEffort READ reasoningEffort NOTIFY reasoningChanged)
+  Q_PROPERTY(QStringList reasoningLevels READ reasoningLevels NOTIFY changed)
   Q_PROPERTY(
       QVariantList attachments READ attachments NOTIFY attachmentsChanged)
   Q_PROPERTY(QVariantList queuedMessages READ queuedMessages NOTIFY chatChanged)
@@ -403,6 +404,9 @@ public:
   QString toolStatus() const { return view->status; }
   QVariantMap networkRetry() const { return view->networkRetry; }
   QString reasoningEffort() const { return view->reasoningEffort; }
+  QStringList reasoningLevels() const { return reasoningLevelsFor(view); }
+  QStringList reasoningLevelsFor(std::shared_ptr<Session> session) const;
+  void reconcileReasoning(std::shared_ptr<Session> session);
   Q_INVOKABLE bool setReasoningEffort(QString value);
   QVariantList attachments() const { return view->attachments; }
   QVariantList queuedMessages() const;

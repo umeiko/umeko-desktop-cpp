@@ -32,6 +32,8 @@ void run(QObject *owner, const QString &program, const QStringList &arguments,
 QVariantMap contextSuggestion(QString name);
 QVariantMap visionSuggestion(QString name);
 qint64 providerContext(QVariantMap model);
+QStringList reasoningLevels(QVariantMap model);
+QString reconcileEffort(QString value, const QStringList &levels);
 QVariantMap normalizeModel(QVariantMap model, QVariantMap previous = {});
 int parseContext(const QVariant &value);
 QVariantMap toolView(QString id, QString name, QVariantMap arguments,

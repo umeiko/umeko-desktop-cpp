@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "ReasoningLevels.js" as Reasoning
 
 Item {
     id: root
@@ -121,7 +122,7 @@ Item {
                     Text { font.family: Theme.fontFamily; text: { let p = backend.config.providers.find(p => p.id === backend.config.selectedProvider); return p ? p.name : I18n.t("选择供应商") } color: Theme.ink; font.pixelSize: Theme.font(11, visible); anchors.verticalCenter: parent.verticalCenter }
                     Text { font.family: Theme.fontFamily; text: "/"; font.pixelSize: Theme.font(11, visible); color: Theme.muted; anchors.verticalCenter: parent.verticalCenter }
                     Text { font.family: Theme.fontFamily; text: backend.config.selectedModel; width: Math.min(implicitWidth, 135); elide: Text.ElideRight; color: Theme.muted; font.pixelSize: Theme.font(11, visible); anchors.verticalCenter: parent.verticalCenter }
-                    Text { font.family: Theme.fontFamily; objectName: "reasoningEffortBadge"; visible: backend.reasoningEffort !== "off"; text: "· " + ({low:"Low",high:"High",max:"Max"}[backend.reasoningEffort] || ""); color: Theme.accent; font.pixelSize: Theme.font(11, visible); anchors.verticalCenter: parent.verticalCenter }
+                    Text { font.family: Theme.fontFamily; objectName: "reasoningEffortBadge"; visible: backend.reasoningEffort !== "off"; text: "· " + Reasoning.label(backend.reasoningEffort); color: Theme.accent; font.pixelSize: Theme.font(11, visible); anchors.verticalCenter: parent.verticalCenter }
                     Glyph { name: "chevron-down"; width: Theme.icon(12); height: Theme.icon(12); anchors.verticalCenter: parent.verticalCenter }
                 } }
             }
