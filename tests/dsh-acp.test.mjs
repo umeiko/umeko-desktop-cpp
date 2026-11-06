@@ -228,12 +228,13 @@ test('packaged runtime resolves SDK from its prepared release dependency tree', 
   await writeFile(join(sdk, 'package.json'), JSON.stringify({ name: '@agentclientprotocol/sdk', type: 'module', exports: './acp.js' }));
   await writeFile(join(sdk, 'acp.js'), 'export {};\n');
   const expected = await realpath(join(sdk, 'acp.js'));
-  assert.equal(resolveSdkEntry(join(home, 'runtime')), expected);
-  // Node resolves directory aliases (including macOS /var -> /private/var).
+  assert.equal(await realpath(resolveSdkEntry(join(home, 'runtime'))), expected);
+  // Canonicalize both sides: Node may retain a Windows 8.3 parent directory,
+  // while fs.realpath expands it; macOS also has /var -> /private/var aliases.
   // Keep checking the exact prepared SDK, also when entered through an alias.
   const alias = join(home, 'runtime-alias');
   await symlink(join(home, 'runtime'), alias, process.platform === 'win32' ? 'junction' : 'dir');
-  assert.equal(resolveSdkEntry(alias), expected);
+  assert.equal(await realpath(resolveSdkEntry(alias)), expected);
 });
 
 test('permission-partial preserves cached tool details, explanations and one-shot choices', async () => {
