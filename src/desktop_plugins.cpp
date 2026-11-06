@@ -245,6 +245,7 @@ void DesktopPlugins::synchronize() {
   }
   QVariantMap next{{"token", v->key},           {"id", v->id},
                    {"workspace", v->workspace}, {"title", v->title},
+                   {"leafId", v->searchLeaf},
                    {"busy", v->busy()},         {"messages", messages}};
   if (next == m_session)
     return;

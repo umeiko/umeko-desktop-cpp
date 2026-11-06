@@ -48,9 +48,14 @@ Rectangle {
         activeId=id
         const ids=terminals.filter(row=>row.group===selected.group).map(row=>row.id)
         if (JSON.stringify(ids)!==JSON.stringify(visibleIds)) visibleIds=ids
-        Qt.callLater(refreshViews)
+        refreshViewsTimer.restart()
     }
     function refreshViews() { if (visibleIds.length) call("view",{ids:visibleIds},"view") }
+    Timer {
+        id: refreshViewsTimer
+        interval: 0; repeat: false
+        onTriggered: if (root.sdk.active) root.refreshViews()
+    }
     function menuAt(id,item,x,y) { menuId=id; const point=item.mapToItem(root,x,y); terminalMenu.x=point.x;terminalMenu.y=point.y;terminalMenu.open() }
     function rename(id) { select(id);renameId=id }
     Component.onCompleted: refresh(true)

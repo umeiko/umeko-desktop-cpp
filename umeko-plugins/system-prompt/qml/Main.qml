@@ -9,6 +9,7 @@ FocusScope {
     required property var sdk
     clip: true
     property bool initialized: false
+    property string loadedContext: ""
     property var tree: []
     property var drafts: ({})
     property var collapsed: ({})
@@ -31,6 +32,12 @@ FocusScope {
     readonly property color changedColor: dark ? "#d7b65b" : "#946200"
     readonly property color changedBg: dark ? "#1fd7b65b" : "#1fe0a526"
     readonly property var breadcrumb: pathTo(tree, selectedId, [])
+    function contextKey() {
+        // The native leaf is an opaque revision, available without reading
+        // messages. Our inspections do not advance it; normal chat turns do.
+        const session = sdk.session || {}
+        return JSON.stringify([session.token || session.id || "", session.workspace || "", session.leafId || "", session.messages || []])
+    }
     function t(zh, en) { return sdk.language.indexOf("zh") === 0 ? zh : en }
     function count(value) { return Number(value || 0).toLocaleString(Qt.locale("en_US"), "f", 0) }
     // Known runtime names are translated here; Skill, Widget and file names are shown as they are.
@@ -161,7 +168,10 @@ FocusScope {
             notice = t("操作失败。你的草稿仍保留，请刷新后重试。", "The operation failed. Your drafts are kept; refresh and retry.")
             return
         }
-        if (value.tree) applySnapshot(value)
+        if (value.tree) {
+            applySnapshot(value)
+            loadedContext = contextKey()
+        }
         if (entry.operation === "systemPrompt.save" || entry.operation === "systemPrompt.restore") {
             // Clear only the draft covered by this completed operation.
             // A refresh or an unrelated checkbox update never discards drafts.
@@ -288,7 +298,10 @@ FocusScope {
         target: root.sdk
         ignoreUnknownSignals: true
         function onActiveChanged() { if (root.initialized && root.sdk.active) root.reload(); else root.initialize() }
-        function onSessionChanged() { if (root.initialized && root.sdk.active && !root.working) root.reload() }
+        function onSessionChanged() {
+            if (root.initialized && root.sdk.active && !root.working && !root.sessionBusy && root.contextKey() !== root.loadedContext)
+                root.reload()
+        }
         function onHostResponse(identifier, value) { root.complete(identifier, value) }
     }
 }

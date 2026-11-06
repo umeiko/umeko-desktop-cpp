@@ -110,6 +110,8 @@ def create_plugin(context):
 
 `context.session` 提供前台聊天的 id、token、title、workspace、busy；有 `session.read` 时还提供最近 8 条文本消息（每条最多 2000 字符）。会话实例绑定该聊天，应用实例持续接收前台快照；方法中的 `context.request_session` 固定为调用聊天，不受前台切换影响。没有 API 密钥、供应商凭据或完整系统提示词。token 是本次应用内会话实例的标识，跨应用重启需重新捕获。主会话新获得 id 时会话启用设置会随之迁移。
 
+C++ 宿主还提供可选的 `leafId`：不含消息内容的当前历史位置标识，可用于判断逻辑上下文是否变化。单纯的忙闲通知不代表历史改变；页面不应因自己的查询完成而无限重复查询。其他宿主未提供此字段时，应保留手动刷新入口。
+
 - `context.config`：已校验的配置。
 - `context.package_dir`：安装包目录，视为只读资源。
 - `context.state_dir`：会话级按插件和聊天划分，应用级使用插件固定的 `application` 持久状态目录。

@@ -1046,20 +1046,26 @@ private slots:
     backend->sessionIndex.prepend(QVariantMap{{"id","published-stress"},{"file",path},{"title","Stress"},{"workspace",directory.path()}});
     backend->setMetadata("published-stress",{{"viewport",QVariantMap{{"index",5996},{"offset",0},{"follow",false}}}});
     QElapsedTimer clock;clock.start();qint64 last=0,maxGap=0;QTimer heartbeat;heartbeat.setInterval(10);
-    connect(&heartbeat,&QTimer::timeout,this,[&]{auto now=clock.elapsed();maxGap=qMax(maxGap,now-last);last=now;});heartbeat.start();
+    QString phase="cold/repeated navigation",previousPhase=phase,maxGapPhase;
+    connect(&heartbeat,&QTimer::timeout,this,[&]{auto now=clock.elapsed();if(now-last>maxGap){maxGap=now-last;maxGapPhase=previousPhase+" -> "+phase;}last=now;previousPhase=phase;});heartbeat.start();
     QVariantList samples;
     for(int iteration=0;iteration<4;++iteration){backend->newSession();QSignalSpy ready(backend->previewLoader,&SessionPreview::ready);QElapsedTimer timing;timing.start();
       backend->previewLoader->prepare("published-stress",7000+iteration);QTRY_VERIFY_WITH_TIMEOUT(!ready.isEmpty(),10000);QVERIFY(ready.last()[1].toBool());
       QVERIFY(backend->previewLoader->activate(7000+iteration));QTRY_COMPARE_WITH_TIMEOUT(backend->chat.rowCount(),6000,5000);QTRY_VERIFY_WITH_TIMEOUT(backend->chat.rangeReady(5996,5999),5000);QTRY_VERIFY_WITH_TIMEOUT(!find("conversation")->property("restoring").toBool(),5000);QVERIFY(backend->scrollAnchor()>5980);samples<<timing.elapsed();
       QVERIFY(backend->chat.data(backend->chat.index(5999),ChatModel::MessageRole).toMap()["text"].toString().size()<1000);
     }
+    phase="rapid switching";
     for(int iteration=0;iteration<8;++iteration){backend->newSession();backend->openSession("published-stress");}
     QTRY_COMPARE_WITH_TIMEOUT(backend->chat.rowCount(),6000,5000);QTRY_VERIFY_WITH_TIMEOUT(!find("conversation")->property("restoring").toBool(),5000);QVERIFY(backend->scrollAnchor()>5980);
     auto view=find("conversation");QVERIFY(view);
+    phase="scroll reversals";
     for(int row:QList<int>{20,5990,2500,40,5980,100,3000}){QVERIFY(QMetaObject::invokeMethod(view,"jumpToMessage",Q_ARG(QVariant,row)));QTest::qWait(35);}
     QTest::qWait(250);QVERIFY(backend->chat.rangeReady(3000,3003));
+    phase="prepared-row instrumentation";QElapsedTimer probe;probe.start();
     int prepared=0;for(int i=0;i<6000;++i)prepared+=!backend->chat.data(backend->chat.index(i),ChatModel::MessageRole).toMap()["_loading"].toBool();QVERIFY(prepared<=256);
-    QTest::qWait(150);heartbeat.stop();QVERIFY2(maxGap<1000,qPrintable(QString("UI heartbeat gap %1ms").arg(maxGap)));
+    const auto probeMs=probe.elapsed();phase="idle completion";
+    QTest::qWait(150);heartbeat.stop();qInfo()<<"History heartbeat diagnostics:"<<maxGap<<maxGapPhase<<"prepared-row probe(ms):"<<probeMs;
+    QVERIFY2(maxGap<1000,qPrintable(QString("UI heartbeat gap %1ms (%2)").arg(maxGap).arg(maxGapPhase)));
     QVERIFY(intact.open(QIODevice::ReadOnly));QCOMPARE(U::sha(intact.readAll()),digest);
     qInfo()<<"6000 messages + 8MiB failure; cold/repeated(ms):"<<samples<<"max UI gap(ms):"<<maxGap<<"prepared rows:"<<prepared<<"platform:"<<QGuiApplication::platformName();
   }
@@ -4713,7 +4719,10 @@ def create_provider(context): return Interactive(context)
     QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point(terminal));
     QDir().mkpath(root+"/build/screenshots");
     window->grabWindow().save(root+"/build/screenshots/terminal-live.png");
+    // Queue a final frame refresh, then close without yielding to the event loop.
+    QVERIFY(QMetaObject::invokeMethod(page,"select",Q_ARG(QVariant,id)));
     m->closePage();m->setEnabled("terminal",previous);
+    QTRY_VERIFY(!find("terminalPluginPage"));
     if(!previous)QTRY_VERIFY_WITH_TIMEOUT(process.isNull()||process->state()==QProcess::NotRunning,2000);
     restore.dismiss();
   }
@@ -5412,7 +5421,22 @@ def create_provider(context): return Interactive(context)
     configureAPI();backend->newSession();window->setProperty("page","chat");auto manager=backend->desktopExtensions;
     manager->setEnabled("system-prompt",true);manager->setSessionEnabled("system-prompt",true);
     QVERIFY(manager->openPage("system-prompt"));QTRY_VERIFY_WITH_TIMEOUT(manager->workers.contains("system-prompt") && manager->workers["system-prompt"]->ready,15000);
-    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
+    QTRY_VERIFY_WITH_TIMEOUT(find("systemPromptWidget") && find("systemPromptWidget")->property("initialized").toBool(),15000);
+    QTRY_VERIFY_WITH_TIMEOUT(find("systemPromptWidget")->property("available").toBool() && !backend->busy() && manager->session()["leafId"].toString()==backend->view->searchLeaf,15000);
+    // Busy/state notifications for the same context must not start another
+    // prompt inspection, which can otherwise race the following Save request.
+    QSignalSpy idleReplies(manager,&DesktopPlugins::hostResponse);
+    emit manager->sessionChanged();
+    QTest::qWait(350);
+    QCOMPARE(idleReplies.count(),0);
+    backend->send("Refresh the open prompt page after this turn");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy() && lastText().contains("Refresh the open prompt page"),15000);
+    QTRY_COMPARE_WITH_TIMEOUT(idleReplies.count(),1,15000);
+    QVERIFY(idleReplies.last()[2].toMap()["ok"].toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(!find("systemPromptWidget")->property("working").toBool() && !backend->busy(),5000);
+    emit manager->sessionChanged();
+    QTest::qWait(350);
+    QCOMPARE(idleReplies.count(),1);
     QSignalSpy replies(manager,&DesktopPlugins::hostResponse);
     auto request=manager->requestHost("systemPrompt.inspect","{}");QVERIFY(!request.isEmpty());
     QVariantMap response;const auto received=[&]{for(const auto &value:replies)if(value[1].toString()==request){response=value[2].toMap();return true;}return false;};
