@@ -1,4 +1,5 @@
 #include "backend.hpp"
+#include <QtConcurrent>
 #include "miniz.h"
 #include <QDesktopServices>
 #include <stdexcept>
@@ -57,6 +58,7 @@ static QVariantMap newAccount(QVariantMap manifest) {
           {"name", manifest["name"]},
           {"pluginId", manifest["id"]},
           {"pluginVersion", manifest["version"]},
+          {"generationCapabilities",manifest["generationCapabilities"]},
           {"baseUrl", ""},
           {"hasKey", false},
           {"models", QVariantList{}}};
@@ -518,7 +520,7 @@ void Providers::invoke(QString id, QString method, QVariantMap params,
   timeout->setSingleShot(true);
   // Interactive sign-in includes human confirmation. Keep other operations'
   // existing limits and use an absolute bound for the whole login operation.
-  timeout->setInterval(method == "login" ? 600000 : method == "events" ? 300000 : 60000);
+  timeout->setInterval(method == "login" ? 600000 : (method == "events" || method == "generate") ? 900000 : 60000);
   auto complete = [=, this](QVariantMap result) {
     if (*finished)
       return;
@@ -827,6 +829,7 @@ bool Providers::applyModels(QString id, QVariantList rows, QString label) {
                    QString(" · %1 个模型").arg(models.size());
     b->invalidate();
     b->notify();
+    b->queueReasoningDetection(id);
     emit changed();
     emit b->toast("可用模型已更新");
     return true;
@@ -890,6 +893,7 @@ bool Providers::saveModels(QString id, QString raw) {
     b->store.data["providers"] = providers;
     b->invalidate();
     b->notify();
+    b->queueReasoningDetection(id);
     emit changed();
     return true;
   } catch (const std::exception &e) {
@@ -1005,6 +1009,18 @@ void Providers::complete(QString request, QString id, QVariantMap body) {
                      {"error", "供应商正在登录或刷新，请稍后重试"}});
     return;
   }
+  if(body["_umeko_generation"].toBool()) {
+    if(!QRegularExpression("^[a-f0-9-]{36}$").match(request).hasMatch())return;
+    const auto transfer=b->store.directory+"/generation-transfer/"+request;
+    QDir().mkpath(transfer);QFile::setPermissions(transfer,QFile::ReadOwner|QFile::WriteOwner|QFile::ExeOwner);
+    body["_transferDir"]=transfer;
+    QTimer::singleShot(1800000,this,[transfer]{(void)QtConcurrent::run([transfer]{QDir(transfer).removeRecursively();});});
+    invoke(id,"generate",body,[this,request,id,body](QVariantMap result){
+      if(!result.contains("error"))b->gatewayWrite({{"type","provider-event"},{"id",request},{"event",QVariantMap{{"type","result"},{"result",QVariantMap{{"items",result["items"]},{"provider",b->provider(id)["name"]},{"model",body["model"]}}}}}});
+      b->gatewayWrite({{"type","provider-result"},{"id",request},{"error",result.value("error","")}});
+    },[this,request](QVariantMap data){b->gatewayWrite({{"type","provider-event"},{"id",request},{"event",data}});},request);return;
+  }
+
   invoke(
       id, "events", body,
       [this, request](QVariantMap result) {
@@ -1020,6 +1036,10 @@ void Providers::complete(QString request, QString id, QVariantMap body) {
       request);
 }
 void Providers::cancel(QString request) {
+  if(QRegularExpression("^[a-f0-9-]{36}$").match(request).hasMatch()){
+    const auto transfer=b->store.directory+"/generation-transfer/"+request;
+    (void)QtConcurrent::run([transfer]{QDir(transfer).removeRecursively();});
+  }
   auto process = workers.value(request);
   if (!process)
     return;

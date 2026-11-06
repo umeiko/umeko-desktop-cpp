@@ -23,6 +23,7 @@ public:
   QVariantList rows() const;
   QVariantList sessionPlugins() const;
   bool skillsEnabled(QString token) const;
+  bool systemPromptEnabled() const {return enabled("system-prompt") && sessionEnabled("system-prompt");}
   QVariantMap session() const;
   QVariantMap page() const;
   bool busy() const { return m_busy; }
@@ -47,6 +48,8 @@ public:
   QVariantMap execute(QString operation, QVariantMap args, QString callerKey);
   bool checkpointLocked(QString workspace) const;
   void observe(QString key, QVariantMap event);
+  bool prepareSession(std::shared_ptr<struct Session> record);
+  bool captureSessionApproval(QString key,QVariantMap event);
   Q_INVOKABLE bool uninstall(QString id);
   Q_INVOKABLE bool exportSdk(QString url);
   void synchronize();
@@ -56,6 +59,7 @@ signals:
   void sessionChanged();
   void pageChanged();
   void requested();
+  void importRequested();
   void dismissed();
   void response(QString request, QVariantMap result);
   void managed(QString token, QVariantMap result);

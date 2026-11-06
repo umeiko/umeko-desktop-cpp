@@ -1,6 +1,7 @@
 #include "backend.hpp"
 #include "pi_capabilities.hpp"
 #include "global_agents.hpp"
+#include <QtConcurrent>
 
 QVariantMap Backend::sessionTurnStatus(std::shared_ptr<Session> s) const {
   if(s->busy() && (s->action=="prompt" || s->action=="widget-notify") && s->promptStarted){
@@ -56,6 +57,7 @@ void Backend::markRead(std::shared_ptr<Session> s) {
     setMetadata(s->id, {{"unread", false}});
 }
 void Backend::activate(std::shared_ptr<Session> s) {
+  const QScopedValueRollback<bool> transition(switchingView,true);
   if(!s->workspace.isEmpty())s->workspace=U::cleanPath(s->workspace);
   streaming.stop();
   if(view && view!=s && !view->id.isEmpty())setMetadata(view->id,{{"viewport",QVariantMap{{"index",view->scrollIndex},{"offset",view->scrollY},{"follow",view->followTail}}}});
@@ -78,6 +80,7 @@ void Backend::activate(std::shared_ptr<Session> s) {
     if (m["provider"] == s->provider && m["id"] == s->model)
       valid = true;
   }
+  if (s->backend=="dsh" && s->dshOwnFixed && s->dshOwn) valid=true;
   if (!valid && !s->busy()) {
     repairSelection();
     s->provider = store.data["selectedProvider"].toString();
@@ -102,21 +105,22 @@ void Backend::activate(std::shared_ptr<Session> s) {
   trimPool();
 }
 void Backend::trimPool() {
-  int active = 0;
-  for (auto s : records)
-    if (s->process)
-      ++active;
-  for (auto key : lru) {
-    if (active <= 8)
-      break;
-    auto s = records.value(key);
-    if (s && s != view && s->process && !s->busy() && !s->subagentsActive) {
-      retire(s);
-      --active;
-    }
+  const auto idle=[](const std::shared_ptr<Session> &s){return s && s->process && !s->busy() && !s->subagentsActive;};
+  int count=0;for(const auto &s:records)if(idle(s))++count;
+  const int limit=qMax(idle(view)?1:0,qBound(0,store.data["ui"].toMap().value("sessionCacheSize",3).toInt(),64));
+  for(const auto &key:lru) {
+    if(count<=limit)break;
+    const auto s=records.value(key);
+    if(s!=view && idle(s)){retire(s);--count;}
   }
 }
+void Backend::setSessionCacheSize(int count) {
+  if(count<0 || count>64)return;
+  auto ui=store.data["ui"].toMap();if(ui.value("sessionCacheSize",3).toInt()==count)return;
+  ui["sessionCacheSize"]=count;store.data["ui"]=ui;store.save();trimPool();emit changed();
+}
 void Backend::retire(std::shared_ptr<Session> s) {
+  if(s->dshPreparing){auto p=s->dshPreparing;s->dshPreparing=nullptr;p->kill();p->deleteLater();}
   endControlWork(controlNativeWork.take(s->key), {{"ok", false}, {"error", "Pi operation was cancelled before completion"}});
   if (!s->process)
     return;
@@ -130,7 +134,7 @@ void Backend::retire(std::shared_ptr<Session> s) {
            '\n');
   p->closeWriteChannel();
   connect(p, &QProcess::finished, p, &QObject::deleteLater);
-  QTimer::singleShot(4000, p, [p] {
+  QTimer::singleShot(s->backend=="dsh"?12000:4000, p, [p] {
     if (p->state() != QProcess::NotRunning)
       p->kill();
   });
@@ -153,6 +157,7 @@ void Backend::indexSession(std::shared_ptr<Session> s) {
   QVariantMap info{
       {"id", s->id},       {"file", s->file},   {"workspace", s->workspace},
       {"title", s->title}, {"model", s->model}, {"provider", s->provider}};
+  if(s->backend=="dsh")info.insert({{"backend","dsh"},{"acpSessionId",s->acpSessionId},{"dshHome",s->dshHome},{"dshOwnConfig",s->dshOwn},{"file",store.directory+"/dsh/transcripts/"+s->id+".json"}});
   for (auto &v : sessionIndex)
     if (v.toMap()["id"] == s->id) {
       v = info;
@@ -168,7 +173,7 @@ void Backend::sessionInfo(std::shared_ptr<Session> s, QVariantMap info) {
     s->file = info["file"].toString();
   if (!info["title"].toString().isEmpty())
     s->title = info["title"].toString();
-  if (!info["workspace"].toString().isEmpty())
+  if (!info["workspace"].toString().isEmpty() && !(s->workspace.isEmpty() && U::cleanPath(info["workspace"].toString())==U::cleanPath(store.directory+"/workspace")))
     s->workspace = U::cleanPath(info["workspace"].toString());
   if (!old.isEmpty() && old != s->id) {
     for (int i = sessionIndex.size() - 1; i >= 0; --i)
@@ -242,6 +247,17 @@ void Backend::loadNativeIndex() {
          });
 }
 void Backend::writePi(std::shared_ptr<Session> s, QVariantMap payload) {
+  if(s->backend=="dsh") {
+    const auto type=payload["type"].toString();
+    if(type=="reasoning_effort"){switchDshConfig(s);return;}
+    if(type=="abort")payload["type"]="cancel";
+    if(QStringList{"edit-queue","delete-queue","steer-queued","promote-queue"}.contains(type)) {
+      if(type=="steer-queued" || type=="promote-queue"){emit toast("DeepSeek Harness 的排队消息会在当前任务结束后发送。");return;}
+      for(int i=0;i<s->queue.size();++i)if(s->queue[i].toMap()["id"]==payload["id"]){auto item=s->queue.takeAt(i).toMap();if(type=="edit-queue")restoreQueued(s,{item["text"].toString()});break;}
+      emit chatChanged();return;
+    }
+    if(!QStringList{"start","prompt","open","cancel","abort","set_config","tool_permission_mode","ui_response","shutdown"}.contains(type))return;
+  }
   if (s->process && s->process->state() == QProcess::Running)
     s->process->write(
         QJsonDocument::fromVariant(payload).toJson(QJsonDocument::Compact) +
@@ -250,11 +266,14 @@ void Backend::writePi(std::shared_ptr<Session> s, QVariantMap payload) {
 bool Backend::command(std::shared_ptr<Session> s, QString action,
                       QVariantMap values) {
   if (desktopExtensions->checkpointLocked(s->workspace)) return false;
+  cancelReasoningDetection(s->provider);
+  if(s->backend=="dsh")return commandDsh(s,action,values);
   if (s->busy() || kernelBusy()) {
     emit toast(gatewayPort ? "请等待当前任务结束"
                            : "模型网关尚未准备好，请检查 Node.js");
     return false;
   }
+  if(!desktopExtensions->prepareSession(s))return false;
   if (s->model.isEmpty()) {
     emit toast("请先配置供应商并选择模型");
     return false;
@@ -271,6 +290,8 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
           ? (action == "prompt" || action == "widget-notify" || action == "compact" ? "running" : "working")
           : "loading";
   s->status = s->phase == "loading" ? "正在加载 Pi" : "正在生成";
+  values["systemPromptEnabled"] = desktopExtensions->systemPromptEnabled();
+  values["systemPromptStateDir"] = store.directory+"/system-prompts";
   values["type"] = action;
   values["model"] = s->model;
   reconcileReasoning(s);
@@ -292,6 +313,8 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   QDir().mkpath(fallback);
   values["gateway"] = QString("http://127.0.0.1:%1/").arg(gatewayPort);
   values["token"] = privateToken;
+  values["auxiliaryVision"] = auxiliaryVision();
+  values["generation"] = generationConfig();
   values["workspace"] = s->workspace;
   values["defaultCwd"] = fallback;
   values["agentDir"] = agentDir();
@@ -303,6 +326,8 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   values["models"] = modelCatalog();
   values["agent"] = store.data["agent"];
   values["permissionMode"]=store.data["agent"].toMap().value("toolPermissionMode","auto");
+  values["dangerousAllowed"]=s->dangerousAllowed && s->pluginOwner.isEmpty();
+  if(!s->pluginOwner.isEmpty())values["pluginSessionPolicy"]=s->pluginPolicy;
   values["language"]=language();values["dataDir"]=store.directory;
   QVariantMap extensions;
   for(auto it=s->extensionModes.cbegin();it!=s->extensionModes.cend();++it)
@@ -410,6 +435,7 @@ void Backend::sendText(QString text, bool steering) {
   auto s = view;
   text = text.trimmed();
   sendError.clear();
+  if(s->backend=="dsh"){sendDsh(text,steering);return;}
   if (desktopExtensions->checkpointLocked(s->workspace)) {
     sendError = "该工作目录正在恢复代码检查点，完成后即可发送消息。";
     emit toast(sendError); emit changed(); return;
@@ -433,7 +459,7 @@ void Backend::sendText(QString text, bool steering) {
   for (auto &v : attachments) {
     auto a = v.toMap();
     if (a["kind"] == "image") {
-      if (vision)
+      if (vision || (auxiliaryVision()["autoAnalyze"].toBool() && !auxiliaryVision()["model"].toString().isEmpty()))
         images << QVariantMap{
             {"type", "image"}, {"data", a["data"]}, {"mimeType", a["mime"]}};
       else {
@@ -530,6 +556,8 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
   if (closing)
     return;
   auto type = payload["type"].toString();
+  if(s->backend=="dsh"){if(dshEvent(s,payload))return;if(type=="ui_request")payload["backend"]="dsh";}
+  if(type=="dangerous_approval_cleared"){s->dangerousAllowed=false;if(s==view)emit approvalChanged();return;}
   desktopExtensions->observe(s->key,payload);
   if(type=="tool")s->petActivity="working";
   else if(QStringList{"assistant_start","thinking_delta","done","error","exit"}.contains(type))s->petActivity.clear();
@@ -678,7 +706,12 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
                                         payload["name"].toString(),
                                         payload["args"].toMap(), s->workspace)
                           : tools[index].toMap();
+    if(s->backend=="dsh" && payload["args"].typeId()==QMetaType::QVariantMap) {
+      const auto view=U::toolView(payload["id"].toString(),payload["name"].toString(),payload["args"].toMap(),s->workspace);
+      tool["arguments"]=view["arguments"];tool["path"]=view["path"];
+    }
     tool["state"] = payload["state"];
+    if(payload.contains("video"))tool["video"]=payload["video"];
     if (!payload["subagent"].toMap().isEmpty()) tool["subagent"] = payload["subagent"];
     if (!payload["media"].toList().isEmpty()) {
       tool["media"] = payload["media"];
@@ -710,6 +743,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
     if (visible)
       emit editorText(s->draft);
   } else if (type == "ui_request") {
+    if(!s->pluginOwner.isEmpty() && desktopExtensions->captureSessionApproval(s->key,payload))return;
     s->approval = payload;
     if (visible)
       emit approvalChanged();
@@ -845,6 +879,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
   if (type == "ready") children->processReady(s);
 
   if (type == "error") endControlWork(controlNativeWork.take(s->key), {{"ok", false}, {"error", payload.value("message", "Pi operation failed")}});
+  if(s->backend=="dsh" && QStringList{"delta","thinking_delta","tool","error"}.contains(type))saveDsh(s);
   if (visible) {
     if (type == "delta" || type == "thinking_delta") {
       if (!streaming.isActive())
@@ -861,6 +896,7 @@ void Backend::event(std::shared_ptr<Session> s, QVariantMap payload) {
 void Backend::stop() {
   if (view->phase == "running") {
     view->cancelled = true;
+    if(view->backend=="dsh"){view->dshInterrupted=true;saveDsh(view);if(view->dshPreparing){auto p=view->dshPreparing;view->dshPreparing=nullptr;p->kill();p->deleteLater();dshEvent(view,{{"type","dsh_done"},{"stopReason","cancelled"}});return;}}
     view->networkRetry.clear();
     emit retryChanged();
     writePi(view, {{"type", "abort"}});
@@ -882,6 +918,17 @@ void Backend::respondApproval(bool allowed) {
   view->approval.clear();
   emit approvalChanged();
 }
+void Backend::grantDangerousApproval() {
+  if(!canGrantDangerousApproval())return;
+  view->dangerousAllowed=true;
+  writePi(view,{{"type","dangerous_approval"},{"allowed",true}});
+  respondApproval(true);
+}
+void Backend::revokeDangerousApproval() {
+  view->dangerousAllowed=false;
+  writePi(view,{{"type","dangerous_approval"},{"allowed",false}});
+  emit approvalChanged();
+}
 void Backend::respondPiDialog(QString value) {
   writePi(view, {{"type", "ui_response"},
                  {"id", view->approval["id"]},
@@ -900,6 +947,19 @@ void Backend::operateSession(QString id, QVariantMap action) {
   if (record && record->busy()) {
     emit toast("请等待该会话结束后操作");
     return;
+  }
+  if(saved["backend"]=="dsh") {
+    if(!QRegularExpression("^dsh-[a-f0-9-]{32,36}$").match(id).hasMatch()){emit toast("会话编号无效");return;}
+    if(action["action"]=="rename") {
+      auto info=saved;info["title"]=action["title"];for(auto &row:sessionIndex)if(row.toMap()["id"]==id)row=info;
+      if(record)record->title=action["title"].toString();saveSessions();emit chatChanged();return;
+    }
+    if(action["action"]=="export") {
+      const auto file=store.directory+"/dsh/transcripts/"+id+".json",target=action["outputFile"].toString();
+      auto watcher=new QFutureWatcher<bool>(this);auto previous=dshWriter;
+      connect(watcher,&QFutureWatcher<bool>::finished,this,[this,watcher]{const auto ok=watcher->result();watcher->deleteLater();emit toast(ok?"会话显示历史已导出":"会话导出失败");});
+      watcher->setFuture(QtConcurrent::run([file,target,previous]() mutable {previous.waitForFinished();QFile source(file);if(!source.open(QIODevice::ReadOnly))return false;QSaveFile output(target);if(!output.open(QIODevice::WriteOnly))return false;while(!source.atEnd()){const auto data=source.read(65536);if(data.isEmpty() && source.error()!=QFile::NoError)return false;if(output.write(data)!=data.size())return false;}return output.commit();}));return;
+    }
   }
   if (record)
     retire(record);
@@ -953,6 +1013,7 @@ void Backend::forkSessionById(QString id) {
     auto source = v.toMap();
     if (source["id"] != id)
       continue;
+    if(source["backend"]=="dsh"){emit toast("DeepSeek Harness 首版不支持会话分支，请新建聊天。");return;}
     auto s = fresh(source["workspace"].toString());
     s->model = source.value("model", s->model).toString();
     s->provider = source.value("provider", s->provider).toString();
@@ -975,6 +1036,16 @@ void Backend::deleteSession(QString id) {
     auto s = sessionIndex[i].toMap();
     if (s["id"] != id)
       continue;
+    if(s["backend"]=="dsh") {
+      if(!QRegularExpression("^dsh-[a-f0-9-]{32,36}$").match(id).hasMatch()){emit toast("会话编号无效");return;}
+      if(live){retire(live);dshDirty.remove(live->key);live->phase="working";}
+      const auto file=store.directory+"/dsh/transcripts/"+id+".json";auto previous=dshWriter;
+      auto watcher=new QFutureWatcher<bool>(this);
+      connect(watcher,&QFutureWatcher<bool>::finished,this,[this,watcher,id,live]{const bool ok=watcher->result();watcher->deleteLater();if(live)live->phase="idle";if(!ok){emit toast("无法删除会话文件");return;}
+        for(int i=sessionIndex.size()-1;i>=0;--i)if(sessionIndex[i].toMap()["id"]==id)sessionIndex.removeAt(i);
+        if(live)records.remove(live->key);auto meta=store.data["sessionMeta"].toMap();meta.remove(id);store.data["sessionMeta"]=meta;store.save();saveSessions();if(view->id==id)newSession();emit chatChanged();});
+      watcher->setFuture(QtConcurrent::run([file,previous]() mutable {previous.waitForFinished();return !QFileInfo::exists(file) || QFile::remove(file);}));return;
+    }
     auto file = s["file"].toString();
     if (!file.isEmpty()) {
       auto base = U::cleanPath(store.directory + "/pi/sessions") + "/";

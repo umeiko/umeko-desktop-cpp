@@ -40,7 +40,7 @@ QVariantList ChatModel::project(const QVariantList &messages) {
           continue;
         }
         batch << tool;
-        if (tool["name"] == "submit_to_chatbox" &&
+        if (QStringList{"submit_to_chatbox","image_gen","voice_gen","video_gen"}.contains(tool["name"].toString()) &&
             !tool["media"].toList().isEmpty()) {
           activity << QVariantMap{{"kind", "tools"}, {"tools", batch}};
           activity << QVariantMap{

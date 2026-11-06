@@ -80,7 +80,7 @@ QString DesktopPlugins::requestHost(QString operation, QString raw) {
   const auto document = QJsonDocument::fromJson(raw.toUtf8(), &error);
   if (error.error != QJsonParseError::NoError || !document.isObject()) return {};
   return host->requestFor(m_page, {{"operation", operation},
-      {"arguments", document.object().toVariantMap()}, {"session", m_session}});
+      {"arguments", document.object().toVariantMap()}, {"session", m_session}}, true);
 }
 QVariantMap DesktopPlugins::entry(QString id) const {
   return entries.value(id).toMap();
@@ -291,7 +291,7 @@ void DesktopPlugins::setEnabled(QString id, bool value) {
   } else if (sessionEnabled(id) &&
              (application(id) || entry(id)["page"].toString().isEmpty()))
     start(id);
-  if(id=="skill-manager")b->invalidate();
+  if(id=="skill-manager" || id=="system-prompt")b->invalidate();
   emit changed();
 }
 void DesktopPlugins::setSessionEnabled(QString id, bool value) {
@@ -327,7 +327,7 @@ void DesktopPlugins::setSessionEnabled(QString id, bool value) {
   } else if (enabled(id) && entry(id)["page"].toString().isEmpty())
     start(id);
   emit changed();
-  if(id=="skill-manager")b->invalidate();
+  if(id=="skill-manager" || id=="system-prompt")b->invalidate();
 }
 bool DesktopPlugins::openPage(QString id) {
   if (m_closed) return false;
@@ -1034,3 +1034,7 @@ void DesktopPlugins::reviewEvent(QString key, QVariantMap value) {
   if (!request.isEmpty()) reviewRequests[request] = {key, value["id"].toString()};
   else b->writePi(record, {{"type", "loop_review_response"}, {"id", value["id"]}});
 }
+
+bool DesktopPlugins::captureSessionApproval(QString key,QVariantMap event){return host->captureSessionApproval(key,event);}
+
+bool DesktopPlugins::prepareSession(std::shared_ptr<Session> record){return host->prepareSession(record);}

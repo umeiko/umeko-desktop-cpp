@@ -8,6 +8,10 @@ import {safeErrorText} from './provider-errors.mjs';
 import { upstreamFailure } from './network-retry.mjs';
 import { fetchProvider, failureReport } from './transport.mjs';
 import { responsesRequest, responsesEvents } from './openai-responses.mjs';
+import {generateMedia} from './native-generation.mjs';
+import {thinkingParameters,selectedFormat} from './thinking-formats.mjs';
+import fs from 'node:fs/promises';
+import {resolve,sep} from 'node:path';
 
 const MAX_BODY = 32 * 1024 * 1024;
 const textOf = content => typeof content === 'string' ? content : (content || []).filter(c => c.type === 'text').map(c => c.text || '').join('\n');
@@ -78,6 +82,7 @@ export function openaiToAnthropic(messages, tools, maxTokens, parameters = {}) {
   if (tools.length) result.tools = tools.map(t => ({ name: t.name, description: t.description || '', input_schema: t.parameters || { type: 'object', properties: {} } }));
   for (const key of ['temperature', 'top_p', 'top_k']) if (parameters[key] !== undefined) result[key] = parameters[key];
   if (parameters.reasoning_effort !== undefined) result.output_config = { effort: parameters.reasoning_effort };
+  if (parameters.thinking !== undefined) result.thinking=parameters.thinking;
   if (parameters.stop !== undefined) result.stop_sequences = Array.isArray(parameters.stop) ? parameters.stop : [parameters.stop];
   const choice = parameters.tool_choice;
   if (choice) result.tool_choice = typeof choice === 'object' ? { type: 'tool', name: choice.function.name } : { type: choice === 'required' ? 'any' : choice };
@@ -170,7 +175,7 @@ class EventQueue {
 }
 export class Gateway {
   constructor(emit = () => {}) { this.emit = emit; this.providers = []; this.models = []; this.token = ''; this.settings = {}; this.pending = new Map(); this.controllers = new Set(); this.privateServer = this.server(true); }
-  configure(input) { this.diagnosticsDir = input.diagnosticsDir; this.providers = input.providers || []; this.models = input.models || []; this.token = input.token || ''; this.settings = input.settings || this.settings; }
+  configure(input) { this.diagnosticsDir = input.diagnosticsDir; this.providers = input.providers || []; this.models = input.models || []; this.token = input.token || ''; this.settings = input.settings || this.settings; this.mediaConfig = {python:input.python, multimodal:input.multimodal, providers:this.providers, generationDirectory:input.generationDirectory}; }
   server(isPrivate) {
     const server = http.createServer((req, res) => { void this.handle(req, res, isPrivate).catch(() => {
       if (!res.headersSent) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { type: 'invalid_request_error', message: 'Invalid request structure' } })); }
@@ -180,6 +185,45 @@ export class Gateway {
     return server;
   }
   async start() { await new Promise((resolve, reject) => this.privateServer.once('error', reject).listen(0, '127.0.0.1', resolve)); return this.privateServer.address().port; }
+  async *pluginGeneration(body, signal) {
+    signal.throwIfAborted();
+    if(!["image","speech","video"].includes(body.kind))throw Error("Invalid generation kind");
+    const selected=this.mediaConfig.multimodal?.[body.kind];
+    const provider=this.providers.find(p=>p.id===selected?.providerId);
+    if(!provider?.generationCapabilities?.includes(body.kind) || !selected?.model)throw Error('Generation provider unavailable');
+    const text=body[body.kind==='speech'?'text':'prompt'];
+    if(typeof text!=='string'||!text.trim()||text.length>100000)throw Error('Invalid generation input');
+    const parameters={};const fields={image:['size','quality','count','format'],speech:['voice','format','speed'],video:['seconds','size']}[body.kind];
+    for(const field of fields)if(body[field]!==undefined || selected[field]!==undefined)parameters[field]=body[field]??selected[field];
+    for(const [key,value] of Object.entries(parameters)) {
+      if(key==='count') {if(!Number.isInteger(value)||value<1||value>10)throw Error('Invalid image count');}
+      else if(key==='speed') {if(typeof value!=='number'||!Number.isFinite(value)||value<.25||value>4)throw Error('Invalid speech speed');}
+      else if(typeof value!=='string'||value.length>512||/[\x00-\x1f\x7f]/.test(value))throw Error('Invalid generation parameter');
+    }
+    const id=randomUUID(),queue=new EventQueue();this.pending.set(id,queue);
+    const abort=()=>{queue.end(new Error('Generation cancelled'));this.emit({type:'provider-cancel',id});};signal.addEventListener('abort',abort,{once:true});
+    const timer=setTimeout(abort,15*60*1000);
+    this.emit({type:'provider',id,provider:provider.id,body:{_umeko_generation:true,kind:body.kind,model:selected.model,text,parameters}});
+    try {
+      for await(const event of queue) {
+        if(event.type==='result') {
+          const extensions={'image/png':'png','image/jpeg':'jpg','image/webp':'webp','audio/mpeg':'mp3','audio/ogg':'ogg','audio/wav':'wav','audio/flac':'flac','audio/aac':'aac','audio/pcm':'pcm','video/mp4':'mp4'};
+          const directory=await fs.realpath(resolve(this.mediaConfig.generationDirectory,id)),items=[];let bytes=0;
+          if(!Array.isArray(event.result?.items)||!event.result.items.length||event.result.items.length>10)throw Error('Invalid generated media list');
+          for(const item of event.result.items) {
+            if(!extensions[item.mimeType]||!item.mimeType.startsWith(body.kind==='speech'?'audio/':body.kind+'/'))throw Error('Invalid generated media type');
+            const file=await fs.realpath(resolve(item.file));
+            if(!file.startsWith(directory+sep))throw Error('Invalid generation transfer path');
+            const stat=await fs.lstat(file);bytes+=stat.size;
+            if(!stat.isFile()||stat.isSymbolicLink()||stat.size>32*1024*1024||bytes>48*1024*1024)throw Error('Invalid or oversized generation result');
+            items.push({data:(await fs.readFile(file)).toString('base64'),mimeType:item.mimeType,extension:extensions[item.mimeType]});
+          }
+          event.result.items=items;
+        }
+        yield event;
+      }
+    } finally {clearTimeout(timer);signal.removeEventListener('abort',abort);this.pending.delete(id);this.emit({type:'provider-cancel',id});}
+  }
   authorized(req, isPrivate) {
     const key = req.headers.authorization?.replace(/^Bearer\s+/i, '') || req.headers['x-api-key'] || '';
     if (isPrivate) return equal(key, this.token);
@@ -221,7 +265,8 @@ export class Gateway {
     }
     const anthropic = provider.api === 'anthropic', responses = provider.wireApi === 'responses', base = validateBase(provider.baseUrl);
     const headers = { 'Content-Type': 'application/json', 'User-Agent':'Umeko-Desktop', ...(anthropic ? { 'x-api-key': provider.key || '', 'anthropic-version': '2023-06-01' } : { Authorization: `Bearer ${provider.key || ''}` }) };
-    const payload = anthropic ? openaiToAnthropic(body.messages, body.tools, body.max_tokens, body.parameters) : responses ? responsesRequest(body.messages, body.tools, body.max_tokens, body.parameters) : { messages: body.messages, max_tokens: body.max_tokens, stream: true, stream_options: { include_usage: true }, ...(body.tools.length ? { tools: body.tools.map(t => ({ type: 'function', function: t })) } : {}), ...body.parameters };
+    const messages = body.messages.map(message => message.role === 'assistant' && message.tool_calls && message.content == null ? {...message, content:''} : message);
+    const payload = anthropic ? openaiToAnthropic(messages, body.tools, body.max_tokens, body.parameters) : responses ? responsesRequest(messages, body.tools, body.max_tokens, body.parameters) : { messages, max_tokens: body.max_tokens, stream: true, stream_options: { include_usage: true }, ...(body.tools.length ? { tools: body.tools.map(t => ({ type: 'function', function: t })) } : {}), ...body.parameters };
     payload.model = model.upstream;
     const suffix = anthropic ? '/messages' : responses ? '/responses' : '/chat/completions';
     const record = { request: { url: base + suffix, method: 'POST', headers, body: payload },
@@ -253,6 +298,27 @@ export class Gateway {
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
     if (!this.authorized(req, isPrivate)) return error(401, 'Invalid API key', 'authentication_error');
     const path = req.url.split('?')[0];
+    if (req.method === 'POST' && path === '/umeko/generate' && isPrivate) {
+      let bytes = 0; const parts = [];
+      for await (const chunk of req) { bytes += chunk.length; if (bytes > 1024 * 1024) return error(413,'Request is too large'); parts.push(chunk); }
+      const body=JSON.parse(Buffer.concat(parts).toString('utf8'));
+      const controller=new AbortController();this.controllers.add(controller);
+      res.on('close',()=>{if(!res.writableEnded)controller.abort();});
+      try {
+        if(body.kind==='video')res.writeHead(200,{'Content-Type':'application/x-ndjson','Cache-Control':'no-store'});
+        const selected=this.mediaConfig.multimodal?.[body.kind];
+        const plugin=this.providers.find(p=>p.id===selected?.providerId)?.api==='plugin';
+        for await(const event of (plugin?this.pluginGeneration(body,controller.signal):generateMedia(this.mediaConfig,body,controller.signal))) {
+          if(body.kind==='video') {if(!res.write(JSON.stringify(event)+'\n'))await once(res,'drain',{signal:controller.signal});}
+          else if(event.type==='result')json(200,event.result);
+        }
+        res.end();
+      } catch(failure) {
+        if(!res.headersSent)error(400,safeErrorText(failure.message));
+        else if(!res.destroyed)res.end(JSON.stringify({type:'error',error:{message:safeErrorText(failure.message)}})+'\n');
+      } finally {this.controllers.delete(controller);}
+      return;
+    }
     if (req.method === 'GET' && ['/v1/models', '/models'].includes(path)) return json(200, { object: 'list', data: this.models });
     if (req.method === 'GET' && path === '/') return json(200, { status: 'running', name: 'Umeko C++' });
     const anthropic = ['/v1/messages', '/messages'].includes(path);
@@ -265,7 +331,9 @@ export class Gateway {
       input = JSON.parse(Buffer.concat(parts).toString('utf8'));
       if (!Array.isArray(input.messages) || !input.messages.length || typeof input.model !== 'string') throw new Error();
     } catch { return error(400, 'Invalid JSON request or messages'); }
-    const p = this.providers.find(provider => provider.models?.some(model => model.alias === input.model));
+    const selector=isPrivate ? input._umeko_provider : undefined;
+    if(selector!==undefined && (typeof selector!=='string' || !selector))return error(400,'Invalid provider selector');
+    const p = this.providers.find(provider => (!selector || provider.id===selector) && provider.models?.some(model => model.alias === input.model));
     if (!p) return error(404, 'Model is not configured');
     const model = p.models.find(m => m.alias === input.model), messages = anthropic ? anthropicToOpenAI(input.messages, input.system) : input.messages;
     const hasImages = messages.some(m => Array.isArray(m.content) && m.content.some(c => ['image_url', 'image'].includes(c.type)));
@@ -273,6 +341,12 @@ export class Gateway {
     const tools = (input.tools || []).map(t => anthropic ? { name: t.name, description: t.description || '', parameters: t.input_schema } : t.function);
     if (tools.some(t => !t || typeof t.name !== 'string')) return error(400, 'Invalid tool declaration');
     const parameters = {}; for (const key of ['temperature', 'top_p', 'top_k', 'stop', 'tool_choice', 'parallel_tool_calls', 'reasoning_effort']) if (input[key] !== undefined) parameters[key] = input[key];
+    if(isPrivate && input._umeko_reasoning_effort!==undefined) {
+      if(typeof input._umeko_reasoning_effort!=='string' || !/^[^\s\x00-\x1f\x7f]{1,64}$/u.test(input._umeko_reasoning_effort))return error(400,'Invalid reasoning effort');
+      const format=input._umeko_reasoning_probe===true ? input._umeko_reasoning_format : selectedFormat(model,input._umeko_reasoning_effort);
+      delete parameters.reasoning_effort;
+      Object.assign(parameters,thinkingParameters(format || 'openai',input._umeko_reasoning_effort));
+    }
     if (anthropic && input.output_config?.effort !== undefined) parameters.reasoning_effort = input.output_config.effort;
     if (anthropic) { if (input.stop_sequences) parameters.stop = input.stop_sequences; const choice = input.tool_choice; if (choice) { parameters.tool_choice = choice.type === 'tool' ? { type: 'function', function: { name: choice.name } } : choice.type === 'any' ? 'required' : choice.type; if (choice.disable_parallel_tool_use !== undefined) parameters.parallel_tool_calls = !choice.disable_parallel_tool_use; } }
     const body = { messages, tools, max_tokens: Math.max(1, Math.min(32768, Number(input.max_tokens || input.max_completion_tokens || 4096))), parameters };

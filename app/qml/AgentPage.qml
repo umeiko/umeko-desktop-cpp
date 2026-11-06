@@ -9,19 +9,21 @@ Column {
     property bool toolsOpen: false
     property bool pluginsOpen: false
     property bool desktopOpen: false
+    property bool dshOpen: false
     property real availableHeight: 600
     signal navigated()
-    function openPlugins(identifier) { piOpen = false; desktopOpen = false; pluginsOpen = true; if(identifier)pluginManager.selectedId=identifier }
+    function openPlugins(identifier, importZip) { piOpen = false; desktopOpen = false; dshOpen = false; pluginsOpen = true; if(identifier)pluginManager.selectedId=identifier; if(importZip)Qt.callLater(()=>pluginManager.openImport()) }
     spacing: 18
-    onPiOpenChanged: { if (!piOpen) toolsOpen = false; else { pluginsOpen = false; desktopOpen = false; backend.piManagement.scan() }; navigated() }
+    onPiOpenChanged: { if (!piOpen) toolsOpen = false; else { pluginsOpen = false; desktopOpen = false; dshOpen = false; backend.piManagement.scan() }; navigated() }
     onToolsOpenChanged: navigated()
     onPluginsOpenChanged: navigated()
-    onDesktopOpenChanged: { if (desktopOpen) { piOpen = false; pluginsOpen = false }; navigated() }
-    onVisibleChanged: if (!visible) { piOpen = false; pluginsOpen = false; desktopOpen = false }
+    onDesktopOpenChanged: { if (desktopOpen) { piOpen = false; pluginsOpen = false; dshOpen = false }; navigated() }
+    onDshOpenChanged: { if (dshOpen) { piOpen = false; pluginsOpen = false; desktopOpen = false }; navigated() }
+    onVisibleChanged: if (!visible) { piOpen = false; pluginsOpen = false; desktopOpen = false; dshOpen = false }
     Button {
         id: piCard
         objectName: "openPiSettingsButton"
-        width: parent.width; implicitHeight: Theme.control(96); visible: !root.piOpen && !root.pluginsOpen && !root.desktopOpen
+        width: parent.width; implicitHeight: Theme.control(96); visible: !root.piOpen && !root.pluginsOpen && !root.desktopOpen && !root.dshOpen
         padding: 20; hoverEnabled: true
         Accessible.name: I18n.t("配置 Pi Coding Agent")
         HoverHandler { cursorShape: Qt.PointingHandCursor }
@@ -53,9 +55,53 @@ Column {
         onClicked: root.piOpen = true
     }
     Button {
+        id: dshCard
+        objectName: "openDshSettingsButton"
+        width: parent.width; implicitHeight: Theme.control(96); visible: !root.piOpen && !root.pluginsOpen && !root.desktopOpen && !root.dshOpen
+        padding: 20; hoverEnabled: true
+        Accessible.name: I18n.t("配置 DeepSeek Harness") + " · " + I18n.t("实验版")
+        HoverHandler { cursorShape: Qt.PointingHandCursor }
+        background: Rectangle { radius: 12; color: dshCard.hovered ? Theme.hover : Theme.surface; border.color: dshCard.activeFocus ? Theme.accent : Theme.line }
+        contentItem: Item {
+            Rectangle {
+                id: dshIcon
+                width: Theme.icon(48); height: Theme.icon(48); radius: 10; color: Theme.accentBg
+                anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+                IconImage { objectName: "dshSettingsArtwork"; anchors.fill: parent; anchors.margins: 5; source: "../icons/dsh.svg"; color: Theme.ink; sourceSize: Qt.size(96,96); fillMode: Image.PreserveAspectFit }
+            }
+            Column {
+                anchors.left: dshIcon.right; anchors.leftMargin: 16
+                anchors.right: dshAction.left; anchors.rightMargin: 24
+                anchors.verticalCenter: parent.verticalCenter; spacing: 7
+                Item {
+                    width: parent.width; height: Math.max(dshTitle.implicitHeight, dshSettingsBadge.height)
+                    Text {
+                        id: dshTitle
+                        width: Math.min(implicitWidth, Math.max(0, parent.width - dshSettingsBadge.width - 8))
+                        anchors.verticalCenter: parent.verticalCenter
+                        font.family: Theme.fontFamily; text: "DeepSeek Harness"; elide: Text.ElideRight
+                        color: Theme.ink; font.pixelSize: Theme.font(16, visible); font.weight: Font.DemiBold
+                    }
+                    ExperimentalBadge {
+                        id: dshSettingsBadge; objectName: "dshSettingsExperimentalBadge"
+                        anchors.left: dshTitle.right; anchors.leftMargin: 8; anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+                Text { font.family: Theme.fontFamily; width: parent.width; text: I18n.t("运行时路径、检查与下载"); color: Theme.muted; font.pixelSize: Theme.font(12, visible); elide: Text.ElideRight }
+            }
+            Row {
+                id: dshAction; spacing: 7
+                anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                Text { font.family: Theme.fontFamily; text: I18n.t("配置"); color: Theme.accent; font.pixelSize: Theme.font(12, visible) }
+                Glyph { name: "chevron-right"; width: Theme.icon(14); height: Theme.icon(14); anchors.verticalCenter: parent.verticalCenter }
+            }
+        }
+        onClicked: root.dshOpen = true
+    }
+    Button {
         id: pluginsCard
         objectName: "openDesktopPluginsButton"
-        width: parent.width; implicitHeight: Theme.control(72); visible: !root.piOpen && !root.pluginsOpen && !root.desktopOpen
+        width: parent.width; implicitHeight: Theme.control(72); visible: !root.piOpen && !root.pluginsOpen && !root.desktopOpen && !root.dshOpen
         padding: 20; hoverEnabled: true
         Accessible.name: I18n.t("Widgets")
         HoverHandler { cursorShape: Qt.PointingHandCursor }
@@ -75,7 +121,7 @@ Column {
     Button {
         id: desktopCard
         objectName: "openUmekoDesktopSettingsButton"
-        width: parent.width; implicitHeight: Theme.control(72); visible: !root.piOpen && !root.pluginsOpen && !root.desktopOpen
+        width: parent.width; implicitHeight: Theme.control(72); visible: !root.piOpen && !root.pluginsOpen && !root.desktopOpen && !root.dshOpen
         padding: 20; hoverEnabled: true
         Accessible.name: "Umeko Desktop"
         HoverHandler { cursorShape: Qt.PointingHandCursor }
@@ -84,10 +130,12 @@ Column {
             spacing: 16
             Item {
                 Layout.preferredWidth: Theme.icon(40); Layout.preferredHeight: Theme.icon(40)
-                Image {
+                CharacterArt {
                     objectName: "umekoDesktopSettingsArtwork"
                     anchors.centerIn: parent; width: Theme.icon(42); height: width
-                    source: "../icons/yanami-desktop-settings-v2.png"; sourceSize: Qt.size(256,256)
+                    fallbackSource: "../icons/app.png"
+                    artwork: Character.personalityEnabled ? fallbackSource : Character.asset("avatarSmile", fallbackSource)
+                    sourceSize: Qt.size(256,256)
                     fillMode: Image.PreserveAspectFit; mipmap: true
                 }
             }
@@ -95,6 +143,18 @@ Column {
             Glyph { name: "chevron-right"; width: Theme.icon(16); height: Theme.icon(16); color: Theme.muted }
         }
         onClicked: root.desktopOpen = true
+    }
+    Column {
+        objectName: "dshSettingsPage"
+        width: parent.width; visible: root.dshOpen; spacing: 14
+        RowLayout {
+            width: parent.width; spacing: 8
+            ActionButton { objectName: "backFromDshSettingsButton"; text: "Agent"; glyph: "arrow-left"; quiet: true; onClicked: root.dshOpen = false }
+            Glyph { name: "chevron-right"; width: Theme.icon(13); height: Theme.icon(13) }
+            Text { font.family: Theme.fontFamily; text: "DeepSeek Harness"; color: Theme.ink; font.pixelSize: Theme.font(14, visible); font.weight: Font.Medium }
+            Item { Layout.fillWidth: true }
+        }
+        DshSettings { width: parent.width }
     }
     Column {
         width: parent.width; visible: root.desktopOpen; spacing: 14
@@ -144,8 +204,13 @@ Column {
         }
         SettingsFold {
             objectName: "piFold_runtime"; width: parent.width; title: I18n.t("运行与资源"); query: search.text
-            searchTerms: I18n.t("上下文 自动压缩 compaction 资源 路径 Skills 提示词 自定义指令 instructions token 回答 上限 运行 ") + [backend.config.agent.agentDir, backend.config.agent.instructions, ...(backend.config.agent.skillPaths || []), ...(backend.config.agent.extensionPaths || [])].join(" ")
+            searchTerms: I18n.t("上下文 自动压缩 compaction 资源 路径 Skills 提示词 自定义指令 instructions token 回答 上限 运行 ") + I18n.t("会话缓存 后台 空闲 内存 session cache memory ") + [backend.config.agent.agentDir, backend.config.agent.instructions, ...(backend.config.agent.skillPaths || []), ...(backend.config.agent.extensionPaths || [])].join(" ")
             AgentSettings { width: parent.width; query: search.text; enabled: !backend.busy; opacity: enabled ? 1 : 0.6 }
+            SettingsFold {
+                objectName: "piFold_sessionCache"; width: parent.width; title: I18n.t("会话缓存"); nested: true; query: search.text
+                searchTerms: I18n.t("会话缓存 后台 空闲 内存 session cache memory ")
+                SessionCacheSettings { width: parent.width }
+            }
         }
         SettingsFold {
             objectName: "piFold_management"; width: parent.width; title: I18n.t("管理与恢复"); query: search.text; searchTerms: I18n.t("终端 terminal 恢复出厂 备份 reset 恢复模式")

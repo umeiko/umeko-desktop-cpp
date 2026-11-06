@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <QSslCertificate>
 QStringList Backend::reasoningLevelsFor(std::shared_ptr<Session> session) const {
+  if(session->backend=="dsh" && !session->dshOptions.isEmpty()) {QStringList out;for(const auto &value:session->dshOptions){auto o=value.toMap();if(o["id"]=="reasoning_effort")for(const auto &c:o["options"].toList())if(c.toMap()["value"]!="off")out<<c.toMap()["value"].toString();}return out;}
+  if(session->backend=="dsh" && (session->dshOwnFixed?session->dshOwn:dshRuntime->useOwnConfig()))return {};
   for (const auto &p : store.data["providers"].toList()) if (p.toMap()["id"] == session->provider)
     for (const auto &m : p.toMap()["models"].toList()) if (m.toMap()["alias"] == session->model)
       return U::reasoningLevels(m.toMap());
@@ -21,6 +23,7 @@ void Backend::reconcileReasoning(std::shared_ptr<Session> session) {
   }
 }
 bool Backend::setReasoningEffort(QString value) {
+  if(view->backend=="dsh" && view->busy())return false;
   if (value != "off" && !reasoningLevels().contains(value))
     return false;
   view->reasoningEffort = value;

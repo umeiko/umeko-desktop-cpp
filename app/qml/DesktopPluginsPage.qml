@@ -14,6 +14,7 @@ Item {
     readonly property var detail: selected ? manager.details(selectedId) : ({})
     Component.onCompleted: if (allRows.length) selectedId=allRows[0].id
     onAllRowsChanged: if (!allRows.some(p=>p.id===selectedId)) selectedId=allRows.length ? allRows[0].id : ""
+    function openImport(){picker.open()}
     FileDialog {id:picker;title:I18n.t("导入 Umeko 插件");nameFilters:["Umeko plugins (*.zip)"];onAccepted:root.manager.importZip(String(selectedFile))}
     FileDialog {id:sdkPicker;title:I18n.t("导出插件 SDK 和示例");fileMode:FileDialog.SaveFile;defaultSuffix:"zip";nameFilters:["ZIP (*.zip)"];onAccepted:root.manager.exportSdk(String(selectedFile))}
     QtObject {

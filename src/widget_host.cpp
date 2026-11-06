@@ -1,5 +1,6 @@
 #include "widget_host.hpp"
 #include "backend.hpp"
+#include <QtConcurrent>
 #include "pi_capabilities.hpp"
 #include <stdexcept>
 
@@ -16,7 +17,7 @@ const QMap<QString, QString> commands{
     {"pi.details", "extensions.details"},
     {"pi.activation", "extensions.activation"}};
 bool mutation(const QString &operation) {
-  return QStringList{"pi.refresh", "pi.enable", "pi.install", "pi.remove", "pi.activation", "pi.toolVisibility", "pi.preset", "pi.tool", "pi.plugin", "skills.attach", "skills.default", "skills.import", "skills.paste", "skills.importLocal", "skills.rename", "skills.delete"}
+  return QStringList{"market.install", "market.uninstall", "pi.refresh", "pi.enable", "pi.install", "pi.remove", "pi.activation", "pi.toolVisibility", "pi.preset", "pi.tool", "pi.plugin", "skills.attach", "skills.default", "skills.import", "skills.paste", "skills.importLocal", "skills.rename", "skills.delete"}
       .contains(operation);
 }
 void require(bool valid, QString error) {
@@ -45,6 +46,13 @@ QString checkpointPath(QString path) {
 
 WidgetHost::WidgetHost(DesktopPlugins *manager)
     : QObject(manager), m(manager), b(manager->b) {
+  connect(m,&DesktopPlugins::managed,this,[this](QString id,QVariantMap result){
+    if(!marketImportRequests.contains(id))return;
+    auto request=marketImportRequests.take(id);const auto prepared=marketImports.take(id);
+    const auto path=prepared.package["path"].toString();if(!path.isEmpty())(void)QtConcurrent::run([path]{QDir(QFileInfo(path).absolutePath()).removeRecursively();});
+    if(result["ok"].toBool())reply(request,{{"ok",true},{"result",QVariantMap{{"installed",prepared.package["manifest"].toMap()["id"]}}}});
+    else reply(request,result);
+  });
   activityTimer.setSingleShot(true);
   activityTimer.setInterval(200);
   connect(&activityTimer, &QTimer::timeout, this, &WidgetHost::flushActivity);
@@ -55,10 +63,13 @@ QVariantMap WidgetHost::capabilities() const {
   auto names = commands.keys();
   names << "pi.status" << "pi.job" << "pi.network" << "pi.cancel" << "pi.inventory" << "pi.toolVisibility" << "pi.preset" << "pi.tool" << "pi.plugin" << "pi.tools";
   names << "skills.list" << "skills.browse" << "skills.preview" << "skills.details" << "skills.job" << "skills.attach" << "skills.default" << "skills.importPreview" << "skills.import" << "skills.paste" << "skills.importLocal" << "skills.open" << "skills.copy" << "skills.insert" << "skills.rename" << "skills.delete";
+  names << "market.list" << "market.prepare" << "market.install" << "market.discard" << "market.uninstall" << "market.enable" << "market.open" << "market.browse" << "market.importLocal";
+  names << "sessions.acquire" << "sessions.submit" << "sessions.subscribe" << "sessions.wait" << "sessions.cancel" << "sessions.history" << "sessions.release" << "approvals.registerHandler" << "approvals.respond";
+  names << "systemPrompt.inspect" << "systemPrompt.toggle" << "systemPrompt.save" << "systemPrompt.restore";
   names << "checkpoints.acquire" << "checkpoints.release";
   for (const auto &name : names)
     operations[name] =
-        QVariantMap{{"permission", name.startsWith("checkpoints.") ? "workspace.write" : name.startsWith("skills.") ? (name=="skills.insert" ? "session.write" : mutation(name) ? "skills.manage" : "skills.read") : mutation(name) || name=="pi.cancel" ? "pi.manage" : "pi.read"},
+        QVariantMap{{"permission", name.startsWith("sessions.") || name.startsWith("approvals.") ? "sessions.manage" : name.startsWith("checkpoints.") ? "workspace.write" : name.startsWith("skills.") ? (name=="skills.insert" ? "session.write" : mutation(name) ? "skills.manage" : "skills.read") : (name.startsWith("systemPrompt.") && name!="systemPrompt.inspect") || mutation(name) || name=="pi.cancel" ? "pi.manage" : "pi.read"},
                     {"confirmation", mutation(name)}};
   return {{"version", 1},
           {"operations", operations},
@@ -77,6 +88,9 @@ void WidgetHost::owner(Task request) const {
           "Widget instance has stopped");
   require(m->enabled(request->widget) && m->sessionEnabled(request->widget),
           "Widget is not enabled");
+  if(request->operation.startsWith("sessions.") || request->operation.startsWith("approvals.")) {
+    require(m->application(request->widget),"Session service requires an application lifecycle Widget");return;
+  }
   require(!request->session["token"].toString().isEmpty() &&
               request->session["token"] == m->m_session["token"] &&
               request->session["workspace"] == m->m_session["workspace"],
@@ -100,7 +114,7 @@ void WidgetHost::reply(Task request, QVariantMap value) {
                                                       {"data", value}}}});
 }
 
-QString WidgetHost::requestFor(QString id, QVariantMap value) {
+QString WidgetHost::requestFor(QString id, QVariantMap value, bool page) {
   auto worker = m->workers.value(id);
   if (!worker)
     return {};
@@ -115,6 +129,7 @@ QString WidgetHost::requestFor(QString id, QVariantMap value) {
   if (count >= 8 || requests.contains(key(id, identifier)))
     return {};
   auto request = std::make_shared<Request>();
+  request->page = page;
   request->widget = id;
   request->worker = worker;
   request->id = identifier;
@@ -144,7 +159,11 @@ void WidgetHost::begin(Task request) {
     require(
         m->entry(request->widget)["permissions"].toList().contains(permission),
         QString("Widget permission is required: ") + permission);
+    if(operation.startsWith("systemPrompt.")){systemPrompt(request);return;}
+    if(operation.startsWith("sessions.") || operation.startsWith("approvals.")){sessionService(request);return;}
     const QMap<QString, QStringList> fields{
+        {"market.list",{"force"}},{"market.prepare",{"id"}},{"market.install",{"token"}},{"market.discard",{"token"}},
+        {"market.uninstall",{"id"}},{"market.enable",{"id"}},{"market.open",{"id"}},{"market.browse",{"target","id"}},{"market.importLocal",{}},
         {"pi.status", {"offset", "limit", "query", "details", "toolOffset"}},
         {"pi.inventory", {}},
         {"pi.preset", {"preset"}},{"pi.tool", {"name","enabled"}},{"pi.plugin", {"id","enabled"}},{"pi.tools", {"id","query","offset","limit"}},
@@ -167,6 +186,13 @@ void WidgetHost::begin(Task request) {
         {"checkpoints.acquire", {"id"}}, {"checkpoints.release", {"token"}}};
     for (auto it = args.cbegin(); it != args.cend(); ++it)
       require(fields[operation].contains(it.key()), "Unknown host arguments");
+    if(operation.startsWith("market.")) {
+      require(request->widget=="widget-market","Market operations belong to the official market Widget");
+      if(args.contains("id"))require(QRegularExpression("^[a-z0-9][a-z0-9-]{0,63}$").match(args["id"].toString()).hasMatch(),"Invalid Widget id");
+      if(args.contains("token"))require(QRegularExpression("^[a-f0-9]{32}$").match(args["token"].toString()).hasMatch(),"Invalid download confirmation");
+      if(args.contains("force"))require(args["force"].typeId()==QMetaType::Bool,"force must be boolean");
+      if(operation=="market.browse")require(QStringList{"repository","readme"}.contains(args["target"].toString()),"Invalid browse target");
+    }
     if (operation == "checkpoints.acquire")
       require(QRegularExpression("^[a-f0-9]{32}$").match(args["id"].toString()).hasMatch(), "A valid checkpoint id is required");
     if (operation == "checkpoints.release")
@@ -227,6 +253,10 @@ void WidgetHost::begin(Task request) {
               "native queued reload");
       require(!pending && b->view->approval.isEmpty(),
               "Another confirmation is pending");
+      if(operation=="market.install") {
+        const auto prepared=marketPrepared.value(args["token"].toString());
+        require(prepared.owner && prepared.owner->worker==request->worker && prepared.owner->session["token"]==request->session["token"],"Download confirmation expired");
+      }
       pending = request;
       approval = {
           {"id", request->id},
@@ -236,6 +266,12 @@ void WidgetHost::begin(Task request) {
            operation + "\n" +
                QString::fromUtf8(QJsonDocument::fromVariant(args).toJson(
                    QJsonDocument::Indented))}};
+      if(operation=="market.install") {
+        const auto prepared=marketPrepared.value(args["token"].toString());
+        require(prepared.owner && prepared.owner->worker==request->worker && prepared.owner->session["token"]==request->session["token"],"Download confirmation expired");
+        const auto manifest=prepared.package["manifest"].toMap();
+        approval["detail"]=manifest["name"].toString()+" · "+manifest["version"].toString()+"\nPermissions: "+manifest["permissions"].toStringList().join(", ")+"\n"+(prepared.package["digestVerified"].toBool()?"GitHub SHA-256 verified":"GitHub provides no checksum")+"\nWidget contains Python/QML code. Install only trusted sources.";
+      }
       emit changed();
       QTimer::singleShot(120000, this, [this, request] {
         if (pending == request)
@@ -250,6 +286,8 @@ void WidgetHost::begin(Task request) {
 }
 
 void WidgetHost::respondApproval(bool allowed) {
+  if(!visibleSessionApproval.isEmpty()){answerSessionApproval(visibleSessionApproval,allowed);return;}
+  QTimer::singleShot(0,this,[this]{showSessionApproval();});
   auto request = pending;
   pending.reset();
   approval.clear();
@@ -257,6 +295,7 @@ void WidgetHost::respondApproval(bool allowed) {
   if (!request)
     return;
   if (!allowed) {
+    if(request->operation=="market.install")discardMarket(request->arguments.toMap()["token"].toString());
     reply(request, {{"ok", false},
                     {"status", "declined"},
                     {"error", "User declined the Widget operation"}});
@@ -273,6 +312,7 @@ void WidgetHost::execute(Task request) {
   owner(request);
   const auto operation = request->operation;
   auto args = request->arguments.toMap();
+  if (operation.startsWith("market.")) {market(request);return;}
   if (operation.startsWith("checkpoints.")) {
     require(request->widget == "change-review", "Checkpoint locks are owned by the change review Widget");
     if (operation == "checkpoints.release") {
@@ -500,6 +540,8 @@ bool WidgetHost::releaseCheckpoint(QString id, QString token, std::shared_ptr<De
 }
 
 void WidgetHost::stop(QString id) {
+  stopSessions(id);
+  for(const auto &token:marketPrepared.keys())if(marketPrepared[token].owner->widget==id)discardMarket(token);
   for (const auto &token : checkpointLocks.keys())
     if (checkpointLocks[token].widget == id) releaseCheckpoint(id, token, checkpointLocks[token].worker);
   activity.remove(id);
@@ -527,6 +569,19 @@ void WidgetHost::stop(QString id) {
 }
 
 void WidgetHost::observe(QString key, QVariantMap event) {
+  QTimer::singleShot(0,this,[this,key,event]{sessionObserve(key,event);});
+  if (event["type"] == "system_prompt") {
+    const auto identifier=event["requestId"].toString();
+    const auto item=promptRequests.value(identifier);
+    if(item.first && item.second==key){promptRequests.remove(identifier);reply(item.first,event["result"].toMap());}
+    return;
+  }
+  if(event["type"]=="exit" || event["type"]=="error") {
+    for(const auto &identifier:promptRequests.keys())if(promptRequests[identifier].second==key) {
+      auto request=promptRequests.take(identifier).first;
+      reply(request,{{"ok",false},{"error",event.value("message","Pi stopped before returning its prompt")}});
+    }
+  }
   if (event["type"] == "widget_catalog") {
     const auto item = catalogRequests.take(event["id"].toString());
     if (!item.first || item.second != key) return;
@@ -610,4 +665,23 @@ void WidgetHost::flushActivity() {
                                                {"events", it->events},
                                                {"dropped", it->dropped}}}}}});
   }
+}
+
+void WidgetHost::systemPrompt(Task request) {
+  owner(request);
+  require(request->page && request->widget=="system-prompt" && m->entry(request->widget)["builtin"].toBool() && m->m_page==request->widget,"Open the built-in System Prompt page to use this operation");
+  const auto s=b->view;
+  require(s->backend=="pi","系统提示词管理仅适用于 Pi 会话；请切换到 Pi 聊天");
+  require(!s->busy() && !s->subagentsActive && !b->kernelBusy(),"Wait for the current task to finish");
+  const QMap<QString,QStringList> fields{{"systemPrompt.inspect",{}},{"systemPrompt.toggle",{"id","enabled"}},{"systemPrompt.save",{"id","text"}},{"systemPrompt.restore",{"id"}}};
+  const auto args=request->arguments.toMap();const auto expected=fields[request->operation];
+  require(args.size()==expected.size(),"Invalid System Prompt arguments");
+  for(auto it=args.cbegin();it!=args.cend();++it)require(expected.contains(it.key()),"Invalid System Prompt arguments");
+  if(request->operation!="systemPrompt.inspect")require(args["id"].typeId()==QMetaType::QString && !args["id"].toString().isEmpty(),"Select a prompt source first");
+  if(request->operation=="systemPrompt.toggle")require(args["enabled"].typeId()==QMetaType::Bool,"enabled must be boolean");
+  if(request->operation=="systemPrompt.save")require(args["text"].typeId()==QMetaType::QString,"text must be a string");
+  auto values=args;values["requestId"]=request->id;values["promptOperation"]=request->operation.section('.',1);
+  promptRequests[request->id]={request,s->key};
+  if(!b->command(s,"system-prompt",values)){promptRequests.remove(request->id);throw std::runtime_error("Could not load the current system prompt");}
+  QTimer::singleShot(45000,this,[this,id=request->id]{const auto item=promptRequests.take(id);if(item.first)reply(item.first,{{"ok",false},{"error","System prompt request timed out; retry"}});});
 }

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 import "ReasoningLevels.js" as Reasoning
 
@@ -7,23 +8,90 @@ AnchoredPidPopup {
     id: root
     objectName: "modelPopup"
     property real heightLimit: 470
+    readonly property bool useDshModels: backend.sessionBackend === "dsh" && backend.dshOwnConfig === true
     fullWidth: 365
-    fullHeight: Math.max(220, Math.min(470, heightLimit, modelList.contentHeight + 230))
+    fullHeight: Math.max(220, Math.min(470, heightLimit, modelList.contentHeight + 270 + (offNote.visible ? offNote.implicitHeight + reasoningControls.spacing + 3 : 0) + (ownModelsHint.visible ? ownModelsHint.implicitHeight + 10 : 0)))
     signal configure()
     signal dismissed()
     onAboutToShow: modelSearch.clear()
     onAboutToHide: { focus = false; dismissed() }
-    onOpened: modelSearch.forceActiveFocus()
+    onOpened: {
+        modelSearch.forceActiveFocus()
+        if (backend.sessionBackend !== "dsh" && typeof backend.ensureReasoningDetection === "function") backend.ensureReasoningDetection()
+    }
     onClosed: dismissed()
     contentItem: Item {
         clip: true
     ColumnLayout {
         width: root.expandedWidth - root.padding * 2; height: root.expandedHeight - root.padding * 2; spacing: 10
         opacity: root.contentOpacity
+        Item {
+            id: backendChoices
+            Layout.fillWidth: true
+            implicitHeight: Math.max(piChoice.implicitHeight, dshChoice.implicitHeight)
+            Text { anchors.left: parent.left; anchors.right: piChoice.left; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter; text: I18n.t("会话后端"); elide: Text.ElideRight; color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11) }
+            ActionButton {
+                id: piChoice; objectName: "choosePiBackend"
+                anchors.right: dshChoice.left; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter
+                implicitWidth: Math.max(38, Theme.icon(34) + 8); implicitHeight: implicitWidth
+                quiet: backend.sessionBackend !== "pi"; enabled: backend.canChooseBackend === true
+                hint: "Pi Coding Agent"
+                Accessible.role: Accessible.RadioButton; Accessible.name: hint
+                Accessible.checked: backend.sessionBackend === "pi"
+                onClicked: backend.setSessionBackend("pi")
+                contentItem: Item {
+                    Image {
+                        objectName: "piBackendLogo"
+                        anchors.centerIn: parent; width: Theme.icon(34); height: width
+                        source: "../icons/pi.svg"; sourceSize: Qt.size(96, 96); fillMode: Image.PreserveAspectFit
+                    }
+                }
+            }
+            ActionButton {
+                id: dshChoice
+                objectName: "chooseDshBackend"
+                anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                quiet: backend.sessionBackend !== "dsh"; enabled: backend.canChooseBackend === true
+                leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
+                implicitWidth: contentItem.implicitWidth + 20
+                implicitHeight: Math.max(38, contentItem.implicitHeight + 16)
+                width: Math.min(implicitWidth, Math.max(0, parent.width - piChoice.implicitWidth - 12))
+                hint: "DeepSeek Harness · " + I18n.t("实验版")
+                Accessible.role: Accessible.RadioButton; Accessible.name: hint
+                Accessible.checked: backend.sessionBackend === "dsh"
+                onClicked: backend.setSessionBackend("dsh")
+                contentItem: Item {
+                    implicitWidth: dshLogo.width + experimentalBadge.implicitWidth + 7
+                    implicitHeight: Math.max(dshLogo.height, experimentalBadge.implicitHeight)
+                    IconImage {
+                        id: dshLogo; objectName: "dshBackendLogo"
+                        anchors.left: parent.left; anchors.leftMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Theme.icon(25); height: width
+                        source: "../icons/dsh.svg"; color: Theme.ink
+                        sourceSize: Qt.size(76, 76); fillMode: Image.PreserveAspectFit
+                    }
+                    ExperimentalBadge {
+                        id: experimentalBadge
+                        objectName: "dshExperimentalBadge"
+                        anchors.right: parent.right; anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+            }
+        }
         InputField { id: modelSearch; objectName: "modelSearch"; Layout.fillWidth: true; placeholderText: I18n.t("搜索供应商或模型…"); height: 39 }
+        Text {
+            id: ownModelsHint; objectName: "dshOwnModelsHint"
+            Layout.fillWidth: true; wrapMode: Text.Wrap
+            visible: root.useDshModels && modelList.count === 0
+            text: I18n.t("连接 dsh 后显示其 ACP profile 的模型")
+            textFormat: Text.PlainText; color: Theme.muted
+            font.family: Theme.fontFamily; font.pixelSize: Theme.font(12, visible)
+        }
         ListView {
             id: modelList; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 9
-            model: backend.config.providers
+            model: root.useDshModels ? backend.dshModelProviders : backend.config.providers
             ScrollBar.vertical: ScrollBar {}
             delegate: Column {
                 required property var modelData
@@ -35,15 +103,24 @@ AnchoredPidPopup {
                     Rectangle {
                         required property var modelData
                         objectName: "modelOption_" + provider.id + "_" + modelData.alias
-                        property bool matches: (provider.name + " " + modelData.alias + " " + modelData.upstream).toLowerCase().indexOf(modelSearch.text.toLowerCase()) >= 0
+                        property bool matches: (provider.name + " " + modelData.alias + (root.useDshModels ? "" : " " + modelData.upstream)).toLowerCase().indexOf(modelSearch.text.toLowerCase()) >= 0
+                        property bool selected: root.useDshModels ? backend.dshCurrentModelValue === modelData.value : backend.config.selectedProvider === provider.id && backend.config.selectedModel === modelData.alias
                         width: modelList.width; height: matches ? 44 : 0; visible: matches; radius: 7
-                        color: modelMouse.containsMouse ? Theme.hover : backend.config.selectedProvider === provider.id && backend.config.selectedModel === modelData.alias ? Theme.accentBg : "transparent"
+                        color: modelMouse.containsMouse ? Theme.hover : selected ? Theme.accentBg : "transparent"
                         Column { x: 11; width: parent.width - 44; anchors.verticalCenter: parent.verticalCenter; spacing: 3
                             Text { font.family: Theme.fontFamily; text: modelData.alias; width: parent.width; elide: Text.ElideRight; color: Theme.ink; font.pixelSize: Theme.font(12, visible) }
-                            Text { font.family: Theme.fontFamily; text: modelData.upstream; width: parent.width; elide: Text.ElideRight; color: Theme.muted; font.pixelSize: Theme.font(9, visible) }
+                            Text { font.family: Theme.fontFamily; text: modelData.upstream; visible: !root.useDshModels; width: parent.width; elide: Text.ElideRight; color: Theme.muted; font.pixelSize: Theme.font(9, visible) }
                         }
-                        Glyph { anchors.right: parent.right; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter; name: "check"; width: Theme.icon(15); height: Theme.icon(15); visible: backend.config.selectedProvider === provider.id && backend.config.selectedModel === modelData.alias }
-                        MouseArea { id: modelMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { backend.selectModel(provider.id, modelData.alias); root.close() } }
+                        Glyph { anchors.right: parent.right; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter; name: "check"; width: Theme.icon(15); height: Theme.icon(15); visible: parent.selected }
+                        MouseArea {
+                            id: modelMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                const controller = backend, providerId = provider.id, alias = modelData.alias, nativeValue = modelData.value, useDshModels = root.useDshModels
+                                root.close()
+                                if (useDshModels) controller.selectDshModel(nativeValue)
+                                else controller.selectModel(providerId, alias)
+                            }
+                        }
                     }
                 }
             }
@@ -53,7 +130,8 @@ AnchoredPidPopup {
             id: reasoningControls
             objectName: "reasoningControls"
             Layout.fillWidth: true; spacing: 3
-            readonly property var levels: { let values = ["off"]; for (const level of backend.reasoningLevels) values.push(level); return values }
+            // Effective levels; detection results can replace them while the popup is open.
+            readonly property var levels: { backend.reasoningDetectionState; let values = ["off"]; for (const level of backend.reasoningLevels) values.push(level); return values }
             RowLayout {
                 Layout.fillWidth: true
                 Text { text: I18n.t("思考强度"); color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11) }
@@ -63,9 +141,12 @@ AnchoredPidPopup {
             Slider {
                 id: effortSlider; objectName: "reasoningEffortSlider"
                 Layout.fillWidth: true
+                implicitHeight: Theme.control(36); padding: 0
+                readonly property real travel: Math.max(0, availableWidth - handle.width)
+                readonly property real handleCenter: leftPadding + handle.width / 2 + visualPosition * travel
                 from: 0; to: Math.max(1, reasoningControls.levels.length - 1)
                 stepSize: 1; snapMode: Slider.SnapAlways
-                enabled: reasoningControls.levels.length > 1
+                enabled: reasoningControls.levels.length > 1 && (backend.sessionBackend !== "dsh" || !backend.busy)
                 value: Math.max(0, reasoningControls.levels.indexOf(backend.reasoningEffort))
                 Accessible.name: I18n.t("思考强度")
                 onMoved: backend.setReasoningEffort(reasoningControls.levels[Math.round(value)])
@@ -75,10 +156,35 @@ AnchoredPidPopup {
                         event.accepted = true
                     }
                 }
-                background: Rectangle { x: effortSlider.leftPadding; y: effortSlider.topPadding + effortSlider.availableHeight / 2 - height / 2; width: effortSlider.availableWidth; height: 4; radius: 2; color: Theme.line
-                    Rectangle { width: effortSlider.visualPosition * parent.width; height: parent.height; radius: 2; color: Theme.accent }
+                background: Rectangle {
+                    x: 0; y: (effortSlider.height - height) / 2
+                    width: effortSlider.width; height: Theme.control(24); radius: height / 2
+                    color: Theme.line; antialiasing: true
+                    Rectangle {
+                        width: effortSlider.enabled && effortSlider.value > effortSlider.from ? effortSlider.handleCenter : 0
+                        height: parent.height
+                        topLeftRadius: height / 2; bottomLeftRadius: height / 2
+                        topRightRadius: 0; bottomRightRadius: 0
+                        color: Theme.accent; antialiasing: true
+                    }
+                    Repeater {
+                        model: reasoningControls.levels
+                        Rectangle {
+                            required property int index
+                            width: 4; height: 4; radius: width / 2; antialiasing: true
+                            x: effortSlider.leftPadding + effortSlider.handle.width / 2 + (reasoningControls.levels.length > 1 ? index / (reasoningControls.levels.length - 1) : 0) * effortSlider.travel - width / 2
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: index <= effortSlider.value && effortSlider.enabled ? "#65ffffff" : Theme.muted
+                            opacity: index <= effortSlider.value && effortSlider.enabled ? 1 : 0.45
+                        }
+                    }
                 }
-                handle: Rectangle { x: effortSlider.leftPadding + effortSlider.visualPosition * (effortSlider.availableWidth - width); y: effortSlider.topPadding + effortSlider.availableHeight / 2 - height / 2; implicitWidth: 16; implicitHeight: 16; radius: 8; color: Theme.accent; border.color: effortSlider.activeFocus ? Theme.ink : Theme.bg; border.width: 2 }
+                handle: Rectangle {
+                    x: effortSlider.leftPadding + effortSlider.visualPosition * effortSlider.travel
+                    y: (effortSlider.height - height) / 2
+                    implicitWidth: Theme.control(32); implicitHeight: implicitWidth; radius: width / 2
+                    color: "white"; border.color: "#26000000"; border.width: 1; antialiasing: true
+                }
             }
             RowLayout {
                 Layout.fillWidth: true
@@ -86,15 +192,36 @@ AnchoredPidPopup {
                 Item { Layout.fillWidth: true }
                 Text { text: reasoningControls.levels.length > 1 ? Reasoning.label(reasoningControls.levels[reasoningControls.levels.length - 1]) : ""; textFormat: Text.PlainText; color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: Theme.font(10); Layout.maximumWidth: reasoningControls.width * 0.6; elide: Text.ElideRight }
             }
-            HoverHandler { id: reasoningHover }
-            HoverTip {
-                objectName: "reasoningEffortHint"
-                heading: I18n.t("思考强度")
-                active: root.desiredOpen && reasoningHover.hovered
-                text: I18n.t("关闭时不发送推理强度参数。可在供应商的模型齿轮中配置支持的档位。")
+            Text {
+                id: offNote; objectName: "reasoningOffNote"
+                visible: backend.reasoningOffSupported === false
+                text: I18n.t("这个模型总会思考，选「关闭」也会思考")
+                Layout.fillWidth: true; Layout.topMargin: 3; wrapMode: Text.Wrap
+                color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: Theme.font(10)
             }
         }
-        ActionButton { text: I18n.t("管理供应商与模型"); glyph: "sliders"; quiet: true; Layout.fillWidth: true; onClicked: { root.close(); root.configure() } }
+        ActionButton {
+            id: manageProviders; objectName: "manageProvidersButton"
+            visible: !root.useDshModels
+            text: I18n.t("管理供应商与模型"); quiet: true; Layout.fillWidth: true
+            contentItem: Item {
+                Row {
+                    anchors.centerIn: parent; spacing: 8
+                    Glyph {
+                        id: providersIcon; name: "providers-stack"
+                        width: Theme.icon(51); height: Theme.icon(17); anchors.verticalCenter: parent.verticalCenter
+                        color: manageProviders.interactionHovered ? Theme.accent : Theme.muted
+                    }
+                    Text {
+                        text: manageProviders.text; textFormat: Text.PlainText
+                        width: Math.min(implicitWidth, Math.max(0, manageProviders.availableWidth - providersIcon.width - 8))
+                        anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideRight
+                        font.family: Theme.fontFamily; font.pixelSize: Theme.font(12); color: Theme.ink
+                    }
+                }
+            }
+            onClicked: { root.close(); root.configure() }
+        }
     }
     }
 }

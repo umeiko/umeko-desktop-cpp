@@ -63,6 +63,9 @@ int main(int argc, char **argv) {
   parser.addVersionOption();
   parser.addOptions(
       {{"resource-root", "Runtime resource directory", "path"},
+       {"login-startup", "Launch at user login"},
+       {"login-umeko", "Start the desktop in its tray"},
+       {"login-proxy", "Start the configured API proxy"},
        {"data-dir", "Isolated local data directory", "path"},
        {"smoke", "Render the actual application and exit"},
        {"snapshot", "Save the real window to a PNG file", "path"},
@@ -79,7 +82,7 @@ int main(int argc, char **argv) {
 #endif
   }
   root = U::cleanPath(root);
-  app.setWindowIcon(QIcon(":/qt/qml/Umeko/App/app/icons/app.webp"));
+  app.setWindowIcon(QIcon(":/qt/qml/Umeko/App/app/icons/logo.svg"));
   if (parser.isSet("install-update")) {
     UpdateInstaller installer(parser.value("install-update"), root);
     QQmlApplicationEngine engine;
@@ -93,6 +96,10 @@ int main(int argc, char **argv) {
   qmlRegisterType<SyntaxHighlighter>("Umeko.Text", 1, 0, "SyntaxHighlighter");
   qmlRegisterType<TextSpacing>("Umeko.Text",1,0,"TextSpacing");
   Backend backend(root, parser.value("data-dir"));
+  QLockFile instance(backend.store.directory+"/.instance.lock");instance.setStaleLockTime(0);
+  const bool ownsInstance=instance.tryLock(0);
+  if(parser.isSet("login-startup") && !ownsInstance){backend.close();return 0;}
+
   QObject::connect(qobject_cast<DesktopPlugins*>(backend.desktopPlugins()), &DesktopPlugins::openWithRequested,
                    &app, [&backend](const QString &path) {
     const auto application=QFileDialog::getOpenFileName(nullptr,
@@ -110,6 +117,7 @@ int main(int argc, char **argv) {
   const auto browserImports = webviewConfiguration()["qmlPath"].toString();
   if (!browserImports.isEmpty()) engine.addImportPath(browserImports);
   engine.rootContext()->setContextProperty("backend", &backend);
+  engine.rootContext()->setContextProperty("proxyOnlyLogin",parser.isSet("login-startup")&&!parser.isSet("login-umeko"));
   auto diagnostic = [](QString line) {
     auto path = qEnvironmentVariable("UMEKO_DIAGNOSTICS");
     if (!path.isEmpty()) {
@@ -141,14 +149,48 @@ int main(int argc, char **argv) {
   QObject::connect(&notifications, &TaskNotifications::activated, &backend, [&](const QString &session) {
     window->setProperty("page", "chat"); backend.openSession(session); tray.restore();
   });
+  const auto refreshTray=[&] {tray.systemTray()->setIcon(backend.characterStyle()["id"]=="system" ? QIcon(":/qt/qml/Umeko/App/app/icons/characters/system/robot.png") : trayIcon);};
+  QObject::connect(&backend,&Backend::changed,&app,refreshTray);refreshTray();
   tray.setLanguage(backend.language());
   QObject::connect(&backend, &Backend::appearanceChanged, &tray, [&] {tray.setLanguage(backend.language());});
   QObject::connect(&tray, &TrayController::quitRequested, &app, &QCoreApplication::quit);
   QObject::connect(&tray, &TrayController::notificationRequested, &backend, &Backend::toast);
   diagnostic("QML_READY");
+  if(parser.isSet("login-startup")) {
+    QTimer::singleShot(0,window,&QWindow::hide);
+    if(parser.isSet("login-proxy")) {
+      auto timer=new QTimer(&app);auto attempts=std::make_shared<int>(0);
+      QObject::connect(timer,&QTimer::timeout,&app,[&,timer,attempts]{
+        if(!backend.kernelBusy()){timer->stop();if(!backend.serverRunning())backend.toggleServer();timer->deleteLater();}
+        else if(++*attempts>=200){timer->stop();timer->deleteLater();}
+      });timer->start(100);
+    }
+  }
+
   if (!parser.isSet("smoke"))
     qobject_cast<AppAbout *>(backend.appAbout())->startAutomaticChecks();
   if (parser.isSet("smoke")) {
+    // Validate the installed filesystem imports as well as the main QRC. A
+    // source-tree UI test cannot catch a missing public app/qml directory.
+    const QDir widgets(root + "/umeko-plugins");
+    for (const auto &id : widgets.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+      const auto file = widgets.filePath(id + "/qml/Main.qml");
+      if (!QFileInfo::exists(file)) continue;
+      QQmlComponent component(&engine, QUrl::fromLocalFile(file));
+      if (component.isLoading()) {
+        QEventLoop loop;
+        QObject::connect(&component, &QQmlComponent::statusChanged, &loop,
+                         &QEventLoop::quit);
+        QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+        loop.exec();
+      }
+      if (!component.isReady()) {
+        diagnostic("WIDGET_QML_FAILED:" + id + ":" + component.errorString());
+        backend.close();
+        return 1;
+      }
+      diagnostic("WIDGET_QML_READY:" + id);
+    }
     // Exercise the packaged QRC, which file-based QML tests cannot validate.
     for(const auto &path:{QString("app/qml/skill.svg"),QString("app/icons/pi-widget.svg"),QString("app/icons/widget-manager.svg"),QString("app/icons/yanami-desktop-settings-v2.png")}) {
       if(QIcon(":/qt/qml/Umeko/App/"+path).pixmap(24,24).isNull()){diagnostic("UI_ART_MISSING:"+path);backend.close();return 1;}

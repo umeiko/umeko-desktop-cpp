@@ -343,6 +343,11 @@ qint64 U::providerContext(QVariantMap model) {
   };collect(model,0);return minimum;
 }
 QStringList U::reasoningLevels(QVariantMap model) {
+  if(model.value("reasoningLevelsAuto",!model.contains("reasoningLevels")).toBool()) {
+    const auto detected=model["reasoningDetection"].toMap();
+    if(detected["state"]=="known")return detected["levels"].toStringList();
+    return {};
+  }
   return model.contains("reasoningLevels") ? model["reasoningLevels"].toStringList() : QStringList{"low", "high", "max"};
 }
 QString U::reconcileEffort(QString value, const QStringList &levels) {
@@ -375,6 +380,15 @@ QVariantMap U::normalizeModel(QVariantMap m, QVariantMap previous) {
     }
     m["reasoningLevels"] = levels;
   }
+  for(const auto &field:QStringList{"reasoningLevelsAuto","reasoningFormatAuto"}) {
+    auto value=m.value(field,previous.value(field,field=="reasoningLevelsAuto" ? !source.contains("reasoningLevels") : true));
+    if(value.typeId()!=QMetaType::Bool)throw std::runtime_error("Invalid automatic reasoning setting");
+    m[field]=value;
+  }
+  const auto format=m.value("reasoningFormat",previous.value("reasoningFormat","openai")).toString();
+  if(!QStringList{"openai","openai-none","chat-template","qwen","deepseek","anthropic-adaptive","anthropic","responses"}.contains(format))throw std::runtime_error("Unknown thinking format");
+  m["reasoningFormat"]=format;
+  for(const auto &field:QStringList{"reasoningDetection","reasoningFormatDetection"})m[field]=m.value(field,previous.value(field,QVariantMap{{"state","unknown"}}));
   auto ctx = m.contains("contextWindow") || m.contains("contextWindowAuto")
                  ? m
                  : previous;

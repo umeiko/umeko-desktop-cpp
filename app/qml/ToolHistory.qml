@@ -33,6 +33,8 @@ Column {
     function agentActivity(value) { return value === "Continuing" ? I18n.t("继续执行中") : value || "" }
     function preview(tool) {
         const args = tool.arguments || {}
+        if(tool.name==="analyze_image")return [args.model,args.question].filter(Boolean).join(" · ")
+        if(tool.name==="video_gen" && tool.video)return [tool.video.status,tool.video.progress===undefined?"":tool.video.progress+"%",args.prompt].filter(Boolean).join(" · ")
         if (tool.subagent) {
             const agent = tool.subagent
             return [agentType(agent.type || args.type), agentState(tool.state || agent.status), agentMode(agent), I18n.t("调用工具 %1 次").replace("%1", agent.toolUses || 0), agent.task || args.task || "", agentActivity(agent.activity)].filter(value => value !== "").join(" · ").replace(/\s+/g, " ").trim()
@@ -86,13 +88,13 @@ Column {
                 ChatHitArea {
                     id: rowMouse; objectName: "toggleToolDetail_" + toolRow.tool.id
                     anchors.fill: parent; selectionController: root.selectionController
-                    onClicked: { toolRow.details = !toolRow.details; root.expansionState.details[toolRow.tool.id] = toolRow.details }
+                    onClicked: { if(toolRow.tool.name==="read" && toolRow.tool.path){root.openFile(toolRow.tool.path);return} toolRow.details = !toolRow.details; root.expansionState.details[toolRow.tool.id] = toolRow.details }
                 }
                 Glyph {
                     name: root.command(toolRow.tool.name) ? "terminal" : toolRow.tool.name === "edit" || toolRow.tool.name === "write" ? "edit" : "file"
                     width: Theme.icon(14); height: Theme.icon(14); anchors.verticalCenter: parent.verticalCenter
                 }
-                Text { font.family: Theme.fontFamily; id: verb; x: Theme.icon(14) + 8; text: root.action(toolRow.tool.name); color: Theme.muted; font.pixelSize: Theme.font(12, visible); anchors.verticalCenter: parent.verticalCenter }
+                Text { font.family: Theme.fontFamily; id: verb; x: Theme.icon(14) + 8; text: toolRow.tool.name==="analyze_image" && toolRow.tool.arguments && toolRow.tool.arguments.model ? toolRow.tool.arguments.model : root.action(toolRow.tool.name); color: Theme.muted; font.pixelSize: Theme.font(12, visible); anchors.verticalCenter: parent.verticalCenter }
                 Text { font.family: Theme.fontFamily;
                     id: pathLabel; objectName: "toolPath_" + toolRow.tool.id
                     x: verb.x + verb.width + 6; width: Math.max(0, parent.width - x - Theme.control(42))

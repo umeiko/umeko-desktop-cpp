@@ -301,3 +301,9 @@ JS 依赖和许可证，例如将入口与 `node_modules` 一起放在 `vendor/`
 这三个会话写操作要求 `pi.manage` 及当前任务、子代理、管理操作均空闲；官方内置 Pi Widget 的用户开关直接生效，其他 Widget 仍需宿主确认。配置保存到本聊天元数据，不改写全局或项目设置，兼容旧版 `blockedTools`。所有 Pi 扩展与工具（包括 Umeko 内置扩展）都可按当前会话设置；标准 Pi 仅保留 8 个原生工具，极简仅保留 read/bash/edit/write。
 
 Skills 目录管理使用 `skills.read/skills.manage` 权限；浏览、预览、打开、复制、附加为只读操作，不启动模型。`skills.attach {id,enabled}` 的内置页面用户选择即时保存到当前聊天。导入、重命名、删除重新核验聊天、工作区、目录身份和空闲状态，保留宿主确认；任务结果使用 `skills.job {id,offset?,limit?}` 分页获取。关闭 Widget 释放目录快照和导入计划。
+
+
+## 原生宿主独立会话
+
+应用生命周期插件声明 `sessions.manage` 后，可使用 `context.sessions` 的 acquire、submit、subscribe、wait、cancel、history、release 与审批处理接口。只在后台线程使用阻塞 helper；回调中使用非阻塞 `request_host`。
+配置与完整例子见 [session-task-service](examples/session-task-service/README.md)。C++ 宿主按插件实例隔离句柄，重启后重新 acquire；持久会话沿用 Pi 原生历史。`wait` 的 `truncated:true` 表示返回文本被有界截断，完整记录仍可按页查询。

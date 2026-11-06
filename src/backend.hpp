@@ -7,6 +7,9 @@
 #include "subagents.hpp"
 #include "desktop_plugins.hpp"
 #include "skills.hpp"
+#include "login_startup.hpp"
+#include "dsh.hpp"
+#include <QFuture>
 #include "slash_commands.hpp"
 #include <QtQuick>
 #include <chrono>
@@ -192,6 +195,13 @@ private:
 };
 
 struct Session {
+  QString backend = "pi";
+  QString acpSessionId,dshHome;
+  QVariantList dshOptions;
+  QPointer<QProcess> dshPreparing;
+  bool dshOwn=false,dshOwnFixed=false,dshInterrupted=false,dshPromptInterrupted=false;
+  bool dangerousAllowed = false;
+  QVariantMap pluginOwner, pluginPolicy;
   bool compactionRunning=false;
   QString compactionEvent;
   QString searchLeaf;
@@ -242,6 +252,7 @@ class Backend : public QObject {
   Q_OBJECT
   friend class NativeUiTests;
   Q_PROPERTY(QVariantMap config READ config NOTIFY changed)
+  Q_PROPERTY(QVariantList auxiliaryVisionModels READ auxiliaryVisionModels NOTIFY changed)
   Q_PROPERTY(QVariantList customThemes READ customThemes NOTIFY changed)
   Q_PROPERTY(QVariantMap themeStyle READ themeStyle NOTIFY changed)
   Q_PROPERTY(QVariantMap characterStyle READ characterStyle NOTIFY changed)
@@ -259,6 +270,7 @@ class Backend : public QObject {
   Q_PROPERTY(QObject *sessionPreview READ sessionPreview CONSTANT)
   Q_PROPERTY(QObject *chatSearch READ chatSearch CONSTANT)
   Q_PROPERTY(QObject *appAbout READ appAbout CONSTANT)
+  Q_PROPERTY(QObject *loginStartup READ loginStartup CONSTANT)
   Q_PROPERTY(QVariantList commonProviders READ commonProviders CONSTANT)
   Q_PROPERTY(QString language READ language NOTIFY appearanceChanged)
   Q_PROPERTY(double fontScale READ fontScale NOTIFY typographyChanged)
@@ -273,6 +285,16 @@ class Backend : public QObject {
   Q_PROPERTY(QString greeting READ greeting NOTIFY chatChanged)
   Q_PROPERTY(int portrait READ portrait NOTIFY chatChanged)
   Q_PROPERTY(bool busy READ busy NOTIFY chatChanged)
+  Q_PROPERTY(QString sessionBackend READ sessionBackend NOTIFY chatChanged)
+  Q_PROPERTY(bool canChooseBackend READ canChooseBackend NOTIFY chatChanged)
+  Q_PROPERTY(QObject *dshRuntime READ dshRuntimeService CONSTANT)
+  Q_PROPERTY(bool dshOwnConfig READ dshOwnConfig NOTIFY chatChanged)
+  Q_PROPERTY(QVariantList dshModelProviders READ dshModelProviders NOTIFY changed)
+  Q_PROPERTY(QString dshCurrentModelValue READ dshCurrentModelValue NOTIFY changed)
+  Q_PROPERTY(QString dshProviderName READ dshProviderName NOTIFY changed)
+  Q_PROPERTY(QString dshModelName READ dshModelName NOTIFY changed)
+  Q_PROPERTY(bool dangerousAllowed READ dangerousAllowed NOTIFY approvalChanged)
+  Q_PROPERTY(bool canGrantDangerousApproval READ canGrantDangerousApproval NOTIFY approvalChanged)
   Q_PROPERTY(bool compactionAvailable READ compactionAvailable NOTIFY chatChanged)
   Q_PROPERTY(bool compacting READ compacting NOTIFY chatChanged)
   Q_PROPERTY(QVariantMap turnStatus READ turnStatus NOTIFY chatChanged)
@@ -291,6 +313,9 @@ class Backend : public QObject {
   Q_PROPERTY(
       QString reasoningEffort READ reasoningEffort NOTIFY reasoningChanged)
   Q_PROPERTY(QStringList reasoningLevels READ reasoningLevels NOTIFY changed)
+  Q_PROPERTY(QString reasoningDetectionState READ reasoningDetectionState NOTIFY reasoningDetectionChanged)
+  Q_PROPERTY(QVariant reasoningOffSupported READ reasoningOffSupported NOTIFY reasoningDetectionChanged)
+  Q_PROPERTY(QVariantList reasoningFormatOptions READ reasoningFormatOptions CONSTANT)
   Q_PROPERTY(
       QVariantList attachments READ attachments NOTIFY attachmentsChanged)
   Q_PROPERTY(QVariantList queuedMessages READ queuedMessages NOTIFY chatChanged)
@@ -311,9 +336,40 @@ class Backend : public QObject {
   Q_PROPERTY(QVariantList proxyKeys READ proxyKeys NOTIFY proxyKeysChanged)
   Q_PROPERTY(QStringList proxyAddresses READ proxyAddresses NOTIFY changed)
 public:
+  QVariantList auxiliaryVisionModels() const;
+  QVariantMap auxiliaryVision() const;
+  QVariantMap generationConfig() const;
+  Q_INVOKABLE bool saveAuxiliaryVision(QString raw);
+  Q_INVOKABLE bool saveMultimodalSettings(QString raw);
+  Q_INVOKABLE void setSessionCacheSize(int count);
+  Q_INVOKABLE QVariantMap modelReasoningSettings(QString provider, QString alias) const;
+  Q_INVOKABLE bool ensureReasoningDetection();
+  Q_INVOKABLE bool ensureModelReasoningDetection(QString provider, QString alias);
+  Q_INVOKABLE bool redetectModelReasoning(QString provider, QString alias);
+  QString reasoningDetectionState() const;
+  QVariant reasoningOffSupported() const;
+  QVariantList reasoningFormatOptions() const;
+  void cancelReasoningDetection(QString provider = {});
+  void queueReasoningDetection(QString provider);
+  void drainReasoningDetection();
+  bool startReasoningDetection(QString provider, QString alias);
   explicit Backend(QString root, QString directory = {},
                    QObject *parent = nullptr);
   ~Backend() override;
+  QString sessionBackend() const {return view->backend;}
+  bool canChooseBackend() const {return view->id.isEmpty() && view->messages.isEmpty() && !view->busy();}
+  QObject *dshRuntimeService() const {return dshRuntime;}
+  bool dshOwnConfig() const;
+  QVariantList dshModelProviders() const;
+  QString dshCurrentModelValue() const;
+  QString dshProviderName() const;
+  QString dshModelName() const;
+  Q_INVOKABLE bool setSessionBackend(QString backend);
+  Q_INVOKABLE bool selectDshModel(QString value);
+  bool dangerousAllowed() const { return view->dangerousAllowed; }
+  bool canGrantDangerousApproval() const { return view->backend=="pi" && view->approval.value("method")=="confirm" && view->approval.value("dangerCategory").toInt()>=1 && view->approval.value("dangerCategory").toInt()<=7; }
+  Q_INVOKABLE void grantDangerousApproval();
+  Q_INVOKABLE void revokeDangerousApproval();
   Store store;
   QString root;
   bool webviewAvailable() const { return webviewConfiguration()["available"].toBool(); }
@@ -333,6 +389,7 @@ public:
   Q_INVOKABLE bool configureCharacter(QString raw);
   Q_INVOKABLE bool importCharacter(QString url);
   Q_INVOKABLE bool selectCharacter(QString id);
+  Q_INVOKABLE bool setCharacterEnabled(bool enabled);
   Q_INVOKABLE bool selectSubagentCharacter(int slot, QString id);
   QVariantList subagentCharacterPacks() const;
   QVariantList characterPacksFor(bool subagents) const;
@@ -355,6 +412,7 @@ public:
   QObject *sessionPreview() { return previewLoader; }
   QObject *chatSearch() { return conversationSearch; }
   QObject *appAbout() { return about; }
+  QObject *loginStartup() { if(!loginSettings)loginSettings=new LoginStartupSettings(this);return loginSettings; }
   QString language() const {
     return store.data["ui"].toMap()["language"].toString();
   }
@@ -467,7 +525,7 @@ public:
   Q_INVOKABLE void stop();
   Q_INVOKABLE void compactSession();
   Q_INVOKABLE void setToolPermissionMode(QString mode);
-  bool compactionAvailable() const {return !view->id.isEmpty() && !view->file.isEmpty() && !view->model.isEmpty() && !kernelBusy();}
+  bool compactionAvailable() const {return view->backend=="pi" && !view->id.isEmpty() && !view->file.isEmpty() && !view->model.isEmpty() && !kernelBusy();}
   bool compacting() const {return view->compactionRunning || (view->busy() && view->action=="compact");}
   Q_INVOKABLE void selectModel(QString provider, QString model);
   QVariantList commonProviders() const;
@@ -516,6 +574,7 @@ public:
   void invalidate();
   void notify();
 signals:
+  void reasoningDetectionChanged();
   void appearanceChanged();
   void typographyChanged();
   void changed();
@@ -540,6 +599,22 @@ signals:
   void editorText(QString text);
 
 private:
+  friend class DshRuntime;
+  DshRuntime *dshRuntime=nullptr;
+  QTimer dshSaveTimer;
+  QSet<QString> dshDirty;
+  QFuture<void> dshWriter;
+  void flushDsh();
+  void saveDsh(std::shared_ptr<Session> session);
+  bool commandDsh(std::shared_ptr<Session> session,QString action,QVariantMap values);
+  void sendDsh(QString text,bool steering);
+  void promptDsh(std::shared_ptr<Session> session,QString text);
+  bool dshEvent(std::shared_ptr<Session> session,QVariantMap event);
+  QVariantList dshSelection(std::shared_ptr<Session> session) const;
+  void switchDshConfig(std::shared_ptr<Session> session);
+  LoginStartupSettings *loginSettings=nullptr;
+  QHash<QString,QPointer<QProcess>> reasoningJobs;
+  QTimer reasoningQueue;
   friend class Providers;
   QVariantMap characterDefaults, characterOptions, characterConfig, resolvedCharacter;
   friend class Skills;
@@ -573,7 +648,7 @@ private:
   QVariantList sessionIndex;
   QSet<QString> collapsed;
   bool archived = false, chatVisible = true, closing = false,
-       kernelUpdating = false, publicRunning = false;
+       kernelUpdating = false, publicRunning = false, switchingView = false;
   QString release, kernelMessage = "就绪", latestKernel, privateToken;
   QVariantMap controlOperations, controlJobs;
   QStringList controlJobOrder;

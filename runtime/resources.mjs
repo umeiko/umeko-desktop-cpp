@@ -33,7 +33,7 @@ export function extensionInfo(row) {
   let root = row.metadata?.packageRoot || row.metadata?.baseDir || "";
   let origin = "local", updateKind = "none", manifest = {};
   if (builtin && ["chatbox", "pi-commands", "umeko-control", "background-jobs"].includes(name)) {
-    const descriptions = {"background-jobs":"启动、读取、等待和停止当前会话自己的后台命令。",chatbox:"向聊天和侧栏展示文件、图片、文档与网页。", "pi-commands":"向当前内嵌 Pi 实例发送原生命令和斜杠命令。", "umeko-control":"查询和管理 Umeko 的供应商、主题、扩展与应用设置。"};
+    const descriptions = {chatbox:"向聊天和侧栏展示文件、图片、文档与网页。", "pi-commands":"向当前内嵌 Pi 实例发送原生命令和斜杠命令。", "umeko-control":"查询和管理 Umeko 的供应商、主题、扩展与应用设置。", "background-jobs":"运行后台命令、读取独立日志、等待结果或只停止该任务的进程树；阻止按名称批量结束进程。"};
     return {icon:name, required, origin:"desktop", bundled:true, description:descriptions[name], homepage:desktopRepository, repository:desktopRepository, version:"", package:"", updateKind:"desktop"};
   }
   if (builtin) {
@@ -99,7 +99,7 @@ export async function checkExtensionUpdate(row, {cwd, lookup = npmVersion} = {})
   return {id:row.id,status:"unsupported",message:"本地扩展没有可检查的更新源"};
 }
 
-export const builtins = ["codemode", "tool-search", "mcp", "chatbox", "pi-commands", "umeko-control", "background-jobs", "background-jobs", "subagents"];
+export const builtins = ["codemode", "tool-search", "mcp", "chatbox", "generation", "pi-commands", "umeko-control", "background-jobs", "subagents"];
 const target = entry => entry.replace(/^[!+-]/, "");
 const canonical = (value, base) => value.startsWith("builtin:") ? value : resolve(base, value);
 export function extensionName(path, metadata = {}) {
@@ -225,7 +225,7 @@ export async function sessionResourceSettings(Pi, input, native) {
 export function extensionDocument(row) {
   const info=extensionInfo(row);
   const name=row.path.startsWith("builtin:") ? row.path.slice(8) : row.name;
-  const tools={"background-jobs":["background_job"],codemode:["codemode"], "tool-search":["tool_search"], mcp:["MCP 服务器提供的工具"], chatbox:["submit_to_chatbox"], "pi-commands":["run_pi_command"], "umeko-control":["umeko_desktop"], subagents:["subagent", "get_subagent_result", "steer_subagent"]};
+  const tools={codemode:["codemode"], "tool-search":["tool_search"], mcp:["MCP 服务器提供的工具"], chatbox:["submit_to_chatbox"], "pi-commands":["run_pi_command"], "umeko-control":["umeko_desktop", "analyze_image"], "background-jobs":["background_job"], subagents:["subagent", "get_subagent_result", "steer_subagent"]};
   const summary=`# ${name}
 
 ${info.description || "本地 Pi 扩展。"}

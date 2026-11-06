@@ -17,6 +17,11 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
     : QObject(parent), store(directory), root(U::cleanPath(resourceRoot)),
       chat(this) {
   if(!fontFamily().isEmpty()){auto font=QGuiApplication::font();font.setFamily(fontFamily());QGuiApplication::setFont(font);}
+  auto accounts=store.data["providers"].toList();
+  for(auto &value:accounts){auto p=value.toMap();auto models=p["models"].toList();for(auto &entry:models){auto m=entry.toMap();for(const auto &field:QStringList{"reasoningDetection","reasoningFormatDetection"})if(m[field].toMap()["state"]=="probing")m[field]=QVariantMap{{"state","unknown"}};entry=m;}p["models"]=models;value=p;}
+  store.data["providers"]=accounts;
+  reasoningQueue.setInterval(500);
+  connect(&reasoningQueue,&QTimer::timeout,this,&Backend::drainReasoningDetection);
   initCharacters();
   release = root + "/runtime/releases/coding-1.3.0";
   auto active =
@@ -35,7 +40,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
                       manifest["engine"] == "full-coding-agent";
     // The adapters belong to this desktop build, even when Pi itself was
     // upgraded separately. Keep web/queue fixes with the application update.
-    QStringList adapters{"bridge.mjs", "provider-errors.mjs", "package-install.mjs", "update-engine.mjs", "resources.mjs", "provider-policy.mjs", "chatbox.mjs",
+    QStringList adapters{"system-prompt.mjs", "auxiliary-vision.mjs", "generation.mjs", "bridge.mjs", "provider-errors.mjs", "package-install.mjs", "update-engine.mjs", "resources.mjs", "provider-policy.mjs", "chatbox.mjs",
           "skills.mjs", "recent-images.mjs", "background-jobs.mjs", "process-guard.mjs", "tool-permissions.mjs", "session-capabilities.mjs", "markdown-preview.mjs", "tool-visibility.mjs", "network-retry.mjs", "pi-commands.mjs", "umeko-control.mjs", "umeko-documents.mjs", "subagents.mjs", "subagent-sdk.mjs", "subagent-settings.mjs", "input-queue.mjs", "widget-messages.mjs", "rpc-ui.mjs", "umeko-operations.json", "webview-component.mjs", "webview-component.json"};
     QDirIterator docs(root + "/runtime/umeko-docs", QDir::Files, QDirIterator::Subdirectories);
     while (docs.hasNext()) adapters << QDir(root + "/runtime").relativeFilePath(docs.next());
@@ -73,6 +78,9 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
       ensureProject(s["workspace"].toString());
   }
   providers = new Providers(this);
+  dshRuntime = new DshRuntime(this);
+  dshSaveTimer.setSingleShot(true);dshSaveTimer.setInterval(150);
+  connect(&dshSaveTimer,&QTimer::timeout,this,&Backend::flushDsh);
   management = new PiManagement(this);
   about = new AppAbout(this);
   previewLoader = new SessionPreview(this);
@@ -216,6 +224,7 @@ bool Backend::saveSidebarLayout(int width, bool collapse) {
   return true;
 }
 void Backend::saveViewport(int index, double offset, bool follow) {
+  if(switchingView)return;
   view->scrollIndex = index;
   view->scrollY = qMax(0., offset);
   view->followTail = follow;
@@ -232,7 +241,7 @@ void Backend::setTheme(QString theme) {
   for (auto value : customThemes())
     if (value.toMap()["id"] == theme)
       custom = value.toMap();
-  if (!QStringList{"light", "dark", "yanami"}.contains(theme) &&
+  if (!QStringList{"white", "light", "dark", "yanami"}.contains(theme) &&
       custom.isEmpty())
     return;
   store.data["theme"] = theme;
@@ -702,6 +711,7 @@ void Backend::selectModel(QString id, QString model) {
       store.save();
       emit changed();
       emit contextUsageChanged();
+      if(view->backend=="dsh")switchDshConfig(view);else ensureModelReasoningDetection(id,model);
       return;
     }
   }
@@ -781,6 +791,7 @@ bool Backend::saveProvider(QString id, QString name, QString api, QString url,
     store.data["providers"] = rows;
     invalidate();
     notify();
+    for(const auto &value:store.data["providers"].toList())queueReasoningDetection(value.toMap()["id"].toString());
     return true;
   } catch (const std::exception &e) {
     emit toast(QString::fromUtf8(e.what()));
@@ -1088,6 +1099,9 @@ void Backend::configureGateway() {
                 {"token", privateToken},
                 {"diagnosticsDir", store.directory + "/request-errors"},
                 {"providers", rows},
+                {"python", providers->resolvePython()},
+                {"multimodal", store.data["multimodal"]},
+                {"generationDirectory",store.directory+"/generation-transfer"},
                 {"models", modelCatalog()},
                 {"settings", store.data["server"]}});
 }
@@ -1139,6 +1153,14 @@ void Backend::close() {
   if (closing)
     return;
   closing = true;
+  if(dshRuntime)dshRuntime->close();
+  dshSaveTimer.stop();dshWriter.waitForFinished();flushDsh();dshWriter.waitForFinished();dshSaveTimer.stop();
+  for(auto s:records)if(s->dshPreparing){s->dshPreparing->kill();s->dshPreparing->waitForFinished(2000);}
+  const auto probes=reasoningJobs.values();
+  cancelReasoningDetection();
+  reasoningQueue.stop();
+  for(const auto &process:probes)if(process && process->state()!=QProcess::NotRunning)process->waitForFinished(1000);
+  reasoningJobs.clear();
   if (about) about->closeDownload();
   if (skills) skills->close();
   if(view && !view->id.isEmpty())setMetadata(view->id,{{"viewport",QVariantMap{{"index",view->scrollIndex},{"offset",view->scrollY},{"follow",view->followTail}}}});
@@ -1153,7 +1175,7 @@ void Backend::close() {
       record->process->closeWriteChannel();
     }
   for (auto record : records)
-    if (record->process && !record->process->waitForFinished(2500)) {
+    if (record->process && !record->process->waitForFinished(record->backend=="dsh"?11000:2500)) {
       record->process->terminate();
       if (!record->process->waitForFinished(1000)) {
         record->process->kill();

@@ -54,7 +54,7 @@ test('documents are delivered by reference with automatic kinds and artifact gui
     const result=await tool.execute('artifacts',{items:cases.map(([file])=>({path:file}))},null,null,{cwd:directory});
     const payload=JSON.parse(result.content[0].text);
     assert.deepEqual(payload.submitted.map(item=>item.kind),cases.map(([,kind])=>kind));
-    assert.ok(!payload.webview);
+    assert.ok(payload.webview && typeof payload.webview.status === "string");
     assert.ok(!JSON.stringify(result).includes('Artifact content must'));
     assert.equal(entries.length,1);
     assert.match(tool.promptGuidelines[0],/after creating or updating.*artifact/);

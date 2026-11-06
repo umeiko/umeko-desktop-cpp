@@ -39,7 +39,7 @@ ApplicationWindow {
     }
     Loader {
         id:petWindowLoader;objectName:"desktopPetWindowLoader"
-        active:backend.desktopPlugins.pet.visible
+        active:backend.desktopPlugins.pet.visible && (typeof proxyOnlyLogin === "undefined" || !proxyOnlyLogin)
         sourceComponent:Component { DesktopPetWindow { pet:backend.desktopPlugins.pet } }
     }
     Connections {
@@ -222,7 +222,7 @@ ApplicationWindow {
         targetRect: Qt.rect(0, 0, (sidebarResizeHandle.resizing ? sidebarResizeHandle.dragWidth : window.sidebarLayoutCollapsed ? 0 : Math.min(window.sidebarPreferredWidth, window.sidebarMaximumWidth)) + 1, 1)
         onMovingChanged: if (!moving) window.showSidebarCollapseHint()
     }
-    Connections { target: backend.desktopPlugins; function onRequested() { window.page = "chat"; webPane.showPlugin() } }
+    Connections { target: backend.desktopPlugins; function onRequested() { window.page = "chat"; webPane.showPlugin() } function onImportRequested() {window.page="settings";settingsPage.openWidgetImport()} }
     Connections { target: backend.subagents; function onRequested() { window.page = "chat"; webPane.showSubagent() } }
     Rectangle {
         id: sidebar; objectName: "sidebar"
@@ -410,12 +410,12 @@ ApplicationWindow {
                 CharacterArt { objectName: "yanamiWatermark"; anchors.fill: parent; fallbackSource: "../icons/portraits/02.webp"; artwork: Character.asset("background", fallbackSource); fillMode: Image.PreserveAspectCrop; horizontalAlignment: Image.AlignHCenter; verticalAlignment: Image.AlignVCenter; mipmap: true; opacity: 0.055 }
             }
             Item {
-                id: welcome; width: Math.min(parent.width - 70, 620); height: 270
+                id: welcome; width: Math.min(parent.width - 70, 620); height: welcomeMascot.height + 60
                 x: composer.x + (composer.width - width) / 2; anchors.verticalCenter: parent.verticalCenter; anchors.verticalCenterOffset: -119
                 visible: backend.messageCount === 0
                 WelcomeMascot { id: welcomeMascot; anchors.horizontalCenter: parent.horizontalCenter; portraitIndex: backend.portrait }
                 Connections { target: backend; function onViewChanged() { welcomeMascot.reset() } }
-                Text { font.family: Theme.fontFamily; objectName: "welcomeGreeting"; anchors.horizontalCenter: parent.horizontalCenter; y: 231; width: parent.width; text: welcomeMascot.reactionText || welcomeMascot.rareGreeting || Character.greeting(I18n.t(backend.greeting), welcomeMascot.portraitIndex); color: Theme.yanami ? Theme.accent : Theme.muted; font.pixelSize: Theme.font(14, visible); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; lineHeight: 1.35 }
+                Text { font.family: Theme.fontFamily; objectName: "welcomeGreeting"; anchors.horizontalCenter: parent.horizontalCenter; y: welcomeMascot.height + 21; width: parent.width; text: welcomeMascot.reactionText || welcomeMascot.rareGreeting || Character.greeting(I18n.t(backend.greeting), welcomeMascot.portraitIndex); color: Theme.yanami ? Theme.accent : Theme.muted; font.pixelSize: Theme.font(14, visible); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; lineHeight: 1.35 }
             }
 
             ListView {
@@ -425,19 +425,20 @@ ApplicationWindow {
                 property real restoreOffset: -1
                 property int restoreIndex: -1
                 property int restoreAttempts: 0
+                property bool restorePositioned: false
                 function beginBrowsing() { tailTimer.stop(); restoreTimer.stop(); restoring = false; cancelFlick(); followTail = false }
                 function jumpToMessage(row) {
                     if (row < 0 || row >= count) return
                     beginBrowsing()
                     chatSelection.clear()
-                    restoring = true; restoreIndex = row; restoreOffset = 0; restoreAttempts = 0
+                    restoring = true; restoreIndex = row; restoreOffset = 0; restoreAttempts = 0; restorePositioned = false
                     restoreTimer.restart()
                 }
                 function jumpToLatest() {
                     beginBrowsing()
                     chatSelection.clear()
                     followTail = true
-                    restoring = true; restoreIndex = -1; restoreOffset = 0; restoreAttempts = 0
+                    restoring = true; restoreIndex = -1; restoreOffset = 0; restoreAttempts = 0; restorePositioned = false
                     backend.messageModel.requestRange(Math.max(0, count - 4), count - 1)
                     restoreTimer.restart()
                 }
@@ -463,6 +464,7 @@ ApplicationWindow {
                     restoreOffset = backend.scrollPosition
                     restoreIndex = backend.scrollAnchor
                     restoreAttempts = 0
+                    restorePositioned = false
                     restoreTimer.restart()
                 }
                 acceptedButtons: Qt.NoButton
@@ -507,7 +509,7 @@ ApplicationWindow {
                             const index = Math.min(conversation.restoreIndex, conversation.count - 1)
                             backend.messageModel.requestRange(index,index+4)
                             if(!backend.messageModel.rangeReady(index,index+4) && conversation.restoreAttempts<200)return
-                            if (conversation.restoreAttempts === 1) { conversation.positionViewAtIndex(index, ListView.Beginning); conversation.forceLayout(); return }
+                            if (!conversation.restorePositioned) { conversation.positionViewAtIndex(index, ListView.Beginning); conversation.restorePositioned = true; conversation.forceLayout(); return }
                             const item = conversation.itemAtIndex(index)
                             if (!item && conversation.restoreAttempts < 5) return
                             if (item) {
@@ -537,6 +539,8 @@ ApplicationWindow {
                 delegate: Column {
                     id: messageRow
                 readonly property bool compactionNotice: modelData.customType === "umeko-compaction"
+                    readonly property bool dshInterruptionNotice: modelData.customType === "umeko-dsh-interruption"
+                    readonly property bool statusNotice: compactionNotice || dshInterruptionNotice
                     readonly property var replyMascot: closingMascot
                     required property var modelData
                     required property int index
@@ -550,12 +554,12 @@ ApplicationWindow {
                         BusyIndicator { objectName: "historyLoading_" + messageRow.index; x: 33; y: 12; width: 22; height: 22; visible: !modelData._loadError; running: visible && messageRow.visible }
                         ActionButton { x: 33; y: 16; visible: !!modelData._loadError; text: I18n.t("重新加载消息"); glyph: "refresh-cw"; onClicked: backend.messageModel.retryPage(messageRow.index) }
                     }
-                    Row { visible: !modelData._loading && !messageRow.compactionNotice && !modelData.continuation && modelData.role !== "user"; spacing: 9
+                    Row { visible: !modelData._loading && !messageRow.statusNotice && !modelData.continuation && modelData.role !== "user"; spacing: 9
                         AssistantAvatar { objectName: "assistantAvatar_" + messageRow.index; messageKey: window.avatarChatKey + "/" + messageRow.index }
                         SelectableText { font.family: Theme.fontFamily; selectionController: chatSelection; messageIndex: messageRow.index; blockIndex: -100000; text: "umeko"; anchors.verticalCenter: parent.verticalCenter; color: Theme.ink; font.pixelSize: Theme.font(11, visible); font.weight: Font.DemiBold }
                     }
                     Rectangle {
-                        visible: !modelData._loading && !messageRow.compactionNotice
+                        visible: !modelData._loading && !messageRow.statusNotice
                         objectName: "messageBubble_" + messageRow.index
                         border.width: 1; border.color: window.searchHighlightRow === messageRow.index ? Theme.accent : "transparent"
                         Behavior on border.color { ColorAnimation { duration: 180 } }
@@ -633,16 +637,24 @@ ApplicationWindow {
                             }
                         }
                     }
+                    SelectableText {
+                        objectName: "dshInterruptionNotice_" + messageRow.index
+                        visible: !modelData._loading && messageRow.dshInterruptionNotice
+                        x: 33; width: parent.width - 33
+                        text: I18n.t("已停止上一条请求"); textFormat: TextEdit.PlainText
+                        color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11, visible)
+                        selectionController: chatSelection; messageIndex: messageRow.index; blockIndex: 0
+                    }
                     OutputLimitNotice {
                         objectName: "outputLimitNotice_" + messageRow.index
                         x: 33; width: parent.width - 33
-                        visible: !messageRow.compactionNotice && modelData.role === "assistant" && modelData.stopReason === "length"
+                        visible: !messageRow.statusNotice && modelData.role === "assistant" && modelData.stopReason === "length"
                         continuable: messageRow.index === conversation.count - 1 && !backend.busy
                         onContinued: backend.send(I18n.t("继续刚才未完成的回答，从中断处接着输出，不要重复已有内容。"))
                     }
                     Item {
                         objectName: "messageActions_" + messageRow.index
-                        visible: !messageRow.compactionNotice
+                        visible: !messageRow.statusNotice
                         width: parent.width; height: 18
                         opacity: messageRow.hovered || actionHover.hovered ? 1 : 0
                         HoverHandler { id: actionHover }
@@ -660,7 +672,7 @@ ApplicationWindow {
                         objectName: "replyEndMascot_" + messageRow.index
                         selectionController: chatSelection
                         width: Character.id === "doubao" ? Theme.icon(72) : 56
-                        visible: !modelData._loading && !messageRow.compactionNotice && messageRow.index === conversation.count - 1 && modelData.role === "assistant" && !modelData.error && (modelData.text || "").trim().length > 0 && !backend.running && (backend.turnStatus.state === "finished" || modelData.stopReason === "stop")
+                        visible: !modelData._loading && !messageRow.statusNotice && messageRow.index === conversation.count - 1 && modelData.role === "assistant" && !modelData.error && (modelData.text || "").trim().length > 0 && !backend.running && (backend.turnStatus.state === "finished" || modelData.stopReason === "stop")
                         x: 33
                     }
                 }

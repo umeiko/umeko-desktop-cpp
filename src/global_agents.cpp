@@ -170,7 +170,7 @@ QVariantMap GlobalAgents::snapshot(QString selected)const{
   for(auto v:appearances){auto row=v.toMap();portraits[row["id"].toString()]=row["portrait"];replies[row["id"].toString()]=row.value("replyPortrait",row["portrait"]);}
   QVariantList rows;
   for(auto it=agents.cbegin();it!=agents.cend();++it){auto value=it.value().toMap();QVariantMap row;for(const auto &key:{"id","name","character","model","instructions"})row[key]=value[key];auto s=records.value(it.key());
-    row["autoName"]=value["autoName"].toBool();row["portrait"]=portraits.value(value["character"].toString(),portraits.value(fallback));row["replyPortrait"]=replies.value(value["character"].toString(),replies.value(fallback));row.insert(activity(it.key()));row["status"]=s?s->status:"";row["bridge"]=true;rows<<row;
+    row["autoName"]=value["autoName"].toBool();row["portrait"]=portraits.value(value["character"].toString(),portraits.value(fallback));row["replyPortrait"]=replies.value(value["character"].toString(),replies.value(fallback));row.insert(activity(it.key()));row["status"]=s?s->status:"";row["bridge"]=true;if(b->characterStyle()["id"]=="system"){row["portrait"]=portraits.value("system");row["replyPortrait"]=replies.value("system");}rows<<row;
   }
   QVariantList projects;for(auto value:b->store.data["projects"].toList()){auto source=value.toMap();if(source["path"].toString().isEmpty())continue;QVariantMap row;for(const auto &key:{"id","name","path"})row[key]=source[key];projects<<row;}
   auto s=records.value(selected);auto recent=ChatModel::project(messages(s?s->messages:agents.value(selected).toMap()["messages"].toList()));

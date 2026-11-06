@@ -66,3 +66,11 @@ The bundled background-job extension uses `@alexlikevibe/pi-bg` 2.3.0 (MIT), spe
 ## Tool execution permissions
 
 The command and path detector adapts @xynogen/pix-gate 0.4.5 (MIT). Its full copyright and permission notice is retained in `licenses/pix-gate-MIT.txt` and `runtime/tool-permissions.mjs`. This detector is not an OS sandbox.
+
+## DeepSeek Harness backend mark
+
+`app/icons/dsh.svg` is the unmodified official whale favicon from `@deepseek-ai/dsh-web-frontend` 0.2.2-rc.1 (`dist/favicon.svg`), published from https://github.com/deepseek-ai/deepseek-harness/tree/dsh-v0.2.2-rc.1/apps/web . Copyright (c) 2026 DeepSeek, MIT; the original license is retained at `licenses/dsh-logo-LICENSE`.
+
+## Agent Client Protocol SDK
+
+The optional DeepSeek Harness backend uses the official `@agentclientprotocol/sdk` 2.4.0, licensed under Apache-2.0. The original license is included in `licenses/acp-sdk-LICENSE`. Source: https://github.com/agentclientprotocol/typescript-sdk.

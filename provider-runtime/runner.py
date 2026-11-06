@@ -27,7 +27,7 @@ def main():
     request = json.loads(sys.stdin.readline(32 * 1024 * 1024))
     sdk = str(Path(__file__).resolve().parent)
     sys.path.insert(0, sdk)
-    from umeko_provider_sdk import Provider, ProviderContext, ProviderError
+    from umeko_provider_sdk import Provider, ProviderContext, ProviderError, request_scope
     from umeko_provider_sdk.network import network_scope, redact as redact_data
     from umeko_provider_sdk.packages import validate_config, validate_folder
 
@@ -86,7 +86,7 @@ def main():
             sys.path.insert(1, str(vendor))
         entry, factory = manifest["entrypoint"].split(":")
         # Plugin debug output is not part of the wire protocol and is never shown in UI.
-        with contextlib.redirect_stdout(sys.stderr), network_scope(request.get("proxy"), records if request.get("method") == "events" else None):
+        with request_scope(request_cancelled), contextlib.redirect_stdout(sys.stderr), network_scope(request.get("proxy"), records if request.get("method") == "events" else None):
             implementation = importlib.import_module(namespace + "." + entry[:-3].replace("/", "."))
             def report_status(message):
                 if request.get("method") == "login" and not cancelled.is_set() and not request_cancelled.is_set():
@@ -118,6 +118,31 @@ def main():
                             result = {"models": models, "label": str(details.get("label", "已登录"))[:100]}
             elif method == "models":
                 result = {"models": provider.list_models(refresh=True)}
+            elif method == "generate":
+                kind=params.get("kind")
+                if kind not in manifest.get("generationCapabilities",[]):
+                    raise ProviderError("The provider does not support this generation kind")
+                function=getattr(provider,"generate_"+kind)
+                arguments=(params["model"],params["text"],params.get("parameters",{}))
+                values=function(*arguments,on_progress=lambda value:send("event",data={"type":"progress",**value})) if kind=="video" else function(*arguments)
+                if not isinstance(values,list) or not 1<=len(values)<=10:
+                    raise ProviderError("Invalid generated media list")
+                output=Path(params["_transferDir"]).resolve();output.mkdir(parents=True,exist_ok=True,mode=0o700)
+                total=0;items=[]
+                for value in values:
+                    mime=value.get("mimeType","")
+                    if not isinstance(mime,str) or not mime.startswith("audio/" if kind=="speech" else kind+"/"):
+                        raise ProviderError("Invalid generated media type")
+                    data=value.get("data")
+                    if not isinstance(data,bytes) or not 0<len(data)<=32*1024*1024:
+                        raise ProviderError("Invalid or oversized generated media")
+                    total+=len(data)
+                    if total>48*1024*1024:raise ProviderError("Generated media exceeds limit")
+                    file=output/("media-"+str(len(items))+".bin")
+                    with file.open("xb") as stream:stream.write(data)
+                    file.chmod(0o600)
+                    items.append({"file":str(file),"mimeType":value.get("mimeType","")})
+                result={"items":items}
             elif method == "events":
                 for event in provider.events(params["model"], params["messages"], params.get("tools", []),
                                              params.get("max_tokens", 4096), params.get("parameters", {})):

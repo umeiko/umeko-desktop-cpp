@@ -192,6 +192,8 @@ class NativeUiTests : public QObject {
     auto port = upstream.serverPort();
     auto models = QString::fromUtf8(
         QJsonDocument(QJsonArray{QJsonObject{{"upstream", "fixture-model"},
+                                             {"reasoningLevels",QJsonArray{"low","high","max"}},
+                                             {"reasoningLevelsAuto",false},{"reasoningFormatAuto",false},
                                              {"alias", "native-fixture"},
                                              {"contextWindow", 128000},
                                              {"contextWindowAuto", false},
@@ -853,6 +855,125 @@ private slots:
     window->grabWindow().save(root+"/build/screenshots/tool-catalog-visible.png");
     QMetaObject::invokeMethod(find("backToPiButton"),"clicked");
   }
+  void nativeMultimodalSettingsNavigation() {
+    window->setProperty("page","settings");window->setProperty("settingsTab",0);QTest::qWait(100);
+    auto page=find("settingsPage");QVERIFY(page);page->setProperty("multimodalOpen",false);
+    auto scroll=find("settingsScroll")->property("contentItem").value<QObject*>();QVERIFY(scroll);scroll->setProperty("contentY",0);
+    click("multimodalSettingsEntry");QVERIFY(page->property("multimodalOpen").toBool());
+    QVERIFY(find("imageGenerationSettings")->isVisible());QVERIFY(find("speechGenerationSettings")->isVisible());QVERIFY(find("videoGenerationSettings")->isVisible());
+    QVERIFY(!find("commonProvidersSection")->isVisible());
+    scroll->setProperty("contentY",0);click("backMultimodalSettings");QVERIFY(!page->property("multimodalOpen").toBool());QVERIFY(find("commonProvidersSection")->isVisible());
+    window->setProperty("page","chat");
+  }
+  void nativeReasoningDiscoveryAndChatPriority() {
+    configureAPI();const auto original=backend->store.data;
+    const auto cleanup=qScopeGuard([&]{releaseReplies();backend->cancelReasoningDetection();backend->store.data=original;backend->notify();});
+    auto providers=backend->store.data["providers"].toList();auto account=providers[0].toMap();auto models=account["models"].toList();auto model=models[0].toMap();
+    model["reasoningLevelsAuto"]=true;model["reasoningFormatAuto"]=true;model["reasoningDetection"]=QVariantMap{};model["reasoningFormatDetection"]=QVariantMap{};
+    models[0]=model;account["models"]=models;providers[0]=account;backend->store.data["providers"]=providers;backend->configureGateway();
+    const auto id=account["id"].toString(),alias=model["alias"].toString();const auto before=requests.size();
+    QVERIFY(backend->ensureModelReasoningDetection(id,alias));
+    QTRY_COMPARE_WITH_TIMEOUT(backend->modelReasoningSettings(id,alias)["states"].toMap()["format"].toString(),QString("known"),15000);
+    QVERIFY(requests.size()>before);
+    for(int i=before;i<requests.size();++i){auto body=requests[i].toMap();QVERIFY(body["max_tokens"].toInt()<=16);QVERIFY(!body.contains("_umeko_provider"));QVERIFY(!body.contains("_umeko_reasoning_probe"));}
+    holdReplies=true;QVERIFY(backend->redetectModelReasoning(id,alias));
+    QTRY_VERIFY_WITH_TIMEOUT(!heldReplies.isEmpty(),5000);
+    backend->send("Chat takes priority over discovery");QVERIFY(backend->busy());releaseReplies();
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),10000);QVERIFY(lastText().contains("Chat takes priority"));
+  }
+  void nativeMarketCachedListAndBoundary() {
+    configureAPI();auto manager=backend->desktopExtensions;auto host=qobject_cast<WidgetHost*>(manager->hostServices());
+    const auto cleanup=qScopeGuard([&]{manager->closePage();});
+    const auto catalog=directory.filePath("widget-market/catalog.json");QDir().mkpath(QFileInfo(catalog).absolutePath());
+    QVERIFY(U::writeJson(catalog,QVariantMap{{"checkedAt",QDateTime::currentMSecsSinceEpoch()/1000.0},{"responses",QVariantMap{}},{"rows",QVariantList{QVariantMap{{"id","sample-widget"},{"name","Sample Widget"},{"version","1.0.0"},{"description","Cached local test"}}}}}));
+    manager->setEnabled("widget-market",true);manager->setSessionEnabled("widget-market",true);QVERIFY(manager->openPage("widget-market"));
+    QTRY_VERIFY_WITH_TIMEOUT(find("widgetMarket"),10000);
+    QTRY_COMPARE_WITH_TIMEOUT(find("widgetMarket")->property("rows").toList().size(),1,10000);
+    QVariant description;
+    const QVariant billionRow=QVariantMap{{"id","billion-context"},{"description","old wrapper-only description"}};
+    QVERIFY(QMetaObject::invokeMethod(find("widgetMarket"),"description",Q_RETURN_ARG(QVariant,description),Q_ARG(QVariant,billionRow)));
+    QVERIFY(description.toString().contains("上下文压缩"));QVERIFY(description.toString().contains("单独安装"));
+    QSignalSpy replies(manager,&DesktopPlugins::hostResponse);
+    const auto token=host->requestFor("widget-market",{{"operation","market.install"},{"arguments",QVariantMap{{"token",QString(32,'a')}}},{"session",manager->m_session}});
+    QVERIFY(!token.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!replies.isEmpty(),5000);
+    QVERIFY(!replies.last()[2].toMap()["ok"].toBool());
+    QVERIFY(host->pendingApproval().isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!find("webPane")->property("moving").toBool(),5000);
+    QVERIFY(window->grabWindow().save(root+"/build/screenshots/widget-market.png"));
+  }
+  void publishedTagNativeFeatures() {
+    const auto original=backend->store.data;const auto selected=backend->characterStyle()["id"].toString();
+    const auto cleanup=qScopeGuard([&]{backend->store.data=original;backend->selectCharacter(selected);backend->notify();});
+    configureAPI();
+    QVERIFY(backend->saveMultimodalSettings("{\"image\":{\"count\":2,\"model\":\"image-fixture\"}}"));
+    QCOMPARE(backend->config()["multimodal"].toMap()["image"].toMap()["count"].toInt(),2);
+    QVERIFY(!backend->saveMultimodalSettings("{\"image\":{\"count\":2.5}}"));
+    QVERIFY(!backend->saveMultimodalSettings("{\"video\":{\"seconds\":\"-1\"}}"));
+    QVERIFY(!backend->saveAuxiliaryVision("{\"autoAnalyze\":\"yes\"}"));
+    QVERIFY(!backend->saveAuxiliaryVision("{\"providerId\":\"missing\",\"model\":\"missing\"}"));
+    QVERIFY(backend->selectCharacter("kaju"));
+    QVERIFY(backend->setCharacterEnabled(false));
+    QCOMPARE(backend->characterStyle()["id"].toString(),QString("system"));
+    QVERIFY(!backend->removeCharacter("system"));
+    QVERIFY(backend->setCharacterEnabled(true));
+    QCOMPARE(backend->characterStyle()["id"].toString(),QString("kaju"));
+    backend->setTheme("white");QCOMPARE(backend->config()["theme"].toString(),QString("white"));
+    backend->view->approval.clear();QVERIFY(!backend->canGrantDangerousApproval());QVERIFY(backend->view->approval.isEmpty());
+    backend->view->approval={{"id","fixture"},{"method","confirm"},{"dangerCategory",1}};
+    QVERIFY(backend->canGrantDangerousApproval());backend->grantDangerousApproval();QVERIFY(backend->dangerousAllowed());
+    backend->revokeDangerousApproval();QVERIFY(!backend->dangerousAllowed());
+    auto host=qobject_cast<WidgetHost*>(qobject_cast<DesktopPlugins*>(backend->desktopPlugins())->hostServices());
+    QVERIFY(host->capabilities()["operations"].toMap().contains("market.prepare"));
+    QCOMPARE(host->capabilities()["operations"].toMap()["sessions.acquire"].toMap()["permission"].toString(),QString("sessions.manage"));
+  }
+  void pluginSessionServiceOwnsNativeConversations() {
+    configureAPI();auto manager=qobject_cast<DesktopPlugins*>(backend->desktopPlugins());
+    auto host=qobject_cast<WidgetHost*>(manager->hostServices());QVERIFY(host);
+    const auto original=backend->store.data;const auto front=backend->view->key;
+    const QString pluginId="session-task-service";
+    const auto cleanup=qScopeGuard([&]{manager->setEnabled(pluginId,false);manager->uninstall(pluginId);QElapsedTimer cleanupTimer;cleanupTimer.start();while(manager->busy()&&cleanupTimer.elapsed()<5000)QTest::qWait(10);backend->store.data=original;backend->notify();});
+    const auto archive=directory.filePath("session-task-service.zip");mz_zip_archive zip{};
+    QVERIFY(mz_zip_writer_init_file(&zip,archive.toUtf8().constData(),0));
+    QDir source(root+"/plugin-runtime/examples/session-task-service");QDirIterator files(source.path(),QDir::Files,QDirIterator::Subdirectories);
+    while(files.hasNext()) {
+      QFile file(files.next());const auto name=source.relativeFilePath(file.fileName());if(name.contains("__pycache__"))continue;
+      QVERIFY(file.open(QIODevice::ReadOnly));auto raw=file.readAll();
+      if(name=="scripts/plugin.py")raw="from umeko_plugin_sdk import Plugin\ndef create_plugin(context): return Plugin(context)\n";
+      QVERIFY(mz_zip_writer_add_mem(&zip,name.toUtf8().constData(),raw.constData(),raw.size(),MZ_DEFAULT_COMPRESSION));
+    }
+    QVERIFY(mz_zip_writer_finalize_archive(&zip));mz_zip_writer_end(&zip);
+    const auto imported=manager->importZip(QUrl::fromLocalFile(archive).toString());QVERIFY(!imported.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!manager->busy(),10000);QVERIFY2(manager->entries.contains(pluginId),qPrintable(manager->status()));
+    manager->setEnabled(pluginId,true);
+    QTRY_VERIFY_WITH_TIMEOUT(manager->workers.contains(pluginId)&&manager->workers[pluginId]->ready,10000);
+    QTemporaryDir work;QVERIFY(work.isValid());
+    backend->store.data["pluginSessionProfiles"]=QVariantMap{{pluginId,QVariantMap{{"fixture",QVariantMap{{"workspace",work.path()},{"model",backend->view->model},{"provider",backend->view->provider},{"tools",QStringList{"read"}},{"permissionMode","ask"},{"allowApprovals",true}}}}}};
+    QSignalSpy replies(manager,&DesktopPlugins::hostResponse);
+    auto call=[&](QString op,QVariantMap args){
+      const auto id=host->requestFor(pluginId,{{"operation",op},{"arguments",args},{"session",QVariantMap{}}});
+      if(id.isEmpty())return QVariantMap{{"ok",false},{"error","Host rejected request immediately"}};QElapsedTimer timer;timer.start();while(timer.elapsed()<20000){QCoreApplication::processEvents();for(const auto &row:replies)if(row[1].toString()==id)return row[2].toMap();QTest::qWait(10);}for(const auto &record:backend->records)qInfo()<<"Session timeout state"<<record->id<<record->phase<<record->failed<<record->status<<record->messages.size();return QVariantMap{{"ok",false},{"error","Host request timed out: "+op}};
+    };
+    auto acquired=call("sessions.acquire",{{"externalKey","fixture"},{"profile","fixture"}});
+    QVERIFY2(acquired["ok"].toBool(),qPrintable(acquired["error"].toString()));
+    const auto identity=acquired["result"].toMap();const auto handle=identity["handle"].toString(),sessionId=identity["sessionId"].toString();
+    QVERIFY(identity["created"].toBool());QVERIFY(!handle.isEmpty());QCOMPARE(backend->view->key,front);
+    auto record=backend->findSession(sessionId);QVERIFY(record);QVERIFY(QFileInfo(record->file).isFile());QVERIFY(!record->dangerousAllowed);
+    auto repeated=call("sessions.acquire",{{"externalKey","fixture"},{"profile","fixture"}});
+    QVERIFY(repeated["ok"].toBool());QCOMPARE(repeated["result"].toMap()["sessionId"].toString(),sessionId);QVERIFY(!repeated["result"].toMap()["created"].toBool());
+    QVERIFY(!call("sessions.history",{{"handle","foreign"}})["ok"].toBool());
+    QVERIFY(call("sessions.subscribe",{{"handle",handle}})["ok"].toBool());
+    auto submitted=call("sessions.submit",{{"handle",handle},{"requestId","request-1"},{"content","plugin session fixture"}});
+    QVERIFY2(submitted["ok"].toBool(),qPrintable(submitted["error"].toString()));const auto run=submitted["result"].toMap()["runId"].toString();QVERIFY(!run.isEmpty());
+    auto duplicate=call("sessions.submit",{{"handle",handle},{"requestId","request-1"},{"content","must not duplicate"}});QCOMPARE(duplicate["result"].toMap()["runId"].toString(),run);
+    auto result=call("sessions.wait",{{"handle",handle},{"runId",run}});
+    QVERIFY2(result["ok"].toBool(),qPrintable(result["error"].toString()));QCOMPARE(result["result"].toMap()["status"].toString(),QString("completed"));QVERIFY(!result["result"].toMap()["assistantMessages"].toStringList().isEmpty());
+    QCOMPARE(backend->view->key,front);auto history=call("sessions.history",{{"handle",handle},{"limit",10}});QVERIFY(history["ok"].toBool());QVERIFY(history["result"].toMap()["messages"].toList().size()>=2);
+    QVERIFY(call("approvals.registerHandler",{{"handle",handle}})["ok"].toBool());
+    QVERIFY(host->captureSessionApproval(record->key,{{"type","ui_request"},{"id","approval-fixture"},{"method","confirm"},{"title","Fixture approval"}}));
+    auto answer=call("approvals.respond",{{"handle",handle},{"requestId","approval-fixture"},{"decision","deny"}});QVERIFY(answer["result"].toMap()["accepted"].toBool());QVERIFY(!record->dangerousAllowed);
+    QVERIFY(call("sessions.release",{{"handle",handle}})["ok"].toBool());QVERIFY(!call("sessions.history",{{"handle",handle}})["ok"].toBool());
+  }
   void native066SkillsSlashAndDocumentPreview() {
     const auto oldSize=window->size();const auto oldPaneWidth=window->property("webPreferredWidth");
     const auto original=backend->store.data;
@@ -912,6 +1033,36 @@ private slots:
     backend->chat.requestRange(2396,2399);QTRY_VERIFY_WITH_TIMEOUT(backend->chat.rangeReady(2396,2399),5000);
     QVERIFY(backend->chat.data(backend->chat.index(2399,0),ChatModel::MessageRole).toMap()["text"].toString().contains("2399"));
   }
+  void publishedHistoryStress() {
+    configureAPI();window->setProperty("page","chat");window->resize(1320,860);
+    const auto cleanup=qScopeGuard([&]{backend->newSession();});
+    const auto path=directory.filePath("published-history-stress.jsonl");QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(QJsonObject{{"type","session"},{"id","published-stress"},{"cwd",directory.path()}}).toJson(QJsonDocument::Compact)+'\n');
+    QString parent;
+    for(int i=0;i<6000;++i){const auto id=QString::number(i);QJsonObject message{{"role",i%2?"assistant":"user"},{"content",QString("Message %1\n\n**Native history** and `code`. ").arg(i)},{"stopReason","stop"}};
+      if(i==5999){message["content"]="";message["stopReason"]="error";message["errorMessage"]=QString("upstream failed ")+QString(8*1024*1024,'x')+" [Umeko:12345678-1234-1234-1234-123456789012]";}
+      file.write(QJsonDocument(QJsonObject{{"type","message"},{"id",id},{"parentId",parent},{"message",message}}).toJson(QJsonDocument::Compact)+'\n');parent=id;}
+    file.close();QFile intact(path);QVERIFY(intact.open(QIODevice::ReadOnly));const auto digest=U::sha(intact.readAll());intact.close();
+    backend->sessionIndex.prepend(QVariantMap{{"id","published-stress"},{"file",path},{"title","Stress"},{"workspace",directory.path()}});
+    backend->setMetadata("published-stress",{{"viewport",QVariantMap{{"index",5996},{"offset",0},{"follow",false}}}});
+    QElapsedTimer clock;clock.start();qint64 last=0,maxGap=0;QTimer heartbeat;heartbeat.setInterval(10);
+    connect(&heartbeat,&QTimer::timeout,this,[&]{auto now=clock.elapsed();maxGap=qMax(maxGap,now-last);last=now;});heartbeat.start();
+    QVariantList samples;
+    for(int iteration=0;iteration<4;++iteration){backend->newSession();QSignalSpy ready(backend->previewLoader,&SessionPreview::ready);QElapsedTimer timing;timing.start();
+      backend->previewLoader->prepare("published-stress",7000+iteration);QTRY_VERIFY_WITH_TIMEOUT(!ready.isEmpty(),10000);QVERIFY(ready.last()[1].toBool());
+      QVERIFY(backend->previewLoader->activate(7000+iteration));QTRY_COMPARE_WITH_TIMEOUT(backend->chat.rowCount(),6000,5000);QTRY_VERIFY_WITH_TIMEOUT(backend->chat.rangeReady(5996,5999),5000);QTRY_VERIFY_WITH_TIMEOUT(!find("conversation")->property("restoring").toBool(),5000);QVERIFY(backend->scrollAnchor()>5980);samples<<timing.elapsed();
+      QVERIFY(backend->chat.data(backend->chat.index(5999),ChatModel::MessageRole).toMap()["text"].toString().size()<1000);
+    }
+    for(int iteration=0;iteration<8;++iteration){backend->newSession();backend->openSession("published-stress");}
+    QTRY_COMPARE_WITH_TIMEOUT(backend->chat.rowCount(),6000,5000);QTRY_VERIFY_WITH_TIMEOUT(!find("conversation")->property("restoring").toBool(),5000);QVERIFY(backend->scrollAnchor()>5980);
+    auto view=find("conversation");QVERIFY(view);
+    for(int row:QList<int>{20,5990,2500,40,5980,100,3000}){QVERIFY(QMetaObject::invokeMethod(view,"jumpToMessage",Q_ARG(QVariant,row)));QTest::qWait(35);}
+    QTest::qWait(250);QVERIFY(backend->chat.rangeReady(3000,3003));
+    int prepared=0;for(int i=0;i<6000;++i)prepared+=!backend->chat.data(backend->chat.index(i),ChatModel::MessageRole).toMap()["_loading"].toBool();QVERIFY(prepared<=256);
+    QTest::qWait(150);heartbeat.stop();QVERIFY2(maxGap<1000,qPrintable(QString("UI heartbeat gap %1ms").arg(maxGap)));
+    QVERIFY(intact.open(QIODevice::ReadOnly));QCOMPARE(U::sha(intact.readAll()),digest);
+    qInfo()<<"6000 messages + 8MiB failure; cold/repeated(ms):"<<samples<<"max UI gap(ms):"<<maxGap<<"prepared rows:"<<prepared<<"platform:"<<QGuiApplication::platformName();
+  }
   void piManagerColdToolInventory() {
     const auto restoreFocus=qScopeGuard([&] {window->requestActivate();QTest::qWait(100);});
     QQmlEngine fixtureEngine;
@@ -939,6 +1090,7 @@ private slots:
   void sessionToolVisibilityWidget() {
     auto widgets=qobject_cast<DesktopPlugins *>(backend->desktopPlugins());
     auto host=qobject_cast<WidgetHost *>(widgets->hostServices());
+
     const auto oldAgent=backend->store.data["agent"];
     const auto cleanup=qScopeGuard([&]{ widgets->closePage();backend->store.data["agent"]=oldAgent; });
     const auto agentDir=directory.filePath("tool-visibility-agent"), workspace=directory.filePath("tool-visibility-workspace");
@@ -969,7 +1121,10 @@ private slots:
     QCOMPARE(saved.data["sessionMeta"].toMap()[origin->id].toMap()["piCapabilities"].toMap()["preset"].toString(),QString("custom"));
     click("piPreset_full");QTRY_VERIFY_WITH_TIMEOUT(origin->blockedTools.isEmpty() && !page->property("working").toBool(),5000);
     click("piPreset_custom");QTRY_VERIFY_WITH_TIMEOUT(origin->blockedTools.contains("write") && !page->property("working").toBool(),5000);
-    find("piManagerSearch")->setProperty("text","Write a file");
+    QTRY_VERIFY_WITH_TIMEOUT(!origin->busy(),5000);
+    QString description;for(const auto &entry:origin->resources["allTools"].toList())if(entry.toMap()["name"]=="write")description=entry.toMap()["description"].toString();
+    QVERIFY(!description.isEmpty());
+    find("piManagerSearch")->setProperty("text",description.left(80));
     QTRY_COMPARE_WITH_TIMEOUT(find("piManagerList")->property("count").toInt(),1,5000);
     QTRY_VERIFY_WITH_TIMEOUT(!page->property("working").toBool(),5000);
     QDir().mkpath(root+"/build/screenshots");
@@ -2855,15 +3010,12 @@ Item {
     QCOMPARE(backend->reasoningEffort(), QString("off"));
     click("modelSelector");
     QTest::qWait(800);
-    auto hint = window->findChild<QObject *>("reasoningEffortHint");
-    QVERIFY(hint);
-    QTest::mouseMove(window, point(find("modelSearch")));
-    QTest::qWait(200);
-    QVERIFY(!hint->property("visible").toBool());
+    QVERIFY(!window->findChild<QObject *>("reasoningEffortHint"));
+    auto slider=find("reasoningEffortSlider");QVERIFY(slider);
+    QCOMPARE(slider->property("value").toDouble(),0.0);
     QTest::mouseMove(window, point(find("reasoningControls")));
-    QTRY_VERIFY_WITH_TIMEOUT(hint->property("visible").toBool(), 2000);
-    QTest::mouseMove(window, point(find("modelSearch")));
-    QTRY_VERIFY_WITH_TIMEOUT(!hint->property("visible").toBool(), 2000);
+    QTest::qWait(300);
+    QVERIFY(!window->findChild<QObject *>("reasoningEffortHint"));
     QTest::keyClick(window, Qt::Key_Escape);
     QTest::qWait(850);
   }
@@ -4014,6 +4166,7 @@ def create_provider(context): return Interactive(context)
     QCOMPARE(notices.count(), before);
     QVERIFY(backend->store.secret("account:" + providerClosed).isEmpty());
     QVERIFY(!QFileInfo::exists(directory.filePath("provider-plugins/state/" + U::sha(providerClosed.toUtf8()) + "/models-called")));
+    QTRY_VERIFY_WITH_TIMEOUT(([&]{for(auto process:manager->findChildren<QProcess*>())if(process->state()!=QProcess::NotRunning)return false;return true;})(),20000); // Background capability probes must finish before package removal.
     QVERIFY(manager->uninstall("example-interactive", "0.1.0"));
   }
   void providerPackageReinstallation() {
@@ -4042,6 +4195,7 @@ def create_provider(context): return Interactive(context)
     QVERIFY(QFileInfo::exists(folder + "0.1.0/manifest.json"));
     QVERIFY(!manager->importZip(QUrl::fromLocalFile(updated).toString()));
     QVERIFY(manager->addAccount("example-reinstall", "0.1.0"));
+    QTRY_VERIFY_WITH_TIMEOUT(([&]{for(auto process:manager->findChildren<QProcess*>())if(process->state()!=QProcess::NotRunning)return false;return true;})(),20000); // Background capability probes must finish before package removal.
     QVERIFY(manager->uninstall("example-reinstall", "0.1.0"));
     QVERIFY(!QFileInfo::exists(folder + "0.1.0"));
     QVERIFY(QFileInfo::exists(folder + "2.0.0/manifest.json"));
@@ -4078,6 +4232,7 @@ def create_provider(context): return Interactive(context)
     }
     QVERIFY(listed);
     QVERIFY(!manager->importZip(QUrl::fromLocalFile(archive).toString()));
+    QTRY_VERIFY_WITH_TIMEOUT(([&]{for(auto process:manager->findChildren<QProcess*>())if(process->state()!=QProcess::NotRunning)return false;return true;})(),20000); // Background capability probes must finish before package removal.
     QVERIFY(manager->uninstall("example-reinstall", "0.1.0"));
     const auto recovered = install(archive);
     QVERIFY(!recovered.isEmpty());
@@ -4087,6 +4242,7 @@ def create_provider(context): return Interactive(context)
     code.close();
     manager->remove(recovered);
     manager->remove(otherVersion);
+    QTRY_VERIFY_WITH_TIMEOUT(([&]{for(auto process:manager->findChildren<QProcess*>())if(process->state()!=QProcess::NotRunning)return false;return true;})(),20000); // Background capability probes must finish before package removal.
     QVERIFY(manager->uninstall("example-reinstall", "0.1.0"));
     QVERIFY(manager->uninstall("example-reinstall", "2.0.0"));
     QVERIFY(!QFileInfo::exists(folder + "0.1.0"));
@@ -4105,6 +4261,7 @@ def create_provider(context): return Interactive(context)
                              15000);
     QVERIFY2(!manager->rows().last().toMap()["models"].toList().isEmpty(),
              qPrintable(manager->rows().last().toMap()["status"].toString()));
+    QTRY_VERIFY_WITH_TIMEOUT(([&]{for(auto process:manager->findChildren<QProcess*>())if(process->state()!=QProcess::NotRunning)return false;return true;})(),20000); // Background capability probes must finish before package removal.
     QVERIFY(manager->uninstall("example-dots", "0.1.0"));
     const QList<QPair<QStringList, QString>> cases{
         {{"./scripts/../bad.py"}, "PARENT_PATH"},
@@ -4383,7 +4540,7 @@ def create_provider(context): return Interactive(context)
     QVERIFY(manager);
     QSet<QString> builtins;
     for(const auto &row:manager->rows())builtins.insert(row.toMap()["id"].toString());
-    QCOMPARE(builtins,QSet<QString>({"file-tree","git-viewer","terminal","desktop-pet","global-agents","pi-manager","change-review","skill-manager"}));
+    QCOMPARE(builtins,QSet<QString>({"file-tree","git-viewer","terminal","desktop-pet","global-agents","pi-manager","change-review","skill-manager","widget-market","system-prompt"}));
     QTemporaryDir workspace;QVERIFY(workspace.isValid());
     QFile file(workspace.filePath("hello.md"));QVERIFY(file.open(QIODevice::WriteOnly));file.write("# Plugin fixture\n");file.close();
 #ifndef Q_OS_WIN
@@ -5177,6 +5334,101 @@ def create_provider(context): return Interactive(context)
                                 QTest::currentTestFunction() + ".png");
     }
   }
+  void composerResponsiveFooter() {
+    configureAPI();backend->newSession();window->setProperty("page","chat");
+    const auto old=window->size();const auto scale=backend->fontScale();
+    const auto restore=qScopeGuard([&]{backend->setFontScale(scale);window->resize(old);});
+    const auto geometry=[](QQuickItem *i){return i->mapRectToScene(QRectF(0,0,i->width(),i->height()));};
+    for(const auto factor:QList<double>{1.,1.5,2.})for(const auto width:QList<int>{720,940,1280}) {
+      backend->setFontScale(factor);window->resize(width,850);QTest::qWait(250);
+      auto model=find("modelSelector"),send=find("composerSendControls"),utility=find("composerUtilityControls"),footer=find("composerToolbar");
+      QVERIFY(model && send && utility && footer);
+      const auto m=geometry(model),s=geometry(send),u=geometry(utility),f=geometry(footer);
+      QVERIFY2(!m.intersects(s),qPrintable(QString("model/send overlap at %1 scale %2").arg(width).arg(factor)));
+      QVERIFY(!m.intersects(u));QVERIFY(m.left()>=f.left()-.5);QVERIFY(m.right()<=s.left()+.5);QVERIFY(s.right()<=f.right()+.5);
+      auto provider=find("composerProviderName"),name=find("composerModelName"),chevron=find("composerModelChevron");
+      QVERIFY(!provider->isVisible() || geometry(provider).right()<=m.right()+.5);
+      QVERIFY(geometry(name).right()<=m.right()+.5);QVERIFY(geometry(chevron).right()<=m.right()+.5);
+    }
+    backend->setFontScale(1.);window->resize(1060,760);QTest::qWait(200);
+    QVERIFY(window->grabWindow().save(root+"/build/screenshots/composer-fixed.png"));
+  }
+  void nativeDshAcpLifecycleAndHistory() {
+    configureAPI();backend->newSession();window->setProperty("page","chat");
+    const auto old=backend->store.data.value("dsh");
+    const auto restore=qScopeGuard([&]{backend->retire(backend->view);backend->store.data["dsh"]=old;backend->newSession();qunsetenv("FAKE_ACP_NATIVE_MODEL");});
+    const auto folder=directory.filePath("fake-dsh/lib");QDir().mkpath(folder);
+    QFile input(root+"/tests/fixtures/fake-acp.mjs");QVERIFY(input.open(QIODevice::ReadOnly));auto peer=input.readAll();
+    peer.replace("options: [{ name: 'First', value: 'opaque:model:first' }", "options: [{ name: 'First', value: process.env.FAKE_ACP_NATIVE_MODEL || 'opaque:model:first' }");
+    peer.replace("import { createInterface }", "import { readFileSync } from 'node:fs';\nimport { createInterface }");
+    peer.replace("lines.on('line', line => {", "lines.on('line', async line => {");
+    peer.replace("case 'session/prompt': {", R"JS(case 'session/prompt': {
+      if(params.prompt.at(-1).text==='proxy-request') {
+        const patch=JSON.parse(readFileSync(process.env.DSH_HOME+'/profiles/acp/cordis.patch.yml','utf8'));
+        const selection=patch.find(p=>p.id==='acp').config;const config=patch.find(p=>p.id==='llm-pi-ai').config.providers[selection.provider];
+        const response=await fetch(config.baseURL+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+process.env[config.apiKeyEnv]},body:JSON.stringify({model:selection.model,messages:[{role:'user',content:'Native DSH proxy route'}],max_tokens:256,stream:false})});
+        const body=await response.json();
+        update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:body.choices?.[0]?.message?.content || JSON.stringify(body)}});result(message.id,{stopReason:'end_turn'});break;
+      }
+)JS");
+    const auto script=folder+"/bin.js";QFile output(script);QVERIFY(output.open(QIODevice::WriteOnly));output.write(peer);output.close();
+    QVERIFY(U::writeJson(directory.filePath("fake-dsh/package.json"),QVariantMap{{"name","@deepseek-ai/dsh"},{"version","0.2.2-rc.1"},{"type","module"}}));
+    backend->dshRuntime->setPath(script);backend->dshRuntime->check();QTRY_VERIFY_WITH_TIMEOUT(!backend->dshRuntime->busy(),15000);QVERIFY2(backend->dshRuntime->ready(),qPrintable(backend->dshRuntime->status()));
+    const auto pair=QJsonDocument(QJsonArray{backend->view->provider,backend->view->model}).toJson(QJsonDocument::Compact);qputenv("FAKE_ACP_NATIVE_MODEL",pair);
+    QVERIFY(backend->setSessionBackend("dsh"));QVERIFY(backend->canChooseBackend());
+    backend->send("Native ACP fixture");QVERIFY(!backend->canChooseBackend());QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
+    QVERIFY2(lastText().contains("Native ACP fixture"),qPrintable(lastText()));QCOMPARE(backend->view->backend,QString("dsh"));QCOMPARE(backend->view->usage["tokens"].toInt(),25);
+    QVERIFY(!backend->compactionAvailable());QVERIFY(!backend->canGrantDangerousApproval());
+    const auto requestCount=requests.size();backend->send("proxy-request");QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),10000);QVERIFY2(lastText().contains("Native DSH proxy route"),qPrintable(lastText()));QVERIFY(requests.size()>requestCount);
+    const auto s=backend->view;QVERIFY(!s->acpSessionId.isEmpty());QVERIFY(!s->dshOwn);
+    auto patch=U::readJson(s->dshHome+"/profiles/acp/cordis.patch.yml",QVariantList{}).toList();bool routed=false;
+    for(const auto &v:patch)if(v.toMap()["id"]=="llm-pi-ai") {auto providers=v.toMap()["config"].toMap()["providers"].toMap();auto account=providers[s->provider].toMap();QCOMPARE(account["baseURL"].toString(),QString("http://127.0.0.1:%1/v1").arg(backend->gatewayPort));QCOMPARE(account["apiKeyEnv"].toString(),QString("UMEKO_DSH_PROXY_TOKEN"));routed=true;}
+    QVERIFY(routed);QVERIFY(!QString::fromUtf8(QJsonDocument::fromVariant(patch).toJson()).contains(backend->privateToken));
+    backend->send("permission");QTRY_VERIFY_WITH_TIMEOUT(!backend->pendingApproval().isEmpty(),5000);QCOMPARE(backend->pendingApproval()["backend"].toString(),QString("dsh"));backend->respondApproval(false);QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),5000);QVERIFY(lastText().contains("permission:deny"));
+    backend->setToolPermissionMode("ask");backend->send("permission-mode");QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),5000);QCOMPARE(lastText(),QString("ask"));backend->setToolPermissionMode("auto");
+    backend->send("wait");QTRY_VERIFY_WITH_TIMEOUT(s->ready && s->busy(),5000);QTest::qWait(100);backend->send("queued message");QCOMPARE(s->queue.size(),1);backend->stop();QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),5000);QVERIFY(s->dshInterrupted);QVERIFY(s->draft.contains("queued message"));
+    QTRY_VERIFY_WITH_TIMEOUT(find("dshInterruptionNotice_"+QString::number(backend->chat.rowCount()-1)),5000);
+    QVERIFY(!find("assistantAvatar_"+QString::number(backend->chat.rowCount()-1))->isVisible());
+    const auto prior=s->messages.size();backend->send("prompt-blocks");QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),5000);QVERIFY(lastText().contains("用户已停止上一条请求"));QVERIFY(lastText().contains("prompt-blocks"));QVERIFY(!s->dshInterrupted);QVERIFY(s->messages.size()>prior);
+    backend->dshWriter.waitForFinished();backend->flushDsh();backend->dshWriter.waitForFinished();const auto id=s->id;backend->retire(s);backend->newSession();backend->records.remove(s->key);backend->openSession(id);
+    QTRY_COMPARE_WITH_TIMEOUT(backend->activeSession(),id,5000);QCOMPARE(backend->view->backend,QString("dsh"));QCOMPARE(backend->view->acpSessionId,s->acpSessionId);QCOMPARE(backend->view->messages,s->messages);QVERIFY(!backend->view->process);
+    backend->send("restored session");QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),10000);QVERIFY(lastText().contains("restored session"));
+    backend->retire(backend->view);backend->newSession();backend->dshRuntime->setUseOwnConfig(true);QVERIFY(backend->setSessionBackend("dsh"));backend->send("own config");QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),10000);QVERIFY(lastText().contains("own config"));QVERIFY(backend->dshOwnConfig());QVERIFY(!backend->dshModelProviders().isEmpty());QVERIFY(backend->selectDshModel("opaque:model:second"));QTRY_COMPARE_WITH_TIMEOUT(backend->dshCurrentModelValue(),QString("opaque:model:second"),5000);
+    const auto ownId=backend->view->id;backend->renameSession(ownId,"ACP renamed");QCOMPARE(backend->view->title,QString("ACP renamed"));
+    backend->deleteSession(ownId);QTRY_VERIFY_WITH_TIMEOUT(backend->view->id!=ownId,5000);
+    QVERIFY(!QFileInfo::exists(directory.filePath("dsh/transcripts/"+ownId+".json")));
+  }
+  void nativeDshOfficialProxyFixture() {
+    const auto runtime=qEnvironmentVariable("UMEKO_TEST_DSH");if(runtime.isEmpty())QSKIP("Official dsh is optional; the ACP peer fixture always runs");
+    configureAPI();backend->newSession();window->setProperty("page","chat");
+    const auto old=backend->store.data.value("dsh");
+    const auto restore=qScopeGuard([&]{backend->retire(backend->view);backend->store.data["dsh"]=old;backend->newSession();});
+    backend->dshRuntime->setPath(runtime);backend->dshRuntime->setUseOwnConfig(false);QVERIFY(backend->setSessionBackend("dsh"));
+    const auto count=requests.size();backend->send("Official DSH via native fixture proxy");QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),45000);
+    QVERIFY2(lastText().startsWith("Got: "),qPrintable(lastText()));QVERIFY(requests.size()>count);QVERIFY(!backend->view->acpSessionId.isEmpty());
+    bool delivered=false;for(int i=count;i<requests.size();++i)if(QString::fromUtf8(QJsonDocument::fromVariant(requests[i]).toJson()).contains("Official DSH via native fixture proxy"))delivered=true;QVERIFY(delivered);
+  }
+  void nativeSystemPromptSourcesAndHostBoundary() {
+    configureAPI();backend->newSession();window->setProperty("page","chat");auto manager=backend->desktopExtensions;
+    manager->setEnabled("system-prompt",true);manager->setSessionEnabled("system-prompt",true);
+    QVERIFY(manager->openPage("system-prompt"));QTRY_VERIFY_WITH_TIMEOUT(manager->workers.contains("system-prompt") && manager->workers["system-prompt"]->ready,15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
+    QSignalSpy replies(manager,&DesktopPlugins::hostResponse);
+    auto request=manager->requestHost("systemPrompt.inspect","{}");QVERIFY(!request.isEmpty());
+    QVariantMap response;const auto received=[&]{for(const auto &value:replies)if(value[1].toString()==request){response=value[2].toMap();return true;}return false;};
+    QTRY_VERIFY_WITH_TIMEOUT(received(),15000);QVERIFY2(response["ok"].toBool(),qPrintable(response["error"].toString()));auto snapshot=response;
+    QVERIFY(snapshot["effectiveCharacters"].toInt()>0);QVERIFY(!snapshot["tree"].toList().isEmpty());
+    std::function<QString(QVariantList)> findSource=[&](QVariantList rows){for(const auto &value:rows){auto item=value.toMap();if(item["labelKey"]=="umeko:language")return item["id"].toString();auto id=findSource(item["children"].toList());if(!id.isEmpty())return id;}return QString();};
+    const auto id=findSource(snapshot["tree"].toList());QVERIFY(!id.isEmpty());QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),5000);
+    request=manager->requestHost("systemPrompt.save",QString::fromUtf8(QJsonDocument(QJsonObject{{"id",id},{"text","Native source override fixture"}}).toJson(QJsonDocument::Compact)));QTRY_VERIFY_WITH_TIMEOUT(received(),15000);QVERIFY2(response["ok"].toBool(),qPrintable(response["error"].toString()));QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),5000);
+    manager->closePage();backend->send("Check prompt override");QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),10000);
+    bool seen=false;for(const auto &r:requests)for(const auto &m:r.toMap()["messages"].toList())if(m.toMap()["role"]=="system" && m.toMap()["content"].toString().contains("Native source override fixture"))seen=true;QVERIFY(seen);
+    QVERIFY(manager->openPage("system-prompt"));QTRY_VERIFY_WITH_TIMEOUT(manager->workers["system-prompt"]->ready && !backend->busy(),15000);
+    auto host=qobject_cast<WidgetHost*>(manager->hostServices());QVERIFY(host);
+    request=host->requestFor("system-prompt",{{"operation","systemPrompt.save"},{"arguments",QVariantMap{{"id",id},{"text","forged worker"}}},{"session",manager->session()}});QTRY_VERIFY_WITH_TIMEOUT(received(),5000);QVERIFY(!response["ok"].toBool());QVERIFY(response["error"].toString().contains("built-in System Prompt page"));
+    QTest::qWait(300);QVERIFY(window->grabWindow().save(root+"/build/screenshots/system-prompt-native.png"));manager->closePage();
+  }
+
   void cleanupTestCase() {
     backend->close();
     engine.reset();

@@ -66,15 +66,22 @@ def main():
         strip_linux_engine(prefix)
     resources=prefix/'UmekoCpp.app/Contents/Resources' if sys.platform=='darwin' else prefix
     resources.mkdir(parents=True,exist_ok=True)
+    # Built-in and external Widgets import the public QML components by a
+    # relative filesystem URL. The executable's QRC alone cannot satisfy it.
+    for relative in ('app/qml', 'app/icons'):
+        copy(ROOT/relative, resources/relative)
     if os.name=='nt':
         vswhere=Path(os.environ.get('ProgramFiles(x86)','C:/Program Files (x86)'))/'Microsoft Visual Studio/Installer/vswhere.exe'
         installation=subprocess.check_output([str(vswhere),'-latest','-products','*','-property','installationPath'],text=True).strip()
         candidates=sorted((Path(installation)/'VC/Redist/MSVC').glob('*/x64/Microsoft.VC143.CRT'))
         if not candidates: raise RuntimeError('App-local MSVC redistributable was not found')
         for dll in candidates[-1].glob('*.dll'):copy(dll,prefix/dll.name)
-    for relative in ['bundled-skills','skill-runtime','runtime/skills.mjs','runtime/recent-images.mjs','runtime/background-jobs.mjs','runtime/process-guard.mjs','runtime/tool-permissions.mjs','runtime/provider-errors.mjs','runtime/session-capabilities.mjs','runtime/markdown-preview.mjs','runtime/tool-visibility.mjs','runtime/gateway.mjs','runtime/transport.mjs','runtime/openai-responses.mjs','runtime/bridge.mjs','runtime/subagents.mjs','runtime/subagent-sdk.mjs','runtime/subagent-settings.mjs','runtime/input-queue.mjs','runtime/widget-messages.mjs','runtime/rpc-ui.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/chatbox.mjs','runtime/update-engine.mjs','runtime/package-install.mjs','runtime/network-retry.mjs','runtime/pi-commands.mjs','runtime/umeko-control.mjs','runtime/umeko-documents.mjs','runtime/umeko-operations.json','runtime/umeko-docs','runtime/webview-component.mjs','runtime/webview-component.json','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime','plugin-runtime','umeko-plugins']:
+    for relative in ['model-runtime','umeko_provider_sdk','bundled-skills','skill-runtime','runtime/skills.mjs','runtime/recent-images.mjs','runtime/background-jobs.mjs','runtime/process-guard.mjs','runtime/tool-permissions.mjs','runtime/provider-errors.mjs','runtime/session-capabilities.mjs','runtime/markdown-preview.mjs','runtime/tool-visibility.mjs','runtime/gateway.mjs','runtime/transport.mjs','runtime/openai-responses.mjs','runtime/bridge.mjs','runtime/subagents.mjs','runtime/subagent-sdk.mjs','runtime/subagent-settings.mjs','runtime/input-queue.mjs','runtime/widget-messages.mjs','runtime/rpc-ui.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/chatbox.mjs','runtime/update-engine.mjs','runtime/package-install.mjs','runtime/network-retry.mjs','runtime/pi-commands.mjs','runtime/umeko-control.mjs','runtime/umeko-documents.mjs','runtime/umeko-operations.json','runtime/umeko-docs','runtime/webview-component.mjs','runtime/webview-component.json','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime','plugin-runtime','umeko-plugins']:
         copy(ROOT/relative,resources/relative)
-    copy(ROOT/'runtime/conversation-search.mjs',resources/'runtime/conversation-search.mjs')
+    # Include every first-party helper, including new tool modules imported by
+    # bridge.mjs; keep the dependency projection separately pinned above.
+    for module in (ROOT/'runtime').glob('*.mjs'):
+        copy(module, resources/'runtime'/module.name)
     copy(ROOT/'build/provider-resources',resources/'provider-resources')
     copy(ROOT/'build/desktop-plugin-resources',resources/'desktop-plugin-resources')
     for document in (ROOT/'runtime/umeko-docs').glob('*.md'):
@@ -98,7 +105,8 @@ def main():
           'python':'bundled, CPython '+python_distribution['version'] if bundle_python else 'external, >=3.10',
           'pythonDistribution':python_distribution,
           'node':'bundled, '+node_distribution['version'],'nodeDistribution':node_distribution,
-          'parityBaseline':'1beae9a892713b26bdcab90e647b8adcc855a117'}
+          'parityBaseline':'82f0e80d7f52148afbf0c4c2871de2b8e9d00482',
+          'parityMainSupplement':'d392af3a99151cdc5ee46551e49f4f4ab476972a'}
     (resources/'build-info.json').write_text(json.dumps(info,indent=2)+'\n',encoding='utf-8')
     if sys.platform=='darwin':finalize_macos(prefix/'UmekoCpp.app')
     executable=prefix/'UmekoCpp.app/Contents/MacOS/UmekoCpp' if sys.platform=='darwin' else prefix/('UmekoCpp.exe' if os.name=='nt' else 'UmekoCpp')
@@ -112,7 +120,11 @@ def main():
     env['PATH']=str(ROOT/'build/no-system-node')
     env.pop('NODE_OPTIONS',None);env.pop('NODE_PATH',None)
     log=ROOT/'build/packaged-smoke.log';log.unlink(missing_ok=True)
-    result=subprocess.run([str(executable),'--data-dir',str(ROOT/'build/packaged-profile'),'--smoke','--demo','--snapshot',str(ROOT/'build/packaged-chat.png')],env=env,timeout=45,capture_output=True)
+    # The smoke profile must not initialize Skills in the user's real ~/.pi.
+    profile=ROOT/'build/packaged-profile'
+    shutil.rmtree(profile,ignore_errors=True);profile.mkdir(parents=True)
+    (profile/'settings.json').write_text(json.dumps({'agent':{'agentDir':str(profile/'agent'),'safeMode':True}}),encoding='utf-8')
+    result=subprocess.run([str(executable),'--data-dir',str(profile),'--smoke','--demo','--snapshot',str(ROOT/'build/packaged-chat.png')],env=env,timeout=45,capture_output=True)
     if result.returncode or not log.exists() or 'QML_READY' not in log.read_text(encoding='utf-8') or 'EXIT:0' not in log.read_text(encoding='utf-8'):
         raise RuntimeError('Packaged application failed ('+str(result.returncode)+'): '+result.stderr.decode('utf-8','replace')+'\n'+(log.read_text(encoding='utf-8') if log.exists() else 'no diagnostics'))
     diagnostics=log.read_text(encoding='utf-8')
@@ -127,7 +139,9 @@ def main():
     selected=next((line.removeprefix('NODE_EXECUTABLE:') for line in diagnostics.splitlines() if line.startswith('NODE_EXECUTABLE:')), '')
     if not selected or Path(selected).resolve()!=node.resolve():
         raise RuntimeError('Installed app did not select bundled Node without a system PATH')
-    if any(text in diagnostics for text in ['qrc:/','SNAPSHOT_FAILED','QML_FAILED']):
+    if 'WIDGET_QML_READY:skill-manager' not in diagnostics:
+        raise RuntimeError('Installed Skills Widget was not checked: '+diagnostics)
+    if any(text in diagnostics for text in ['qrc:/','file:///','SNAPSHOT_FAILED','QML_FAILED']):
         raise RuntimeError('Packaged QML warnings: '+diagnostics)
     # Probe bundled Pi and offline search binaries from their installed paths.
     run(node,resources/'runtime/releases/coding-1.3.0/bridge.mjs','--self-test',env=env)

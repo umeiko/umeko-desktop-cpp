@@ -11,7 +11,10 @@ class CoreTests : public QObject {
   Q_OBJECT
 private slots:
   void modelReasoningLevels() {
-    QCOMPARE(U::reasoningLevels(U::normalizeModel({})), (QStringList{"low", "high", "max"}));
+    const auto unknown = U::normalizeModel({});
+    QVERIFY(U::reasoningLevels(unknown).isEmpty()); // Unknown automatic capability must not invent levels.
+    QCOMPARE(U::reasoningLevels(U::normalizeModel({{"reasoningLevelsAuto", false}})), (QStringList{"low", "high", "max"}));
+    QCOMPARE(U::reasoningLevels(U::normalizeModel({{"reasoningDetection", QVariantMap{{"state", "known"}, {"levels", QVariantList{"low", "high"}}}}})), (QStringList{"low", "high"}));
     const auto custom = U::normalizeModel({{"reasoningLevels", QVariantList{" medium ", "xhigh", "vendor-custom"}}});
     QCOMPARE(U::reasoningLevels(custom), (QStringList{"medium", "xhigh", "vendor-custom"}));
     QCOMPARE(U::reasoningLevels(U::normalizeModel({{"alias", "renamed"}}, custom)), U::reasoningLevels(custom));

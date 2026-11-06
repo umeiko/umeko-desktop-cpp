@@ -56,6 +56,21 @@ class WorkerTests(unittest.TestCase):
         result,events=self.worker('events',{'model':'local-echo','messages':[{'role':'user','content':'fixture'}]},secrets)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertIn('Echo: fixture',json.dumps(events))
+    def test_generation_extension_transfers_bytes_without_wire_base64(self):
+        manifest=json.loads((self.folder/'manifest.json').read_text());manifest['generationCapabilities']=['image']
+        (self.folder/'manifest.json').write_text(json.dumps(manifest))
+        self.implementation("from umeko_provider_sdk import Provider\nclass Custom(Provider):\n def generate_image(self,model,prompt,parameters): return [{'data':b'fixture-image','mimeType':'image/png'}]\ndef create_provider(context): return Custom(context)\n")
+        output=Path(self.temp.name)/'transfer'
+        result,events=self.worker('generate',{'kind':'image','model':'image-model','text':'hello','parameters':{},'_transferDir':str(output)})
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        item=events[-1]['data']['items'][0]
+        self.assertEqual(Path(item['file']).read_bytes(),b'fixture-image')
+        self.assertNotIn('fixture-image',result.stdout)
+        if os.name!='nt':self.assertEqual(Path(item['file']).stat().st_mode & 0o777,0o600)
+        self.assertEqual(item['mimeType'],'image/png')
+        result,events=self.worker('generate',{'kind':'speech','model':'voice','text':'hello','parameters':{},'_transferDir':str(output)})
+        self.assertNotEqual(result.returncode,0);self.assertEqual(events[-1]['type'],'error')
+
     def test_vendor_precedes_external_environment(self):
         external=Path(self.temp.name)/'external';external.mkdir()
         (external/'umeko_fixture_dep.py').write_text("VALUE='external'",encoding='utf-8')

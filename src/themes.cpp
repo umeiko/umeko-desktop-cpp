@@ -2,7 +2,7 @@
 #include <stdexcept>
 
 namespace {
-const QStringList bases{"light", "dark", "yanami"};
+const QStringList bases{"white", "light", "dark", "yanami"};
 const QSet<QString> colorNames{
     "bg",          "sidebar",       "surface", "userBubble", "hover",
     "line",        "ink",           "muted",   "accent",     "accentBg",
@@ -27,7 +27,7 @@ QVariantMap normalized(QVariantMap value) {
       name.size() > 48)
     fail("主题名称应为 1–48 个字符");
   if (!bases.contains(value["base"].toString()))
-    fail("base 应为 light、dark 或 yanami");
+    fail("base 应为 white、light、dark 或 yanami");
   if (value["colors"].metaType().id() != QMetaType::QVariantMap)
     fail("需要 colors 配色对象");
   const auto colors = value["colors"].toMap();

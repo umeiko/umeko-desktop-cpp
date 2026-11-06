@@ -62,9 +62,14 @@ QVariantMap Store::defaults() {
       {"sessionMeta", QVariantMap{}},
       {"workspace", ""},
       {"dark", false},
-      {"theme", "light"},{"fontFamily",""},
+      {"theme", "white"},{"fontFamily",""},
       {"character", "yanami"},
       {"providers", QVariantList{}},
+      {"auxiliaryVision", QVariantMap{{"providerId",""},{"model",""},{"autoAnalyze",true},{"toolEnabled",true}}},
+      {"multimodal", QVariantMap{
+          {"image", QVariantMap{{"providerId",""},{"model",""},{"size",""},{"quality",""},{"count",1},{"format",""}}},
+          {"speech", QVariantMap{{"providerId",""},{"model",""},{"voice",""},{"format","mp3"},{"speed",1.0}}},
+          {"video", QVariantMap{{"providerId",""},{"model",""},{"seconds",""},{"size",""}}}}},
       {"selectedProvider", ""},
       {"selectedModel", ""},
       {"providerRuntime", QVariantMap{}},
@@ -85,7 +90,7 @@ QVariantMap Store::defaults() {
                              {"anthropic", true},
                              {"lan", false},
                              {"keys", QVariantList{}}}},
-      {"ui", QVariantMap{{"sidebarWidth", 244}, {"sidebarCollapsed", false}, {"lineSpacing","standard"}}}};
+      {"ui", QVariantMap{{"sessionCacheSize",3},{"sidebarWidth", 244}, {"sidebarCollapsed", false}, {"lineSpacing","standard"}}}};
 }
 bool Store::migrateProfile(QString previous, QString target) {
   if (QFileInfo::exists(target) ||
@@ -256,6 +261,19 @@ Store::Store(QString path) {
     } else
       data[it.key()] = it.value();
   }
+  const auto defaultsMap=defaults();
+  auto media=defaultsMap["multimodal"].toMap();const auto mediaSaved=data["multimodal"].toMap();
+  for(auto it=media.begin();it!=media.end();++it){auto row=it.value().toMap();const auto patch=mediaSaved[it.key()].toMap();for(auto field=patch.cbegin();field!=patch.cend();++field)if(row.contains(field.key())&&field.value().isValid()&&!field.value().isNull()) {
+    const auto key=field.key();const auto value=field.value();const auto type=value.typeId();
+    const bool numeric=type!=QMetaType::Bool&&type!=QMetaType::QString&&(type==QMetaType::Double||type==QMetaType::Int||type==QMetaType::LongLong);
+    bool valid=key=="count" ? numeric&&value.toDouble()>=1&&value.toDouble()<=10&&value.toDouble()==value.toInt() : key=="speed" ? numeric&&std::isfinite(value.toDouble())&&value.toDouble()>=.25&&value.toDouble()<=4 : type==QMetaType::QString&&value.toString().size()<=512&&!value.toString().contains(QRegularExpression("[\\x00-\\x1f]"));
+    if(key=="format")valid=valid&&(it.key()=="image"?QStringList{"","png","jpeg","webp"}:QStringList{"mp3","opus","aac","flac","wav","pcm"}).contains(value.toString());
+    if(valid)row[key]=value;
+  }it.value()=row;}
+  data["multimodal"]=media;
+  auto vision=defaultsMap["auxiliaryVision"].toMap();const auto savedVision=data["auxiliaryVision"].toMap();
+  for(auto it=vision.begin();it!=vision.end();++it)if(savedVision.contains(it.key())&&savedVision[it.key()].typeId()==it.value().typeId())it.value()=savedVision[it.key()];
+  data["auxiliaryVision"]=vision;
   auto ui = data["ui"].toMap();
   auto agent = data["agent"].toMap();
   if(!QStringList{"auto","ask"}.contains(agent.value("toolPermissionMode","auto").toString()))agent["toolPermissionMode"]="auto";
@@ -286,6 +304,7 @@ Store::Store(QString path) {
           : 1.0;
   if(!QStringList{"compact","standard","relaxed"}.contains(ui["lineSpacing"].toString()))ui["lineSpacing"]="standard";
   if(data["fontFamily"].metaType().id()!=QMetaType::QString || data["fontFamily"].toString().size()>128)data["fontFamily"]="";
+  ui["sessionCacheSize"] = qBound(0,ui.value("sessionCacheSize",3).toInt(),64);
   ui["sidebarWidth"] = qBound(200, ui.value("sidebarWidth", 244).toInt(), 480);
   data["ui"] = ui;
   // Keychain entries retain their original namespace when the profile moves.

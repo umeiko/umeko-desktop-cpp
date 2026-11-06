@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(UmekoCpp VERSION 0.6.5 LANGUAGES C CXX)
+project(UmekoCpp VERSION 0.7.1 LANGUAGES C CXX)
 if(APPLE)
   # The notification library also links into targets declared in this scope.
   enable_language(OBJCXX)
@@ -41,7 +41,7 @@ FetchContent_Declare(qtkeychain GIT_REPOSITORY https://github.com/frankosterfeld
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(miniz GIT_REPOSITORY https://github.com/richgel999/miniz.git GIT_TAG 293d4db1b7d0ffee9756d035b9ac6f7431ef8492)
 FetchContent_MakeAvailable(qtkeychain miniz)
-set(APP_SOURCES src/input_method.cpp src/text_spacing.hpp src/pet_reminders.cpp src/pi_capabilities.cpp src/skills.cpp src/slash_commands.cpp src/global_agents.cpp src/widget_host.cpp src/widget_channel.cpp src/desktop_pet.cpp src/terminal_view.cpp src/desktop_plugins.cpp src/characters.cpp src/subagents.cpp src/umeko_control.cpp src/document_preview.cpp src/document_blocks.hpp src/webview_support.cpp src/common.cpp src/store.cpp src/chatmodel.cpp src/syntaxhighlighter.cpp src/backend.cpp src/sessions.cpp src/session_preview.cpp src/providers.cpp src/management.cpp src/about.cpp src/themes.cpp src/preferences.cpp src/common_providers.cpp src/update.cpp src/about_install.cpp)
+set(APP_SOURCES src/dsh.cpp src/login_startup.cpp src/plugin_sessions.cpp src/reasoning.cpp src/widget_market.cpp src/multimodal.cpp src/input_method.cpp src/text_spacing.hpp src/pet_reminders.cpp src/pi_capabilities.cpp src/skills.cpp src/slash_commands.cpp src/global_agents.cpp src/widget_host.cpp src/widget_channel.cpp src/desktop_pet.cpp src/terminal_view.cpp src/desktop_plugins.cpp src/characters.cpp src/subagents.cpp src/umeko_control.cpp src/document_preview.cpp src/document_blocks.hpp src/webview_support.cpp src/common.cpp src/store.cpp src/chatmodel.cpp src/syntaxhighlighter.cpp src/backend.cpp src/sessions.cpp src/session_preview.cpp src/providers.cpp src/management.cpp src/about.cpp src/themes.cpp src/preferences.cpp src/common_providers.cpp src/update.cpp src/about_install.cpp)
 set(UMEKO_NOTIFY_SHARED OFF CACHE BOOL "" FORCE)
 list(APPEND APP_SOURCES src/conversation_search.cpp)
 add_subdirectory(native/notifications)
@@ -80,7 +80,7 @@ set_source_files_properties(app/qml/I18n.qml PROPERTIES QT_QML_SINGLETON_TYPE TR
 # Scan application QML, not the bundled JavaScript engine or generated packages.
 set_property(TARGET UmekoCpp PROPERTY QT_QML_IMPORT_SCANNER_EXTRA_ARGS
   -exclude runtime -exclude build -exclude .tools -exclude .deps -exclude release-assets)
-qt_add_qml_module(UmekoCpp URI Umeko.App VERSION 1.0 QML_FILES ${UI_QML} RESOURCES app/qml/skill.svg ${UI_IMAGES} app/icons/yanami-desktop-settings-v2.png app/icons/yanami-loading.png app/icons/yanami-catch.png app/icons/yanami-push.png app/icons/yanami-pull.png app/icons/yanami-installer.png app/icons/yanami-installing.png app/qml/qmldir app/theme-prompt.txt app/character-defaults.json app/provider-presets.json app/icons/providers/codex.png app/icons/providers/kimi.png app/icons/providers/glm.png NO_CACHEGEN)
+qt_add_qml_module(UmekoCpp URI Umeko.App VERSION 1.0 QML_FILES ${UI_QML} RESOURCES app/qml/skill.svg ${UI_IMAGES} app/icons/app.png app/icons/yanami-desktop-settings-v2.png app/icons/yanami-loading.png app/icons/yanami-catch.png app/icons/yanami-push.png app/icons/yanami-pull.png app/icons/yanami-installer.png app/icons/yanami-installing.png app/qml/qmldir app/theme-prompt.txt app/character-defaults.json app/provider-presets.json app/icons/providers/codex.png app/icons/providers/kimi.png app/icons/providers/glm.png NO_CACHEGEN)
 include(GNUInstallDirs)
 set(CMAKE_INSTALL_BINDIR ".")
 install(TARGETS UmekoCpp BUNDLE DESTINATION . COMPONENT Runtime RUNTIME DESTINATION . COMPONENT Runtime)

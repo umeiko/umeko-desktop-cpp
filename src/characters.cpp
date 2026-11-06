@@ -15,7 +15,7 @@ void requireCharacter(bool ok, const char *text) {
   if (!ok)
     throw std::runtime_error(text);
 }
-const QStringList builtInCharacters{"yanami", "komari", "kaju", "tiara", "whale-girl", "doubao", "kazuhiko"};
+const QStringList builtInCharacters{"yanami", "komari", "kaju", "tiara", "whale-girl", "doubao", "kazuhiko", "system"};
 QString unpackCharacterZip(const QString &source, const QString &destination) {
   constexpr quint64 limit = 96 * 1024 * 1024 + 131072;
   QFile input(source);
@@ -311,7 +311,7 @@ QVariantList characterLibrary(const QString &root, const QString &directory, boo
     } catch (const std::exception &) {
     }
   };
-  auto identifiers = QStringList{"komari", "kaju", "tiara", "whale-girl", "doubao"};
+  auto identifiers = QStringList{"komari", "kaju", "tiara", "whale-girl", "doubao", "system"};
   if (subagents) identifiers << "kazuhiko";
   for (const auto &id : identifiers) {
     auto file =
@@ -400,7 +400,7 @@ void Backend::refreshCharacters() {
     scenes["welcome"] = row;
   }
   characterConfig["scenes"] = scenes;
-  characterConfig = mergeConfiguration(characterConfig, characterOptions);
+  if (resolvedCharacter["id"] != "system") characterConfig = mergeConfiguration(characterConfig, characterOptions);
   QStringList animatedSlots, animatedRoles;
   const auto assets = resolvedCharacter["assets"].toMap();
   for (auto it = assets.cbegin(); it != assets.cend(); ++it) {
@@ -648,14 +648,24 @@ bool Backend::selectCharacter(QString id) {
   if (!exists)
     return false;
   const auto previous = store.data.value("character", "yanami");
+  const auto remembered = store.data.value("previousCharacter", "yanami");
+  if (id == "system" && previous != "system") store.data["previousCharacter"] = previous;
   store.data["character"] = id;
   if (!store.save()) {
     store.data["character"] = previous;
+    store.data["previousCharacter"] = remembered;
     return false;
   }
   refreshCharacters();
   emit changed();
   return true;
+}
+bool Backend::setCharacterEnabled(bool enabled) {
+  if(!enabled)return selectCharacter("system");
+  if(store.data["character"]!="system")return true;
+  auto previous=store.data.value("previousCharacter","yanami").toString();
+  for(const auto &row:characterPacks())if(row.toMap()["id"]==previous && previous!="system")return selectCharacter(previous);
+  return selectCharacter("yanami");
 }
 bool Backend::importCharacter(QString url) {
   QString staging, revision, dialogue;

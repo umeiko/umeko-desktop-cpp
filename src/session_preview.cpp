@@ -32,7 +32,9 @@ void SessionPreview::start() {
   if (reading || pending.isEmpty() || b->closing)
     return;
   reading = true;
-  const auto job = pending;
+  auto job = pending;
+  if(job["saved"].toMap()["backend"]=="dsh"){b->flushDsh();}
+  auto writer=b->dshWriter;
   pending.clear();
   auto watcher = new QFutureWatcher<QVariantMap>(this);
   connect(watcher, &QFutureWatcher<QVariantMap>::finished, this,
@@ -54,10 +56,17 @@ void SessionPreview::start() {
           });
   // The worker owns only value snapshots, never the backend or QML objects.
   // At most one read runs; rapid clicks retain only the latest pending job.
-  watcher->setFuture(QtConcurrent::run([job] {
+  watcher->setFuture(QtConcurrent::run([job,writer]() mutable {
     auto result = job;
     const auto saved = job["saved"].toMap();
     const auto file = saved["file"].toString();
+    if(saved["backend"]=="dsh") {
+      writer.waitForFinished();QFile f(file);
+      if(!f.open(QIODevice::ReadOnly) || f.size()>128*1024*1024){result["error"]=true;return result;}
+      QJsonParseError error;const auto doc=QJsonDocument::fromJson(f.readAll(),&error);
+      if(error.error!=QJsonParseError::NoError || !doc.isObject()){result["error"]=true;return result;}
+      const auto value=doc.object().toVariantMap();result["dsh"]=value;result["messages"]=value["messages"];result["displaySnapshot"]=ChatModel::project(value["messages"].toList());return result;
+    }
     if (!file.isEmpty()) {
       QFile probe(file);
       if (!probe.open(QIODevice::ReadOnly)) {
@@ -87,10 +96,15 @@ bool SessionPreview::activate(int token, bool readOnly) {
   if (!b->findSession(id)) {
     auto s = b->fresh(saved["workspace"].toString());
     s->id = id;
+    if(saved["backend"]=="dsh") {
+      s->backend="dsh";s->acpSessionId=saved["acpSessionId"].toString();s->dshHome=saved["dshHome"].toString();s->dshOwnFixed=true;s->dshOwn=saved["dshOwnConfig"].toBool();
+      auto data=prepared["dsh"].toMap();s->dshOptions=data["configOptions"].toList();s->dshInterrupted=data["interruptionPending"].toBool();s->usage=data["contextUsage"].toMap();
+    }
     s->extensionModes = b->metadata(id)["extensionModes"].toMap();
     s->blockedTools = b->metadata(id)["blockedTools"].toStringList();
     s->piCapabilities = b->metadata(id)["piCapabilities"].toMap();
     s->skillModes = b->metadata(id)["skillModes"].toMap();
+    s->pluginOwner = b->metadata(id)["pluginSession"].toMap();
     s->file = saved["file"].toString();
     s->title = saved["title"].toString();
     s->model = saved["model"].toString();

@@ -356,6 +356,17 @@ export function classifyCommand(command,context={}) {
  return classifyInternal(command,context,0);
 }
 
+// Children keep the parent's normal policy and UI, never its chat approval.
+export function childPermissionPolicy(policy={mode:'auto'}) {
+ const {dangerousAllowed,...normalPolicy}=policy;
+ return normalPolicy;
+}
+export function childPermissionUI(ui) {
+ if(!ui)return ui;
+ const {confirmDangerous,...normalUI}=ui;
+ return normalUI;
+}
+
 /** Per-session factory; getPolicy is the sole source of the active mode. */
 export function createToolPermissionExtension({getPolicy,classify=classifyCommand}={}) {
  if(typeof getPolicy!=='function')throw new TypeError('getPolicy is required');
@@ -366,6 +377,8 @@ export function createToolPermissionExtension({getPolicy,classify=classifyComman
      try{
        const policy=await getPolicy();language=policy.language==='zh'?'zh':'en';
        const name=String(event.toolName||'').toLowerCase();
+       if(Array.isArray(policy.allowedTools) && !policy.allowedTools.includes(event.toolName))
+         return {block:true,reason:'This tool is outside the desktop plugin session profile.'};
        if(['read','grep','find','ls'].includes(name))return undefined;
        // Product configuration tools retain their own operation dispatch.
        if(name==='umeko_desktop'||name==='pi'||name==='pi_commands')return undefined;
@@ -375,9 +388,11 @@ export function createToolPermissionExtension({getPolicy,classify=classifyComman
        const context={...policy,cwd:backgroundStart&&input.cwd ? path.resolve(baseCwd,input.cwd) : baseCwd};
        const shell=name==='bash'||name==='powershell'||backgroundStart;
        const file=name==='write'||name==='edit';
-       let hit=null;
+       const generation=name==='image_gen'||name==='voice_gen'||name==='video_gen';
+       let hit=generation?decision('ask'):null;
        if(shell)hit=await classify(String(input.command??input.script??''),context);
        else if(file)hit=classifyPath(String(input.path??input.file_path??''),context);
+       if(hit?.category>=1&&hit.category<=7&&policy.dangerousAllowed===true)hit=null;
        if(policy.mode==='ask'){
          if(shell||file)hit=hit||decision('ask');
          else{
@@ -388,7 +403,12 @@ export function createToolPermissionExtension({getPolicy,classify=classifyComman
          }
        }
        if(!hit)return undefined;
-       const reason=REASONS[hit.ruleId]?.[language==='zh'?1:0]||hit.reason;
+       const selected=policy.generation?.[name==='image_gen'?'image':name==='video_gen'?'video':'speech'];
+       const destination=selected ? `${selected.provider} / ${selected.model}` : name;
+       const reason=generation ? (language==='zh'
+         ? `将提示词或文本发送到 ${destination} 生成${name==='image_gen'?'图片':name==='video_gen'?'视频':'语音'}，可能产生费用。文件保存在当前工作目录，已有文件不会被覆盖。`
+         : `Send the prompt or text to ${destination} to generate ${name==='image_gen'?'images':name==='video_gen'?'video':'speech'}; this may incur charges. Save files in the current workspace without overwriting existing files.`)
+         : REASONS[hit.ruleId]?.[language==='zh'?1:0]||hit.reason;
        const original=shell?String(input.command??input.script??''):file?String(input.path??input.file_path??''):JSON.stringify(input);
        if(!ctx.hasUI||!ctx.ui?.confirm){
          const message=language==='zh'?`未执行：无法显示审批对话框。${reason}`:`Not executed: approval UI is unavailable. ${reason}`;
@@ -396,7 +416,9 @@ export function createToolPermissionExtension({getPolicy,classify=classifyComman
        }
        const title=language==='zh'?'批准工具操作':'Approve tool operation';
        const message=language==='zh'?`原因：${reason}\n\n原始${shell?'命令':'路径/输入'}：\n${original}`:`Reason: ${reason}\n\nOriginal ${shell?'command':'path/input'}:\n${original}`;
-       const approved=await ctx.ui.confirm(title,message);
+       const approved=hit.category>=1&&hit.category<=7&&typeof ctx.ui.confirmDangerous==='function'
+         ? await ctx.ui.confirmDangerous(title,message,hit.category)
+         : await ctx.ui.confirm(title,message);
        if(approved!==true)return {block:true,reason:language==='zh'?`用户拒绝执行。${reason}`:`User denied execution. ${reason}`};
        return undefined;
      }catch(error){
