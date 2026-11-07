@@ -5058,12 +5058,21 @@ def create_provider(context): return Interactive(context)
     QVERIFY(!backend->umekoRequest({{"operation","agent_bus.reply"},{"arguments",QVariantMap{{"requestId",requestId},{"result","forged"}}}},coordinator->key)["ok"].toBool());
     QVERIFY(!backend->umekoRequest({{"operation","sessions.list"}},coordinator->key)["ok"].toBool());
     g->save();auto saved=U::readJson(g->registry).toMap()["agents"].toList();QVERIFY(!saved.isEmpty());QCOMPARE(saved.first().toMap()["sessionFile"].toString(),coordinator->file);
-    QTest::qWait(700);QVERIFY(find("globalAgentsPage"));QDir().mkpath(root+"/build/global-agents-ui");window->grabWindow().save(root+"/build/global-agents-ui/native-conversation.png");
+    // Backend reply text can precede both turn completion and the Widget's
+    // next 650ms snapshot. A fixed sleep is not a rendering readiness signal.
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->view->busy()&&!coordinator->busy(),10000);
+    QVERIFY(find("globalAgentsPage"));
     auto lastIndex=g->snapshot(id)["messages"].toList().size()-1;
     QTRY_VERIFY(find("widgetAssistantAvatar_"+QString::number(lastIndex)));
     QTRY_VERIFY(find("widgetCopyMessage_"+QString::number(lastIndex)));
-    auto richRow=find("widgetChatMessage_"+QString::number(lastIndex));QVERIFY(richRow);
-    QQuickItem *code=nullptr;QList<QQuickItem*> items{richRow};while(!items.isEmpty()){auto item=items.takeLast();if(item->objectName().startsWith("codeBlock_")&&item->property("text").toString().contains("print(1)"))code=item;items.append(item->childItems());}QVERIFY(code);
+    auto renderedCode=[&]() -> QQuickItem* {
+      auto row=find("widgetChatMessage_"+QString::number(lastIndex));if(!row)return nullptr;
+      QList<QQuickItem*> items{row};while(!items.isEmpty()){auto item=items.takeLast();if(item->objectName().startsWith("codeBlock_")&&item->property("text").toString().contains("print(1)"))return item;items.append(item->childItems());}return nullptr;
+    };
+    // Keep the exact rich-code assertion and the normal QTRY deadline. Look up
+    // the current delegate each time because snapshots may replace its data.
+    QTRY_VERIFY2(renderedCode(),qPrintable(QString::fromUtf8(QJsonDocument::fromVariant(g->snapshot(id)).toJson())));
+    QDir().mkpath(root+"/build/global-agents-ui");window->grabWindow().save(root+"/build/global-agents-ui/native-conversation.png");
     // The same conversation remains authorized while its project is collapsed.
     auto project=backend->ensureProject(workspace);backend->renameProject(project["id"].toString(),"总线验收项目");
     QVERIFY(QMetaObject::invokeMethod(find("globalAgentsPage"),"openAgent",Q_ARG(QVariant,QString{})));QTest::qWait(750);
