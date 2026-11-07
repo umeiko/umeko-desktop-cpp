@@ -57,8 +57,8 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertIn('Echo: fixture',json.dumps(events))
     def test_generation_extension_transfers_bytes_without_wire_base64(self):
-        manifest=json.loads((self.folder/'manifest.json').read_text());manifest['generationCapabilities']=['image']
-        (self.folder/'manifest.json').write_text(json.dumps(manifest))
+        manifest=json.loads((self.folder/'manifest.json').read_text(encoding='utf-8'));manifest['generationCapabilities']=['image']
+        (self.folder/'manifest.json').write_text(json.dumps(manifest),encoding='utf-8')
         self.implementation("from umeko_provider_sdk import Provider\nclass Custom(Provider):\n def generate_image(self,model,prompt,parameters): return [{'data':b'fixture-image','mimeType':'image/png'}]\ndef create_provider(context): return Custom(context)\n")
         output=Path(self.temp.name)/'transfer'
         result,events=self.worker('generate',{'kind':'image','model':'image-model','text':'hello','parameters':{},'_transferDir':str(output)})
