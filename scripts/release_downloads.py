@@ -15,13 +15,18 @@ PLATFORMS = (
 )
 
 
-def download_buttons(repo, tag, assets, section='release'):
+def download_buttons(repo, tag, assets, section='release', platforms=None):
     assert repo in REPOS and re.fullmatch(r'v\d+\.\d+\.\d+(?:-minimal)?', tag)
     assert section in ('standard', 'minimal', 'release')
     names = [a['name'] if isinstance(a, dict) else a for a in assets]
     prefix = ('UmekoCpp-' + tag if repo.endswith('-cpp') else 'Umeko-' + tag[1:]) + '-'
     links = []
+    expected = {row[0] for row in PLATFORMS} if platforms is None else set(platforms)
+    if not expected or not expected <= {row[0] for row in PLATFORMS}:
+        raise ValueError('Unknown or empty download platform selection')
     for platform, suffix, icon, label in PLATFORMS:
+        if platform not in expected:
+            continue
         candidates = [name for name in names if name.startswith(prefix + platform) and name.endswith(suffix)]
         if len(candidates) != 1:
             raise ValueError(f'Expected exactly one {platform} {suffix} download, found {len(candidates)}')
@@ -41,22 +46,22 @@ def replace_block(text, block, section):
     return re.sub(pattern, lambda _: block, text, flags=re.S)
 
 
-def release_notes(text, repo, tag, assets):
-    block = download_buttons(repo, tag, assets)
+def release_notes(text, repo, tag, assets, platforms=None):
+    block = download_buttons(repo, tag, assets, platforms=platforms)
     if '<!-- umeko-downloads:release:start -->' in text:
         return replace_block(text, block, 'release')
     heading, separator, rest = text.partition('\n')
     return heading + '\n\n' + block + '\n' + (rest if separator else '')
 
 
-def refresh_readmes(repo, tag, assets, api, gh):
+def refresh_readmes(repo, tag, assets, api, gh, platforms=None):
     """Update only marked blocks on main after all release assets are verified."""
     if repo == 'umeiko/umeko-desktop-cpp' and tag.endswith('-minimal'):
         # Archived editions remain downloadable from their release pages, but
         # must not restore a retired README section during same-tag repairs.
         return
     section = 'minimal' if tag.endswith('-minimal') else 'standard'
-    block = download_buttons(repo, tag, assets, section)
+    block = download_buttons(repo, tag, assets, section, platforms=platforms)
     paths = ('README.md', 'README.zh-CN.md')
     for path in paths:
         for attempt in range(3):

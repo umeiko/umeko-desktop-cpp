@@ -109,7 +109,7 @@ Item {
         }
         Item {
             id: footer; objectName: "composerToolbar"
-            x: 14; width: parent.width - 28; anchors.bottom: parent.bottom; anchors.bottomMargin: 12
+            x: 14; width: Math.max(0, parent.width - 28); anchors.bottom: parent.bottom; anchors.bottomMargin: 12
             readonly property real gap: 8
             readonly property real minimumModelWidth: Theme.control(96)
             readonly property bool permissionTextVisible: width >= utilityIcons.naturalWidth + permissionMetrics.advanceWidth + Theme.icon(17) + 36 + minimumModelWidth + sendButton.width + gap * 3
@@ -125,6 +125,7 @@ Item {
             TextMetrics { renderType: Text.QtRendering; id: taskMetrics; text: taskStatus.text; font.family: Theme.fontFamily; font.pixelSize: Theme.font(10) }
             Row {
                 id: utilityRow; objectName: "composerUtilityControls"; spacing: footer.utilityGap
+                width: Math.min(implicitWidth, footer.width); clip: true
                 y: (Theme.control(33) - height) / 2
                 Row {
                     id: utilityIcons; objectName: "composerUtilityIcons"; spacing: footer.utilityGap
@@ -165,7 +166,9 @@ Item {
             }
             ActionButton {
                 id: modelButton; objectName: "modelSelector"; quiet: true; height: Theme.control(31)
-                x: footer.stacked ? 0 : utilityRow.implicitWidth + footer.gap
+                // Basic.Button adds horizontal padding independently of padding.
+                horizontalPadding: 0; verticalPadding: 0
+                x: footer.stacked ? 0 : Math.min(utilityRow.implicitWidth + footer.gap, Math.max(0, footer.width - trailingRow.width - footer.gap))
                 y: footer.height - Theme.control(33) + (Theme.control(33) - height) / 2
                 width: Math.max(0, Math.min(Theme.control(350), naturalWidth, footer.width - x - trailingRow.width - footer.gap))
                 readonly property bool useDshModels: backend.sessionBackend === "dsh" && backend.dshOwnConfig === true
@@ -175,7 +178,7 @@ Item {
                 readonly property real naturalWidth: providerMetrics.advanceWidth + (modelName.length ? slashMetrics.advanceWidth + Math.min(modelMetrics.advanceWidth, Theme.control(135)) + 14 : 0) + (effort.length ? effortMetrics.advanceWidth + 7 : 0) + Theme.icon(12) + 27
                 readonly property real namesWidth: Math.max(0, width - 20 - Theme.icon(12) - 7 - (effortBadge.visible ? effortMetrics.advanceWidth + 7 : 0))
                 readonly property bool showProvider: !modelName.length || namesWidth >= Math.min(providerMetrics.advanceWidth, Theme.control(48)) + Math.min(modelMetrics.advanceWidth, Theme.control(90)) + slashMetrics.advanceWidth + 14
-                readonly property real providerWidth: Math.min(providerMetrics.advanceWidth, modelName.length ? Math.max(Math.min(providerMetrics.advanceWidth, Theme.control(48)), namesWidth - Math.min(modelMetrics.advanceWidth, Theme.control(135)) - slashMetrics.advanceWidth - 14) : namesWidth)
+                readonly property real providerWidth: showProvider ? Math.min(namesWidth, providerMetrics.advanceWidth, modelName.length ? Math.max(Math.min(providerMetrics.advanceWidth, Theme.control(48)), namesWidth - Math.min(modelMetrics.advanceWidth, Theme.control(135)) - slashMetrics.advanceWidth - 14) : namesWidth) : 0
                 hint: (backend.sessionBackend === "dsh" ? "DeepSeek Harness · " : "") + providerName + (modelName.length ? " / " + modelName : "") + (effort.length ? " " + effort : "")
                 Accessible.name: hint
                 TextMetrics { renderType: Text.QtRendering; id: providerMetrics; text: modelButton.providerName; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11) }
@@ -183,13 +186,16 @@ Item {
                 TextMetrics { renderType: Text.QtRendering; id: slashMetrics; text: "/"; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11) }
                 TextMetrics { renderType: Text.QtRendering; id: effortMetrics; text: modelButton.effort; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11) }
                 onClicked: root.openModels()
-                contentItem: Item { clip: true; Row {
-                    id: modelRow; objectName: "composerModelLabels"; spacing: 7; anchors.verticalCenter: parent.verticalCenter; x: 10
-                    Text { id: providerText; objectName: "composerProviderName"; visible: modelButton.showProvider; width: modelButton.providerWidth; text: modelButton.providerName; textFormat: Text.PlainText; elide: Text.ElideRight; color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11); anchors.verticalCenter: parent.verticalCenter }
-                    Text { visible: providerText.visible && modelButton.modelName.length > 0; width: slashMetrics.advanceWidth; text: "/"; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11); color: Theme.muted; anchors.verticalCenter: parent.verticalCenter }
-                    Text { objectName: "composerModelName"; visible: modelButton.modelName.length > 0; width: Math.min(modelMetrics.advanceWidth, Math.max(0, modelButton.namesWidth - (providerText.visible ? providerText.width + slashMetrics.advanceWidth + 14 : 0))); text: modelButton.modelName; textFormat: Text.PlainText; elide: Text.ElideRight; color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11); anchors.verticalCenter: parent.verticalCenter }
-                    Text { id: effortBadge; objectName: "reasoningEffortBadge"; width: effortMetrics.advanceWidth; visible: modelButton.effort.length > 0 && modelButton.width >= effortMetrics.advanceWidth + Theme.icon(12) + Theme.control(36) + 34; text: modelButton.effort; color: Theme.accent; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11); anchors.verticalCenter: parent.verticalCenter }
-                    Glyph { objectName: "composerModelChevron"; name: "chevron-down"; width: Theme.icon(12); height: Theme.icon(12); anchors.verticalCenter: parent.verticalCenter }
+                contentItem: Item { x: 0; y: 0; width: modelButton.width; height: modelButton.height; clip: true; Item {
+                    id: modelRow; objectName: "composerModelLabels"; width: modelButton.width; height: modelButton.height
+                    // Row retains old positions for hidden/zero-width children.
+                    // Explicit bounded positions also cover in-flight pane widths.
+                    readonly property real inset: Math.min(10, width)
+                    Text { id: providerText; objectName: "composerProviderName"; x: modelRow.inset; visible: modelButton.showProvider && width > 0; width: Math.min(modelButton.providerWidth, Math.max(0, parent.width-x)); text: modelButton.providerName; textFormat: Text.PlainText; elide: Text.ElideRight; color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11); anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: providerSlash; x: Math.min(parent.width, providerText.x + providerText.width + 7); visible: providerText.visible && modelButton.modelName.length > 0; width: visible ? Math.min(slashMetrics.advanceWidth, Math.max(0, parent.width-x)) : 0; text: "/"; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11); color: Theme.muted; anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: modelNameText; objectName: "composerModelName"; x: Math.min(parent.width, providerSlash.visible ? providerSlash.x + providerSlash.width + 7 : modelRow.inset); visible: modelButton.modelName.length > 0 && width > 0; width: Math.min(Math.max(0, parent.width-x), modelMetrics.advanceWidth, Math.max(0, modelButton.namesWidth - (providerText.visible ? providerText.width + slashMetrics.advanceWidth + 14 : 0))); text: modelButton.modelName; textFormat: Text.PlainText; elide: Text.ElideRight; color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11); anchors.verticalCenter: parent.verticalCenter }
+                    Text { id: effortBadge; objectName: "reasoningEffortBadge"; x: Math.min(parent.width, (modelNameText.visible ? modelNameText.x + modelNameText.width : providerText.x + providerText.width) + 7); width: Math.min(effortMetrics.advanceWidth, Math.max(0, parent.width-x)); visible: modelButton.effort.length > 0 && modelButton.width >= effortMetrics.advanceWidth + Theme.icon(12) + Theme.control(36) + 34; text: modelButton.effort; color: Theme.accent; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11); anchors.verticalCenter: parent.verticalCenter }
+                    Glyph { objectName: "composerModelChevron"; name: "chevron-down"; width: Math.min(Theme.icon(12), parent.width); height: Theme.icon(12); x: Math.max(0, Math.min(parent.width-width, (effortBadge.visible ? effortBadge.x + effortBadge.width : modelNameText.visible ? modelNameText.x + modelNameText.width : providerText.x + providerText.width) + 7)); anchors.verticalCenter: parent.verticalCenter }
                 } }
             }
             Row {
@@ -204,7 +210,7 @@ Item {
                     Accessible.role: Accessible.Button
                     Accessible.name: backend.running ? I18n.t("停止当前会话任务") : I18n.t("发送消息")
                     Accessible.onPressAction: { if (!disabled) { if (backend.running) backend.stop(); else root.sendMessage(false) } }
-                    width: Theme.control(33); height: Theme.control(33); radius: Theme.control(11)
+                    width: Math.min(Theme.control(33), footer.width); height: Theme.control(33); radius: Theme.control(11)
                     color: !disabled ? Theme.button : Theme.accentBg
                     opacity: disabled ? 0.5 : 1
                     Behavior on color { ColorAnimation { duration: 150 } }

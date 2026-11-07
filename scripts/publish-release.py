@@ -9,6 +9,7 @@ import subprocess
 import time
 from release_downloads import release_notes, refresh_readmes
 from release_policy import require_supported_edition
+from ci_plan import ALL_PLATFORMS, release_platforms, require_successful_jobs
 
 REPO=os.environ['GITHUB_REPOSITORY']
 RUN=os.environ['RELEASE_BUILD_RUN']
@@ -27,14 +28,33 @@ def api(path):
     return json.loads(gh('api',f'repos/{REPO}/'+path+separator+'_umeko='+str(time.time_ns())))
 
 run=api('actions/runs/'+RUN)
-assert run['conclusion']=='success' and run['head_branch']=='main'
+assert run['status']=='completed' and run['conclusion']=='success' and run['head_branch']=='main'
 assert run['head_repository']['full_name']==REPO and run['event'] in ('push','workflow_dispatch')
 assert run['path']=='.github/workflows/build.yml'
 commit=run['head_sha']
 base=Path('.release');incoming=base/'input';publish=base/'publish'
+# Never let leftovers from another build satisfy a missing platform.
+for path in (incoming, publish, base/'plan'):
+    if path.exists():shutil.rmtree(path)
 publish.mkdir(parents=True,exist_ok=True)
+artifacts=api('actions/runs/'+RUN+'/artifacts?per_page=100')['artifacts']
+plans=[row for row in artifacts if row['name']=='ci-build-plan' and not row['expired']]
+assert len(plans)<=1
+if plans:
+    gh('run','download',RUN,'--repo',REPO,'--name','ci-build-plan','--dir',base/'plan')
+    platforms=release_platforms(json.loads((base/'plan'/'build-plan.json').read_text(encoding='utf-8')),commit)
+else:
+    # Builds predating the explicit plan still require every original platform.
+    platforms=ALL_PLATFORMS
+jobs=[]
+page=1
+while True:
+    batch=api(f'actions/runs/{RUN}/jobs?filter=all&per_page=100&page={page}')['jobs']
+    jobs.extend(batch)
+    if len(batch)<100:break
+    page+=1
+require_successful_jobs(jobs,platforms,shared=bool(plans))
 gh('run','download',RUN,'--repo',REPO,'--pattern','UmekoCpp-*','--dir',incoming)
-platforms={'windows-x64','macos-arm64','macos-x64','linux-x64'}
 seen=set();sizes=[]
 for metadata in incoming.rglob('UmekoCpp-*.json'):
     report=json.loads(metadata.read_text(encoding='utf-8'))
@@ -66,28 +86,30 @@ for name in ['umeko-provider-sdk-0.2.2.zip','develop-umeko-provider.zip']:
     matches=list(incoming.rglob(name));assert len(matches)==1
     shutil.copy2(matches[0],publish/name)
 files=sorted(publish.iterdir(),key=lambda p:p.name.casefold())
-assert len(files)==18
+assert len(files)==sum(5 if target.startswith('macos-') else 3 for target in platforms)+2
 (publish/'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in files),encoding='ascii',newline='\n')
 files=sorted(publish.iterdir(),key=lambda p:p.stat().st_size)
 releases=api('releases')
 release=next((r for r in releases if r['tag_name']==TAG),None)
 if release and not release['draft'] and os.environ.get('REPLACE_EXISTING_RELEASE')=='true':
+    for target in ALL_PLATFORMS-platforms:
+        assert not any(row['name'].startswith('UmekoCpp-'+TAG+'-'+target) for row in release['assets']), 'Do not remove existing platforms in a Windows-only replacement'
     from replace_release_assets import replace_published_release
     runtime=('Minimal edition: Python is external. Provider plugins require Python 3.10+; the app detects the system interpreter automatically.' if minimal else 'Standard edition: includes standalone CPython 3.12.15 for Provider plugins. No external Python installation is required.')
-    notes = release_notes((Path(__file__).resolve().parents[1]/'docs/releases'/('v'+version+'.md')).read_text(encoding='utf-8'), REPO, TAG, [f.name for f in files]) + '\n\n'+runtime+'\n\n'
+    notes = release_notes((Path(__file__).resolve().parents[1]/'docs/releases'/('v'+version+'.md')).read_text(encoding='utf-8'), REPO, TAG, [f.name for f in files], platforms=platforms) + '\n\n'+runtime+'\n\n'
     notes += 'Verified CI: https://github.com/'+REPO+'/actions/runs/'+RUN+'\n\n'
     notes += ''.join(f'- {p}: {n/1048576:.2f} MiB\n' for p,n in sizes)
     published = replace_published_release(REPO,TAG,commit,files,notes,gh,api,authorized=True)
-    refresh_readmes(REPO,TAG,published['assets'],api,gh)
+    refresh_readmes(REPO,TAG,published['assets'],api,gh,platforms=platforms)
     print('Replaced same-version release:',published['html_url'],flush=True)
     with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as out:
-        out.write('Replaced ['+TAG+']('+published['html_url']+') from verified build '+RUN+'. All 19 server-side asset digests verified.\n')
+        out.write('Replaced ['+TAG+']('+published['html_url']+') from verified build '+RUN+'. All '+str(len(files))+' server-side asset digests verified.\n')
     raise SystemExit(0)
 if release is None:
     notes=base/'notes.md'
     runtime=('Minimal edition: Python is external. Provider plugins require Python 3.10+; the app detects the system interpreter automatically.' if minimal else 'Standard edition: includes standalone CPython 3.12.15 for Provider plugins. No external Python installation is required.')
     notes.write_text(
-        release_notes((Path(__file__).resolve().parents[1]/'docs/releases'/('v'+version+'.md')).read_text(encoding='utf-8'), REPO, TAG, [f.name for f in files]) + '\n'
+        release_notes((Path(__file__).resolve().parents[1]/'docs/releases'/('v'+version+'.md')).read_text(encoding='utf-8'), REPO, TAG, [f.name for f in files], platforms=platforms) + '\n'
         + runtime + '\n\n'
         + 'Verified CI: https://github.com/' + REPO + '/actions/runs/' + RUN + '\n\n'
         + ''.join(f'- {p}: {n/1048576:.2f} MiB\n' for p, n in sizes), encoding='utf-8')
@@ -134,9 +156,9 @@ published=api('releases/'+str(rid));assert not published['draft'] and published[
 if not minimal:
     latest=api('releases/latest');assert latest['tag_name']==TAG and not latest['prerelease']
 assert api('git/ref/tags/'+TAG)['object']['sha']==commit
-refresh_readmes(REPO, TAG, published['assets'], api, gh)
+refresh_readmes(REPO, TAG, published['assets'], api, gh, platforms=platforms)
 from release_retention import prune_releases
 prune_releases(REPO, TAG, api, gh)
 print('Published:',published['html_url'],flush=True)
 with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as out:
-    out.write('Published ['+TAG+']('+published['html_url']+') from verified build ['+RUN+'](https://github.com/'+REPO+'/actions/runs/'+RUN+'). All 19 server-side asset digests verified.\n')
+    out.write('Published ['+TAG+']('+published['html_url']+') from verified build ['+RUN+'](https://github.com/'+REPO+'/actions/runs/'+RUN+'). All '+str(len(files))+' server-side asset digests verified.\n')

@@ -2,24 +2,62 @@ name: Native desktop release builds
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - .github/workflows/publish.yml
-      - scripts/publish-release.py
   pull_request:
   workflow_dispatch:
+    inputs:
+      all_platforms:
+        description: Build and test all four native platforms (default is Windows)
+        type: boolean
+        default: false
 permissions:
   contents: read
+concurrency:
+  group: native-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - id: plan
+        run: python3 scripts/ci_plan.py --commit '${{ github.sha }}' --all-platforms '${{ inputs.all_platforms || false }}' --output build-plan.json >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ci-build-plan
+          path: build-plan.json
+          if-no-files-found: error
+  checks:
+    name: Shared runtime and release checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: runtime/package-lock.json
+      - name: Prepare shared runtime fixtures
+        run: |
+          npm ci --prefix runtime --ignore-scripts --no-audit --no-fund
+          node scripts/prepare-runtime.mjs
+          python scripts/fetch-search-tools.py
+          python scripts/build-provider-resources.py
+      - name: All shared Node and Python regressions
+        run: python scripts/run-ci-tests.py --scope shared
   native:
+    needs: plan
     name: ${{ matrix.name }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - {name: windows-x64, os: windows-2022, host: windows, arch: win64_msvc2022_64, qt_dir: msvc2022_64}
-          - {name: linux-x64, os: ubuntu-24.04, host: linux, arch: linux_gcc_64, qt_dir: gcc_64}
-          - {name: macos-arm64, os: macos-15, host: mac, arch: clang_64, qt_dir: macos}
-          - {name: macos-x64, os: macos-15-intel, host: mac, arch: clang_64, qt_dir: macos}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
@@ -36,18 +74,28 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: runtime/package-lock.json
       - name: Linux native dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 libxcb1-dev libx11-dev extra-cmake-modules libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libegl1 libsecret-1-dev gnome-keyring dbus-x11 fonts-noto-cjk patchelf
+      - name: Cache Qt SDK
+        id: qt-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ${{ runner.temp }}/Qt
+          key: qt-6.10.2-${{ matrix.os }}-${{ runner.arch }}-${{ matrix.qt_dir }}-v1
       - name: Install build tools and Qt SDK
         shell: bash
         run: |
           python -m pip install aqtinstall==3.3.0 cmake==3.31.6
-          extra=()
-          if [ "$RUNNER_OS" = "Linux" ]; then extra=(icu qtwayland); fi
-          python -m aqt install-qt ${{ matrix.host }} desktop 6.10.2 ${{ matrix.arch }} --outputdir "$RUNNER_TEMP/Qt" --archives qtbase qtdeclarative qtsvg qttools "${extra[@]}" --modules qtimageformats qtwebview ${{ runner.os == 'Linux' && 'qtwebengine qtwebchannel qtpositioning qtwebsockets' || '' }}
+          if [ '${{ steps.qt-cache.outputs.cache-hit }}' != 'true' ]; then
+            extra=()
+            if [ "$RUNNER_OS" = "Linux" ]; then extra=(icu qtwayland); fi
+            python -m aqt install-qt ${{ matrix.host }} desktop 6.10.2 ${{ matrix.arch }} --outputdir "$RUNNER_TEMP/Qt" --archives qtbase qtdeclarative qtsvg qttools "${extra[@]}" --modules qtimageformats qtwebview ${{ runner.os == 'Linux' && 'qtwebengine qtwebchannel qtpositioning qtwebsockets' || '' }}
+          fi
           echo "QT_ROOT=$RUNNER_TEMP/Qt/6.10.2/${{ matrix.qt_dir }}" >> "$GITHUB_ENV"
           echo "$RUNNER_TEMP/Qt/6.10.2/${{ matrix.qt_dir }}/bin" >> "$GITHUB_PATH"
           echo "UMEKO_TEST_PYTHON=$(python -c 'import sys;print(sys.executable)')" >> "$GITHUB_ENV"
@@ -58,28 +106,9 @@ jobs:
           node scripts/prepare-runtime.mjs
           python scripts/fetch-search-tools.py
           python scripts/build-provider-resources.py
-          node --test tests/background-jobs.test.mjs tests/tool-permissions.test.mjs tests/tool-permissions-integration.test.mjs tests/compaction-bridge.test.mjs tests/recent-images-bridge.test.mjs tests/provider-errors.test.mjs
-          node --test tests/session-capabilities.test.mjs tests/session-capabilities-integration.test.mjs tests/skills.test.mjs tests/recent-images.test.mjs tests/markdown-preview.test.mjs tests/native-skill-policy.test.mjs tests/prepare-runtime.test.mjs
-          node --test tests/tool-visibility.test.mjs tests/package-install.test.mjs tests/pi-widget-command.test.mjs tests/extension-metadata.test.mjs tests/update-engine.test.mjs tests/update-download.test.mjs tests/update-network.test.mjs tests/webview.test.mjs tests/pi-commands.test.mjs tests/pi-commands-integration.test.mjs tests/umeko-control.test.mjs tests/global-agents.test.mjs tests/umeko-documents.test.mjs tests/native-history.test.mjs tests/widget-messages.test.mjs
-          node --test tests/conversation-search.test.mjs tests/gateway.test.mjs tests/model-tls.test.mjs tests/openai-responses.test.mjs tests/network_retry_test.mjs
-          node --test tests/dsh-acp.test.mjs tests/dsh-permissions.test.mjs tests/approval-view.test.mjs tests/system-prompt.test.mjs
-          node --test tests/auxiliary-vision.test.mjs tests/auxiliary-vision-bridge.test.mjs tests/generation.test.mjs tests/native-generation.test.mjs tests/widget-market.test.mjs
-          python -m unittest discover -s tests -p "test_native_*.py"
-          node --test tests/subagents.test.mjs tests/subagent-ui.test.mjs tests/subagent-queue.test.mjs tests/rpc-ui.test.mjs
-          python -m unittest discover -s tests -p test_release_retention.py
-          python -m unittest discover -s tests -p test_release_replacement.py
-          python -m unittest discover -s tests -p test_release_downloads.py
-          python -m unittest discover -s tests -p test_release_policy.py
-          python -m unittest discover -s tests -p test_webview_package.py
-          python -m unittest discover -s tests -p test_native_skills.py
-          python tests/test_skill_import.py
-          python tests/test_bundled_skills.py
-          python -m unittest discover -s tests -p test_checkpoints.py
-          python -m unittest discover -s tests -p test_provider_errors.py
-          python tests/worker_test.py
-          python tests/desktop_plugins_test.py
-          python -m unittest discover -s tests -p test_change_review.py
-          python tests/test_terminal_widget.py
+      - name: Platform-specific runtime regressions
+        shell: bash
+        run: python scripts/run-ci-tests.py --scope platform
       - name: Configure and compile C++
         shell: bash
         run: |

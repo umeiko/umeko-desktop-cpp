@@ -460,11 +460,16 @@ ApplicationWindow {
                 function restoreViewport() {
                     restoring = true
                     tailTimer.stop()
+                    restoreTimer.stop()
                     followTail = backend.followTail
                     restoreOffset = backend.scrollPosition
                     restoreIndex = backend.scrollAnchor
                     restoreAttempts = 0
                     restorePositioned = false
+                    // Empty drafts have no scroll position to restore. A model
+                    // reset can also be briefly empty for a nonempty transcript;
+                    // use the source count so those histories still await rows.
+                    if (backend.messageCount === 0) { restoring = false; return }
                     restoreTimer.restart()
                 }
                 acceptedButtons: Qt.NoButton
@@ -499,7 +504,10 @@ ApplicationWindow {
                     onTriggered: {
                         conversation.forceLayout()
                         conversation.restoreAttempts++
-                        if (conversation.count===0 && conversation.restoreAttempts<200)return
+                        if (conversation.count===0) {
+                            if (backend.messageCount>0 && conversation.restoreAttempts<200)return
+                            stop(); conversation.restoring = false; return
+                        }
                         if (conversation.followTail || conversation.restoreIndex < 0) {
                             backend.messageModel.requestRange(Math.max(0,conversation.count-4),conversation.count-1)
                             if(!backend.messageModel.rangeReady(Math.max(0,conversation.count-4),conversation.count-1) && conversation.restoreAttempts<200)return

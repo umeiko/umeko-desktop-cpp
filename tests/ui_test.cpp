@@ -1701,6 +1701,59 @@ Item {
     QVERIFY(backend->activeSession().isEmpty());
     window->setProperty("page", "chat");
   }
+  void emptyChatRestorationDoesNotWaitForRows() {
+    const auto previous=backend->view;
+    const auto savedProjects=backend->store.data["projects"];
+    const auto cleanup=qScopeGuard([&]{
+      QMetaObject::invokeMethod(window,"cancelSidebarSelection");
+      backend->store.data["projects"]=savedProjects;backend->activate(previous);
+    });
+    window->setProperty("page","chat");
+    const auto workspace=directory.filePath("empty-chat-restoration");QDir().mkpath(workspace);
+    const auto project=backend->ensureProject(workspace);
+    auto history=backend->fresh(directory.path());
+    history->messages={QVariantMap{{"role","user"},{"text","Existing question"}},
+                       QVariantMap{{"role","assistant"},{"text","Existing answer"}}};
+    auto cover=find("chatLoadingOverlay"), view=find("conversation"), prompt=find("promptInput");
+    QVERIFY(cover);QVERIFY(view);QVERIFY(prompt);
+    QVariantList timings;
+    for(int i=0;i<3;++i){
+      backend->activate(history);
+      QTRY_COMPARE_WITH_TIMEOUT(view->property("count").toInt(),2,2000);
+      QTRY_VERIFY_WITH_TIMEOUT(!view->property("restoring").toBool(),2000);
+      const QVariant row=QVariantMap{{"id",project["id"]},{"title","Empty project"},{"kind","project"},{"selected",false}};
+      QElapsedTimer clock;clock.start();
+      QVERIFY(QMetaObject::invokeMethod(window,"selectSidebar",Q_ARG(QVariant,row)));
+      QVERIFY(cover->isVisible());
+      QTRY_COMPARE_WITH_TIMEOUT(backend->messageCount(),0,2000);
+      // The real sidebar/cover path must unlock the composer without waiting
+      // for the 200-frame deadline intended for a nonempty pending model.
+      QTRY_VERIFY_WITH_TIMEOUT(!cover->isVisible(),1000);
+      timings<<clock.elapsed();
+      QVERIFY(!view->property("restoring").toBool());
+      QVERIFY(view->property("restoreAttempts").toInt()<=2);
+      QVERIFY(prompt->isEnabled());QVERIFY(prompt->hasActiveFocus());
+    }
+    qInfo()<<"Empty project selection to input ready(ms):"<<timings;
+    // A temporary model reset in a nonempty transcript still needs its rows.
+    backend->activate(history);
+    QTRY_VERIFY_WITH_TIMEOUT(!view->property("restoring").toBool(),2000);
+    backend->saveViewport(0,4,false);
+    backend->chat.switchContext("pending-nonempty-restoration");
+    QCOMPARE(view->property("count").toInt(),0);QCOMPARE(backend->messageCount(),2);
+    QVERIFY(QMetaObject::invokeMethod(view,"restoreViewport"));
+    QTest::qWait(80);
+    QVERIFY(view->property("restoring").toBool());
+    QCOMPARE(backend->scrollAnchor(),0);QCOMPARE(backend->scrollPosition(),4.0);
+    backend->chat.update(history->messages);
+    QTRY_VERIFY_WITH_TIMEOUT(!view->property("restoring").toBool(),2000);
+    QVERIFY(!backend->followTail());
+    // The direct New chat action also finishes empty restoration immediately.
+    QVERIFY(QMetaObject::invokeMethod(window,"startChat"));
+    QCOMPARE(backend->messageCount(),0);
+    QVERIFY(!view->property("restoring").toBool());
+    QVERIFY(prompt->isEnabled());QVERIFY(prompt->hasActiveFocus());
+  }
   void independentBackgroundChats() {
     backend->newSession();
     slow = true;
@@ -5363,6 +5416,57 @@ def create_provider(context): return Interactive(context)
                                 QTest::currentTestFunction() + ".png");
     }
   }
+  void composerNarrowWidthTransitions() {
+    configureAPI();
+    const auto scale=backend->fontScale();
+    const auto restore=qScopeGuard([&]{backend->setFontScale(scale);});
+    QQmlComponent component(engine.get(),QUrl::fromLocalFile(root+"/app/qml/Composer.qml"));
+    QVERIFY2(component.isReady(),qPrintable(component.errorString()));
+    std::unique_ptr<QObject> object(component.createWithInitialProperties({
+        {"parent",QVariant::fromValue(window->contentItem())},{"width",850}}));
+    auto item=qobject_cast<QQuickItem*>(object.get());QVERIFY(item);
+    auto child=[&](const char*name){return object->findChild<QQuickItem*>(name);};
+    const auto geometry=[](QQuickItem*i){return i->mapRectToScene(QRectF(0,0,i->width(),i->height()));};
+    for(double factor:{1.,1.5,2.})for(int width:{850,320,220,120,40}){
+      backend->setFontScale(factor);item->setWidth(width);QTest::qWait(40);
+      auto model=child("modelSelector"),send=child("composerSendControls"),footer=child("composerToolbar");
+      QVERIFY(model && send && footer);
+      const auto m=geometry(model),s=geometry(send),f=geometry(footer);
+      const auto diagnostic=QString("width=%1 scale=%2 model=[%3,%4] send=[%5,%6] footer=[%7,%8]")
+          .arg(width).arg(factor).arg(m.left()).arg(m.right()).arg(s.left()).arg(s.right()).arg(f.left()).arg(f.right());
+      QVERIFY2(m.right()<=s.left()+.5 && s.right()<=f.right()+.5,qPrintable(diagnostic));
+      for(const char*name:{"composerProviderName","composerModelName","composerModelChevron"}){
+        auto label=child(name);QVERIFY(label);
+        if(geometry(label).right()>m.right()+.5)for(auto ancestor=label;ancestor && ancestor!=model->parentItem();ancestor=ancestor->parentItem())
+          qInfo()<<"Composer boundary ancestor:"<<ancestor->objectName()<<"x"<<ancestor->x()<<"width"<<ancestor->width()<<"visible"<<ancestor->isVisible()<<"scene"<<geometry(ancestor);
+        QVERIFY2(geometry(label).right()<=m.right()+.5,qPrintable(QString(name)+" "+diagnostic));
+      }
+    }
+  }
+  void composerClosingPaneKeepsControlsInBounds() {
+    configureAPI();backend->newSession();window->setProperty("page","chat");
+    const auto old=window->size();const auto scale=backend->fontScale();
+    const auto collapsed=window->property("sidebarCollapsed");
+    auto pane=find("webPane");QVERIFY(pane);
+    const auto restore=qScopeGuard([&]{QMetaObject::invokeMethod(pane,"dismiss");backend->setFontScale(scale);window->resize(old);window->setProperty("sidebarCollapsed",collapsed);});
+    window->setProperty("sidebarCollapsed",false);backend->setFontScale(2.);window->resize(720,850);
+    pane->setProperty("opened",true);
+    QTRY_VERIFY_WITH_TIMEOUT(pane->width()>300 && !pane->property("moving").toBool(),3000);
+    QVERIFY(QMetaObject::invokeMethod(pane,"dismiss"));
+    // Exercise the shrinking pane, not just its settled zero-width state.
+    QElapsedTimer closing;closing.start();
+    while(closing.elapsed()<600){
+      QTest::qWait(16);
+      auto model=find("modelSelector"),send=find("composerSendControls"),footer=find("composerToolbar");
+      QVERIFY(model && send && footer);
+      const auto rect=[](QQuickItem*i){return i->mapRectToScene(QRectF(0,0,i->width(),i->height()));};
+      const auto m=rect(model),s=rect(send),f=rect(footer);
+      const auto diagnostic=QString("closing=%1ms pane=%2 footer=%3 model=[%4,%5] send=[%6,%7] collapsed=%8")
+          .arg(closing.elapsed()).arg(pane->width()).arg(footer->width()).arg(m.left()).arg(m.right()).arg(s.left()).arg(s.right()).arg(window->property("sidebarLayoutCollapsed").toBool());
+      QVERIFY2(footer->width()>0,qPrintable(diagnostic));
+      QVERIFY2(m.right()<=s.left()+.5 && s.right()<=f.right()+.5,qPrintable(diagnostic));
+    }
+  }
   void composerResponsiveFooter() {
     configureAPI();backend->newSession();window->setProperty("page","chat");
     const auto old=window->size();const auto scale=backend->fontScale();
@@ -5373,6 +5477,8 @@ def create_provider(context): return Interactive(context)
       auto model=find("modelSelector"),send=find("composerSendControls"),utility=find("composerUtilityControls"),footer=find("composerToolbar");
       QVERIFY(model && send && utility && footer);
       const auto m=geometry(model),s=geometry(send),u=geometry(utility),f=geometry(footer);
+      qInfo()<<"Composer geometry:"<<"requested"<<width<<"actual"<<window->width()<<"scale"<<factor<<"footer"<<f<<"model"<<m<<"send"<<s
+             <<"pane"<<find("webPane")->width()<<"pane opened"<<find("webPane")->property("opened")<<"model labels"<<geometry(find("composerModelName"))<<geometry(find("composerModelChevron"));
       QVERIFY2(!m.intersects(s),qPrintable(QString("model/send overlap at %1 scale %2").arg(width).arg(factor)));
       QVERIFY(!m.intersects(u));QVERIFY(m.left()>=f.left()-.5);QVERIFY(m.right()<=s.left()+.5);QVERIFY(s.right()<=f.right()+.5);
       auto provider=find("composerProviderName"),name=find("composerModelName"),chevron=find("composerModelChevron");
