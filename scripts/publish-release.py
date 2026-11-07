@@ -158,7 +158,7 @@ if not minimal:
 assert api('git/ref/tags/'+TAG)['object']['sha']==commit
 refresh_readmes(REPO, TAG, published['assets'], api, gh, platforms=platforms)
 from release_retention import prune_releases
-prune_releases(REPO, TAG, api, gh)
+prune_releases(REPO, TAG, api, gh, verified_assets=[file.name for file in files])
 print('Published:',published['html_url'],flush=True)
 with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as out:
     out.write('Published ['+TAG+']('+published['html_url']+') from verified build ['+RUN+'](https://github.com/'+REPO+'/actions/runs/'+RUN+'). All '+str(len(files))+' server-side asset digests verified.\n')

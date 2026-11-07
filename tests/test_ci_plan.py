@@ -1,4 +1,5 @@
 import copy
+import base64
 import importlib.util
 import json
 import hashlib
@@ -155,6 +156,61 @@ class ReleaseInputTests(unittest.TestCase):
         for line in sums:
             digest, name = line.split()
             self.assertEqual(digest, hashlib.sha256((self.folder/'.release/publish'/name).read_bytes()).hexdigest())
+
+    def test_windows_publication_finishes_readmes_and_retention(self):
+        """Run the complete publisher with in-memory GitHub reads and writes."""
+        release = {}
+        readmes = {}
+        original_readme = 'Keep concurrent content\n<!-- umeko-downloads:standard:start -->\nold\n<!-- umeko-downloads:standard:end -->\nKeep footer\n'
+
+        def github(argv, **kwargs):
+            args = list(map(str, argv[1:]))
+            if args[0] == 'api':
+                path = next(arg for arg in args if arg.startswith('repos/')).split('?', 1)[0]
+                if path.endswith('/releases'):
+                    if '--method' in args:
+                        self.assertEqual(args[args.index('--method')+1], 'POST')
+                        release.update(json.loads(Path(args[args.index('--input')+1]).read_text()))
+                        release.update(id=456, assets=[], html_url='https://example.invalid/v0.7.1')
+                        return json.dumps(release)
+                    return json.dumps([release] if release else [])
+                if path.endswith(('/releases/456', '/releases/latest')): return json.dumps(release)
+                if path.endswith('/git/ref/tags/v0.7.1'): return json.dumps({'object': {'sha': self.commit}})
+                if '/contents/README' in path:
+                    name = path.rsplit('/', 1)[1]
+                    if '--method' in args:
+                        self.assertEqual(args[args.index('--method')+1], 'PUT')
+                        body = json.loads(Path(args[args.index('--input')+1]).read_text())
+                        self.assertEqual(body['sha'], 'concurrent-sha')
+                        readmes[name] = base64.b64decode(body['content']).decode()
+                        return '{}'
+                    return json.dumps({'sha': 'concurrent-sha', 'content': base64.b64encode(original_readme.encode()).decode()})
+            if args[:2] == ['release', 'edit']:
+                self.assertIn('--latest', args)
+                release['draft'] = False
+                return ''
+            return self.gh(argv, **kwargs)
+
+        def upload(argv, **kwargs):
+            self.assertEqual(argv[:3], ['gh', 'release', 'upload'])
+            file = Path(argv[4])
+            release['assets'].append(dict(name=file.name, size=file.stat().st_size, state='uploaded',
+                                          digest='sha256:'+hashlib.sha256(file.read_bytes()).hexdigest()))
+            return subprocess.CompletedProcess(argv, 0)
+
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'umeiko/umeko-desktop-cpp', 'RELEASE_BUILD_RUN': '123',
+                                     'RELEASE_TAG': 'v0.7.1', 'REPLACE_EXISTING_RELEASE': 'false',
+                                     'GITHUB_STEP_SUMMARY': str(self.folder/'summary.md')}), \
+             patch('subprocess.check_output', github), patch('subprocess.run', upload):
+            runpy.run_path(str(ROOT/'scripts/publish-release.py'), run_name='__main__')
+        self.assertFalse(release['draft'])
+        self.assertEqual(len(release['assets']), 6)
+        self.assertEqual(set(readmes), {'README.md', 'README.zh-CN.md'})
+        for content in readmes.values():
+            self.assertIn('Keep concurrent content', content)
+            self.assertIn('Keep footer', content)
+            self.assertIn('/releases/download/v0.7.1/UmekoCpp-v0.7.1-windows-x64.zip', content)
+            self.assertNotIn('macos', content)
 
     def test_legacy_run_still_requires_four_platforms(self):
         self.plan = None

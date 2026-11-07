@@ -19,11 +19,20 @@ def obsolete_patches(releases, tag):
     return result
 
 
-def prune_releases(repo, tag, api, gh):
+def prune_releases(repo, tag, api, gh, verified_assets=None):
     assert repo in ("umeiko/umeko-desktop", "umeiko/umeko-desktop-cpp")
     releases = api("releases?per_page=100")
     current = next(r for r in releases if r["tag_name"] == tag)
-    assert not current["draft"] and len(current["assets"]) in (15, 19)
+    assert not current["draft"]
+    if verified_assets is None:
+        assert len(current["assets"]) in (15, 19)
+    else:
+        # A partial release is safe only after the publisher verified its exact
+        # planned asset set, including server-side sizes and digests.
+        expected = set(verified_assets)
+        assert len(expected) in (6, 15, 19)
+        assert len(current["assets"]) == len(expected)
+        assert {row["name"] for row in current["assets"]} == expected
     version = lambda value: tuple(map(int, value.removeprefix('v').removesuffix('-minimal').split('.')))
     if repo.endswith("-cpp") and version(tag) <= version(LAST_MINIMAL_TAG):
         standard = tag.removesuffix("-minimal")

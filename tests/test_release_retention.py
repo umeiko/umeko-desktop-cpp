@@ -7,6 +7,24 @@ def release(tag, identifier=1, **changes):
 
 
 class ReleaseRetentionTests(unittest.TestCase):
+    def test_windows_plan_requires_the_exact_verified_asset_set(self):
+        names = ['windows.zip', 'windows.zip.sha256', 'windows.json',
+                 'provider-sdk.zip', 'develop-provider.zip', 'SHA256SUMS.txt']
+        current = release('v0.7.1'); current['assets'] = [{'name': name} for name in names]
+        rows = [current, release('v0.7.0', 2), release('v0.6.5', 3)]; calls = []
+        with self.assertRaises(AssertionError):
+            prune_releases('umeiko/umeko-desktop-cpp', 'v0.7.1', lambda _: rows, lambda *args: calls.append(args))
+        self.assertEqual(prune_releases('umeiko/umeko-desktop-cpp', 'v0.7.1', lambda _: rows,
+                                       lambda *args: calls.append(args), verified_assets=names), [])
+        for assets in (current['assets'][:-1], current['assets'][:-1]+[{'name': 'foreign.zip'}],
+                       current['assets'][:-1]+[current['assets'][0]]):
+            original = current['assets']; current['assets'] = assets
+            with self.assertRaises(AssertionError):
+                prune_releases('umeiko/umeko-desktop-cpp', 'v0.7.1', lambda _: rows,
+                               lambda *args: calls.append(args), verified_assets=names)
+            current['assets'] = original
+        self.assertEqual(calls, [])
+
     def test_standard_release_after_minimal_retirement_needs_no_pair(self):
         rows = [release('v0.5.0', 1), release('v0.5.1', 2), release('v0.5.1-minimal', 3), release('v0.5.2', 4)]
         calls = []
