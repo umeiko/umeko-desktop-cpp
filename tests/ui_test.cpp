@@ -662,7 +662,7 @@ private slots:
   void welcomeAndEggs() {
     auto mascot = find("welcomeMascot");
     QVERIFY(mascot);
-    QVERIFY(mascot->property("loaded").toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(mascot->property("loaded").toBool(),2000);
     QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, point(mascot));
     QTest::qWait(60);
     QVERIFY(!mascot->property("reactionText").toString().isEmpty());
@@ -1055,7 +1055,9 @@ private slots:
       QVERIFY(backend->chat.data(backend->chat.index(5999),ChatModel::MessageRole).toMap()["text"].toString().size()<1000);
     }
     phase="rapid switching";
-    for(int iteration=0;iteration<8;++iteration){backend->newSession();backend->openSession("published-stress");}
+    QVariantList rapidSamples;QElapsedTimer rapid;rapid.start();
+    for(int iteration=0;iteration<8;++iteration){QElapsedTimer call;call.start();backend->newSession();const auto freshMs=call.restart();backend->openSession("published-stress");rapidSamples<<QVariantMap{{"new",freshMs},{"open",call.elapsed()}};}
+    qInfo()<<"Rapid history switching synchronous(ms):"<<rapid.elapsed()<<rapidSamples;
     QTRY_COMPARE_WITH_TIMEOUT(backend->chat.rowCount(),6000,5000);QTRY_VERIFY_WITH_TIMEOUT(!find("conversation")->property("restoring").toBool(),5000);QVERIFY(backend->scrollAnchor()>5980);
     auto view=find("conversation");QVERIFY(view);
     phase="scroll reversals";
@@ -1068,6 +1070,24 @@ private slots:
     QVERIFY2(maxGap<1000,qPrintable(QString("UI heartbeat gap %1ms (%2)").arg(maxGap).arg(maxGapPhase)));
     QVERIFY(intact.open(QIODevice::ReadOnly));QCOMPARE(U::sha(intact.readAll()),digest);
     qInfo()<<"6000 messages + 8MiB failure; cold/repeated(ms):"<<samples<<"max UI gap(ms):"<<maxGap<<"prepared rows:"<<prepared<<"platform:"<<QGuiApplication::platformName();
+  }
+  void navigationKeepsDraftAndFlushesSettingsOnClose() {
+    QTemporaryDir profile;QVERIFY(profile.isValid());
+    Backend local(root,profile.path());
+    local.setWorkspace(profile.path());
+    auto saved=local.view;saved->id="navigation-persistence";saved->draft="Keep this unsent draft";
+    saved->attachments<<QVariantMap{{"id","kept-file"},{"name","fixture.txt"}};
+    saved->scrollIndex=1;saved->scrollY=12;saved->followTail=false;
+    local.newSession();local.openSession(saved->id);
+    QCOMPARE(local.view,saved);QCOMPARE(local.view->draft,QString("Keep this unsent draft"));
+    QCOMPARE(local.view->attachments.size(),1);QCOMPARE(local.view->scrollIndex,1);QVERIFY(!local.view->followTail);
+    local.newSession();QVERIFY(local.appearanceSave.isActive());
+    // Closing before the deferred save fires must still persist navigation.
+    local.close();
+    const auto settings=U::readJson(profile.filePath("settings.json")).toMap();
+    const auto viewport=settings["sessionMeta"].toMap()[saved->id].toMap()["viewport"].toMap();
+    QCOMPARE(viewport["index"].toInt(),1);QCOMPARE(viewport["offset"].toDouble(),12.0);QVERIFY(!viewport["follow"].toBool());
+    QCOMPARE(settings["workspace"].toString(),U::cleanPath(profile.path()));
   }
   void piManagerColdToolInventory() {
     const auto restoreFocus=qScopeGuard([&] {window->requestActivate();QTest::qWait(100);});

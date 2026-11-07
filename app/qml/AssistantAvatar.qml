@@ -8,6 +8,7 @@ CharacterArt {
     width: Theme.icon(40); height: width
     fallbackSource: "../icons/avatars/" + ["smile", "wink", "happy"][variant] + ".webp"
     artwork: Character.asset(["avatarSmile", "avatarWink", "avatarHappy"][variant], fallbackSource)
+    asynchronous: true
     sourceSize: Qt.size(96, 96)
     fillMode: Image.PreserveAspectFit
     smooth: false; mipmap: false

@@ -127,5 +127,33 @@ class TerminalTests(unittest.TestCase):
         self.assertFalse(unchanged['changed'])
         frame=terminal.frame(reset=True);self.assertLess(len(json.dumps(frame,ensure_ascii=True)),400000)
 
+    @unittest.skipIf(os.name=='nt','POSIX controlling terminal and threaded spawn')
+    def test_threaded_worker_creates_a_controlling_terminal_without_python_fork(self):
+        from unittest.mock import patch
+        # The real worker already has publisher/read/write threads. A Python
+        # fork here can deadlock on macOS before it execs the shell.
+        with patch('os.fork',side_effect=AssertionError('unsafe Python fork')),patch('os.forkpty',side_effect=AssertionError('unsafe Python forkpty')):
+            first=self.create();second=self.create(splitFrom=first)
+        for identifier in (first,second):
+            terminal=self.plugin.terminals[identifier]
+            self.assertEqual(os.getsid(terminal.backend.pid),terminal.backend.pid)
+            self.call('run',{'terminalId':identifier,'command':"test -t 0 && test -t 1 && test -t 2 && test -c /dev/tty && printf 'CONTROLLING_%s\\n' READY"})
+            self.wait_text(identifier,'CONTROLLING_READY')
 
-if __name__=='__main__':unittest.main()
+    @unittest.skipIf(os.name=='nt','POSIX startup failure and process cleanup')
+    def test_failed_shell_startup_reports_the_error_and_reaps_the_child(self):
+        from unittest.mock import patch
+        backend=sys.modules[namespace.__name__+'.pty_backend'];spawn=backend.subprocess.Popen;children=[]
+        def capture(*args,**kwargs):
+            child=spawn(*args,**kwargs);children.append(child);return child
+        with patch.object(backend.subprocess,'Popen',side_effect=capture):
+            with self.assertRaisesRegex(OSError,'does-not-exist'):
+                backend.NativePty(['/does-not-exist/umeko-shell'],self.path,dict(os.environ),80,24)
+        self.assertEqual(len(children),1);self.assertIsNotNone(children[0].poll())
+
+
+if __name__=='__main__':
+    import faulthandler
+    faulthandler.dump_traceback_later(120,exit=True)
+    try:unittest.main(verbosity=2)
+    finally:faulthandler.cancel_dump_traceback_later()

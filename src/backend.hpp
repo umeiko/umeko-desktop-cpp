@@ -669,7 +669,7 @@ private:
   int gatewayPort = 0;
   QVariantMap createdKey;
   QTimer streaming;
-  QTimer appearanceSave;
+  QTimer appearanceSave, sidebarRefresh;
   std::shared_ptr<Session> fresh(QString workspace = {});
   std::shared_ptr<Session> findSession(QString id);
   QVariantMap ensureProject(QString path, bool reopen = false);

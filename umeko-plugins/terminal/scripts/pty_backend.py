@@ -13,7 +13,7 @@ class Writer:
     def write_loop(self):
         while True:
             data=self.input.get()
-            if data is None:return
+            if data is None or self.closed:return
             try:self.write_bytes(data)
             except OSError:return
     def stop_writer(self):
@@ -124,31 +124,56 @@ if os.name=='nt':
             for handle in (self.job,self.process,self.write_handle,self.read_handle):
                 if handle:CloseHandle(handle)
 else:
-    from ptyprocess import PtyProcess
+    import fcntl, select, struct, sys, termios
+    from pathlib import Path
     class NativePty(Writer):
         def __init__(self,argv,cwd,env,columns,rows):
-            self.process=PtyProcess.spawn(argv,cwd=str(cwd),env=env,dimensions=(rows,columns));self.pid=self.process.pid;self._exit=None;self.start_writer()
+            # Never run Python after fork in this threaded Widget worker.
+            # Popen performs its pre-exec setup in C, then a fresh, single-
+            # threaded helper acquires the controlling tty and execs the shell.
+            self.fd,slave=os.openpty();error_read,error_write=os.pipe();self.process=None
+            try:
+                fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',rows,columns,0,0))
+                helper=str(Path(__file__).with_name('posix_exec.py'))
+                self.process=subprocess.Popen([sys.executable,'-I','-S',helper,str(error_write),*argv],cwd=str(cwd),env=env,
+                    stdin=slave,stdout=slave,stderr=slave,close_fds=True,start_new_session=True,pass_fds=(error_write,))
+                os.close(error_write);error_write=None
+                if not select.select([error_read],[],[],5)[0]:raise OSError('Terminal startup timed out')
+                failure=os.read(error_read,4096)
+                if failure:raise OSError(failure.decode('utf-8','replace'))
+            except BaseException:
+                if self.process is not None:
+                    self.process.kill();self.process.wait()
+                os.close(self.fd)
+                raise
+            finally:
+                os.close(slave);os.close(error_read)
+                if error_write is not None:os.close(error_write)
+            self.pid=self.process.pid;self._exit=None;self.start_writer()
         def read(self):
-            # PtyProcess.read holds its BufferedRWPair's reader lock while
-            # waiting for output. Its close() needs that same lock before it
-            # can terminate a shell which ignores SIGHUP, so read the raw PTY
-            # descriptor instead and let close reach its termination path.
-            try:return os.read(self.process.fd,32768)
+            try:return os.read(self.fd,32768)
             except (EOFError,OSError):return b''
         def write_bytes(self,data):
-            while data:data=data[self.process.write(data):]
+            while data:data=data[os.write(self.fd,data):]
         def resize(self,columns,rows):
-            if not self.closed:self.process.setwinsize(rows,columns)
-        def isalive(self):return not self.closed and self.process.isalive()
-        def exit_code(self):return self._exit if self.closed else self.process.exitstatus
+            if not self.closed:fcntl.ioctl(self.fd,termios.TIOCSWINSZ,struct.pack('HHHH',rows,columns,0,0))
+        def isalive(self):return not self.closed and self.process.poll() is None
+        def exit_code(self):return self._exit if self.closed else self.process.poll()
         def close(self):
             if self.closed:return
             self.closed=True;self.stop_writer();groups={self.pid}
             try:
-                foreground=os.tcgetpgrp(self.process.fd)
+                foreground=os.tcgetpgrp(self.fd)
                 if foreground>0 and os.getsid(foreground)==self.pid:groups.add(foreground)
             except OSError:pass
+            for signum in (signal.SIGHUP,signal.SIGCONT,signal.SIGINT,signal.SIGKILL):
+                for group in groups:
+                    try:os.killpg(group,signum)
+                    except ProcessLookupError:pass
+                try:self.process.wait(timeout=.2);break
+                except subprocess.TimeoutExpired:pass
+            # A foreground child may ignore HUP even if its shell exited.
             for group in groups:
-                try:os.killpg(group,signal.SIGHUP)
+                try:os.killpg(group,signal.SIGKILL)
                 except ProcessLookupError:pass
-            self.process.close(force=True);self._exit=self.process.exitstatus;self.writer.join(.5)
+            self._exit=self.process.wait();self.writer.join(.5);os.close(self.fd)

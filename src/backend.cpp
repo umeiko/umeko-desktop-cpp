@@ -94,9 +94,14 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
   appearanceSave.setSingleShot(true);
   appearanceSave.setInterval(250);
   connect(&appearanceSave, &QTimer::timeout, this, [this] { store.save(); });
+  sidebarRefresh.setSingleShot(true);
+  sidebarRefresh.setInterval(0);
+  connect(&sidebarRefresh,&QTimer::timeout,this,[this]{emit sidebarChanged();});
   connect(this, &Backend::chatChanged, this, [this] {
     chat.update(view->messages);
-    emit sidebarChanged();
+    // Navigation can change the view several times before the next frame.
+    // Rebuild the sidebar once for the final state, independently of animation.
+    if(!closing && !sidebarRefresh.isActive())sidebarRefresh.start();
   });
   streaming.setSingleShot(true);
   streaming.setInterval(24);
@@ -259,12 +264,14 @@ QVariantMap Backend::metadata(QString id) const {
 }
 void Backend::setMetadata(QString id, QVariantMap values) {
   auto all = store.data["sessionMeta"].toMap();
-  auto old = all[id].toMap();
+  const auto previous=all.value(id).toMap();
+  auto old = previous;
   for (auto it = values.begin(); it != values.end(); ++it)
     old[it.key()] = it.value();
+  if(old==previous)return;
   all[id] = old;
   store.data["sessionMeta"] = all;
-  store.save();
+  if(!switchingView)store.save();
 }
 QVariantMap Backend::ensureProject(QString path, bool reopen) {
   path = U::cleanPath(path);
@@ -1153,6 +1160,7 @@ void Backend::close() {
   if (closing)
     return;
   closing = true;
+  sidebarRefresh.stop();
   if(dshRuntime)dshRuntime->close();
   dshSaveTimer.stop();dshWriter.waitForFinished();flushDsh();dshWriter.waitForFinished();dshSaveTimer.stop();
   for(auto s:records)if(s->dshPreparing){s->dshPreparing->kill();s->dshPreparing->waitForFinished(2000);}

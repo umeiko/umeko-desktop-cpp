@@ -15,4 +15,4 @@
 
 Agent 接口与实际参数见 [AGENT.md](AGENT.md)。终端原样执行用户或 Agent 输入的命令，具有当前系统用户权限。
 
-VT 状态解析使用 pyte 0.8.2（LGPL-3.0）、wcwidth 0.2.13（MIT），POSIX PTY 使用 ptyprocess 0.7.0（ISC）。可修改源码、许可证与来源校验值完整包含在 `vendor/`。重新准备依赖运行项目根目录的 `scripts/prepare-terminal-vendor.py`。
+VT 状态解析使用 pyte 0.8.2（LGPL-3.0）、wcwidth 0.2.13（MIT）。POSIX PTY 通过系统伪终端与独立启动器创建，避免在多线程 Widget 中运行 Python fork 子进程逻辑。此前使用的 ptyprocess 0.7.0（ISC）源码及许可证仍保留在 `vendor/`。重新准备依赖运行项目根目录的 `scripts/prepare-terminal-vendor.py`。

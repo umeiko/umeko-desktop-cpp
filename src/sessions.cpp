@@ -92,7 +92,9 @@ void Backend::activate(std::shared_ptr<Session> s) {
   }
   reconcileReasoning(s);
   markRead(s);
-  store.save();
+  // Fold navigation metadata/model selection into the existing deferred save.
+  // close() still flushes the final snapshot before shutting down.
+  appearanceSave.start();
   emit changed();
   emit chatChanged();
   emit viewChanged();
