@@ -1075,6 +1075,41 @@ private slots:
     int prepared=0;for(int i=0;i<3000;++i)prepared+=!g->presentation.model.data(g->presentation.model.index(i),ChatModel::MessageRole).toMap()["_loading"].toBool();QVERIFY(prepared<=256);
     QDir().mkpath(root+"/build/issue131");QVERIFY(window->grabWindow().save(root+"/build/issue131/shared-history.png"));QCOMPARE(U::sha([&]{QFile f(path);f.open(QIODevice::ReadOnly);return f.readAll();}()),digest);
   }
+  void childReplyIdentityAndRequestDetails() {
+    configureAPI();backend->newSession();window->setProperty("page","chat");window->resize(1640,1040);
+    const auto previousCharacter=backend->characterStyle()["id"].toString();backend->selectCharacter("yanami");
+    const auto cleanup=qScopeGuard([&]{upstreamError=false;backend->children->closeView();backend->newSession();backend->selectCharacter(previousCharacter);});
+    auto owner=backend->view;owner->id="child-identity-owner";
+    const auto writeHistory=[&](const QString &path,const QVariantList &messages){
+      QFile file(path);if(!file.open(QIODevice::WriteOnly))return false;
+      file.write(QJsonDocument(QJsonObject{{"type","session"},{"id","child-identity"},{"cwd",directory.path()}}).toJson(QJsonDocument::Compact)+'\n');
+      QString parent;int index=0;for(const auto &message:messages){const auto id=QString::number(index++);file.write(QJsonDocument::fromVariant(QVariantMap{{"type","message"},{"id",id},{"parentId",parent},{"message",message}}).toJson(QJsonDocument::Compact)+'\n');parent=id;}return true;
+    };
+    const auto completed=directory.filePath("child-completed-identity.jsonl");
+    QVERIFY(writeHistory(completed,{QVariantMap{{"role","user"},{"content","Check the fixture"}},QVariantMap{{"role","assistant"},{"content","Complete"},{"stopReason","stop"}}}));
+    const QStringList roles{"lemon-yakishio","chika-komari","kaju-nukumizu","yumeko-shikiya"};QSet<QString> reactions;
+    auto state=qobject_cast<ConversationState*>(backend->children->conversation());QVERIFY(state);
+    for(int slot=0;slot<roles.size();++slot){
+      const auto id="reply-role-"+QString::number(slot);backend->children->merge(owner,{{"id",id},{"avatarSlot",slot},{"status","completed"},{"outputFile",completed},{"name",roles[slot]}});backend->children->open(id);
+      QTRY_COMPARE_WITH_TIMEOUT(state->model.rowCount(),2,10000);QTRY_VERIFY_WITH_TIMEOUT(find("subagentReplyMascot_1")&&find("subagentReplyMascot_1")->isVisible(),5000);
+      QTRY_VERIFY_WITH_TIMEOUT(find("subagentReplyMascot_1")->property("loaded").toBool(),5000);QTRY_VERIFY(!find("webPane")->property("moving").toBool());
+      auto mascot=find("subagentReplyMascot_1");QVERIFY(mascot->property("portraitSource").toUrl().toString().endsWith(roles[slot]+".png"));window->grabWindow();
+      for(int tap=0;tap<3;++tap)click("subagentReplyMascot_1");
+      const auto reaction=mascot->property("reaction").toString();QVERIFY(!reaction.isEmpty());QCOMPARE(reaction,mascot->property("celebrationLine").toString());QVERIFY(!reactions.contains(reaction));reactions.insert(reaction);
+      backend->children->merge(owner,{{"id",id},{"status","running"}});QTRY_VERIFY(!mascot->isVisible());QCOMPARE(mascot->property("reaction").toString(),QString());backend->children->merge(owner,{{"id",id},{"status","completed"}});backend->children->closeView();
+    }
+    upstreamError=true;backend->send("child request-details identity fixture");QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),30000);upstreamError=false;
+    backend->chat.requestRange(0,1);QTRY_VERIFY(backend->chat.rangeReady(0,1));
+    const auto diagnostic=backend->chat.data(backend->chat.index(1,0),ChatModel::MessageRole).toMap()["diagnosticId"].toString();QVERIFY(!diagnostic.isEmpty());
+    // Read the synthetic child's native file without asking the live Pi process
+    // (which owns the real failed request) to watch an unregistered fixture ID.
+    backend->newSession();owner=backend->view;
+    const auto failed=directory.filePath("child-failed-identity.jsonl");const auto error="Child fixture failure [Umeko:"+diagnostic+"]";
+    QVERIFY(writeHistory(failed,{QVariantMap{{"role","assistant"},{"content",error},{"stopReason","error"},{"errorMessage",error}}}));
+    backend->children->merge(owner,{{"id","failed-child"},{"status","error"},{"outputFile",failed}});backend->children->open("failed-child");
+    QTRY_COMPARE_WITH_TIMEOUT(state->model.rowCount(),1,10000);QTRY_VERIFY_WITH_TIMEOUT(find("subagentRequestDetails_0")&&find("subagentRequestDetails_0")->isVisible(),5000);QTRY_VERIFY(!find("webPane")->property("moving").toBool());
+    click("subagentRequestDetails_0");QTRY_VERIFY(find("requestDetailsText")->isVisible());click("requestDetailsResponseTab");QVERIFY(find("requestDetailsText")->property("text").toString().contains("complete upstream error details"));QTest::keyClick(window,Qt::Key_Escape);
+  }
   void publishedHistoryStress() {
     configureAPI();window->setProperty("page","chat");window->resize(1320,860);
     const auto cleanup=qScopeGuard([&]{backend->newSession();});

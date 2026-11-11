@@ -9,6 +9,7 @@ Item {
     property string assistantName: "umeko"
     property url portrait: ""
     property url replyPortrait: ""
+    property int roleSlot: -1
     property int highlightRow: window ? window.searchHighlightRow : -1
     property var window: null
     property var messageModel: controller.messageModel
@@ -707,7 +708,7 @@ Item {
                         }
                     }
                     ActionButton {
-                        objectName: pane.messagePrefix === "widget" ? "widgetRequestDetails_" + messageRow.index : "requestDetails_" + messageRow.index
+                        objectName: (pane.messagePrefix ? pane.messagePrefix + "RequestDetails_" : "requestDetails_") + messageRow.index
                         selectionController: chatSelection
                         visible: !modelData._loading && !messageRow.statusNotice && !!modelData.error && (modelData.diagnosticId || "").length > 0
                         x: 33
@@ -875,7 +876,9 @@ Item {
                     ReplyMascot {
                         id: closingMascot
                         portraitSource: String(pane.replyPortrait).length ? pane.replyPortrait : String(pane.portrait).length ? pane.portrait : Character.asset("reply", "../icons/yanami-pixel.webp")
-                        interactionLabel: pane.messagePrefix ? pane.assistantName : Character.id === "yanami" ? I18n.t("八奈见：点击互动，连续点击或长按有彩蛋") : Character.style.name
+                        interactionLabel: pane.roleSlot >= 0 ? pane.assistantName + (Character.personalityEnabled ? I18n.t("：点击互动，连续点击或长按有彩蛋") : "") : pane.messagePrefix ? pane.assistantName : Character.id === "yanami" ? I18n.t("八奈见：点击互动，连续点击或长按有彩蛋") : Character.style.name
+                        tapLines: pane.roleSlot >= 0 ? Character.roleLine(pane.roleSlot, "tap", []) : pane.messagePrefix === "widget" ? [] : Character.scene("reply.tap", [])
+                        celebrationLine: pane.roleSlot >= 0 ? Character.roleLine(pane.roleSlot, "celebration", "") : pane.messagePrefix === "widget" ? "" : Character.scene("reply.celebration", "")
                         objectName: pane.messagePrefix === "subagent" ? "subagentReplyMascot_" + messageRow.index : "replyEndMascot_" + messageRow.index
                         selectionController: chatSelection
                         width: Character.id === "doubao" ? Theme.icon(72) : 56
