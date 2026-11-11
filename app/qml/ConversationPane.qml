@@ -588,14 +588,24 @@ Item {
             Component.onDestruction: bodyLoader.active = false
             required property var modelData
             required property int index
+            // A model reset can invalidate the role before Qt destroys this
+            // delegate. Keep its last geometry and unload the old body while
+            // asynchronous bindings observe a loading row instead of undefined.
+            readonly property bool hasMessage: !!modelData
+            readonly property var message: modelData || ({ _loading: true, text: "" })
+            property real lastValidHeight: 64
             readonly property bool messageSlot: true
             Component.onCompleted: conversation.scheduleRange()
             onYChanged: conversation.scheduleRange()
-            onHeightChanged: conversation.scheduleRange()
+            onHeightChanged: {
+                if (hasMessage && isFinite(height) && height > 0)
+                    lastValidHeight = height;
+                conversation.scheduleRange();
+            }
             // shown: the row's group has finished loading (see settleGroups).
             // Until then the body lays out invisibly at the estimated height.
             property bool shown: false
-            readonly property bool bodyLoaded: (bodyLoader.item !== null && bodyLoader.status === Loader.Ready) || !!modelData._loadError
+            readonly property bool bodyLoaded: (bodyLoader.item !== null && bodyLoader.status === Loader.Ready) || !!message._loadError
             readonly property bool bodyReady: shown && bodyLoader.item !== null && bodyLoader.status === Loader.Ready
             // Rows appended after a range that reached the last row (streaming)
             // belong to the open tail group and load at once.
@@ -605,7 +615,7 @@ Item {
             onBodyLoadedChanged: if (!bodyLoaded)
                 shown = false
             width: conversation.width - 16
-            height: bodyReady ? bodyLoader.item.implicitHeight : Math.max(64, modelData._estimatedHeight || pane.messageModel.estimatedHeight(index))
+            height: !hasMessage ? lastValidHeight : bodyReady && bodyLoader.item ? bodyLoader.item.implicitHeight : Math.max(64, message._estimatedHeight || pane.messageModel.estimatedHeight(index))
             Loader {
                 id: bodyLoader
                 width: parent.width
@@ -614,7 +624,7 @@ Item {
                 // in the background on a slow machine leaves the screen blank.
                 asynchronous: (rowShell.index < conversation.urgentFirst || rowShell.index > conversation.urgentLast)
                     && !(conversation.followTail && rowShell.index === conversation.count - 1)
-                active: !pane.released && !rowShell.modelData._loading && rowShell.wanted
+                active: !pane.released && rowShell.hasMessage && !rowShell.message._loading && rowShell.wanted
                 opacity: rowShell.shown ? 1 : 0
                 enabled: rowShell.shown
                 onLoaded: {
@@ -627,7 +637,7 @@ Item {
                     id: messageRow
                     objectName: pane.messagePrefix === "widget" ? "widgetChatMessage_" + index : "chatMessage_" + index
                     readonly property var replyMascot: closingMascot
-                    property var modelData: rowShell.modelData
+                    property var modelData: rowShell.message
                     property int index: rowShell.index
                     readonly property bool compactionNotice: modelData.customType === "umeko-compaction"
                     readonly property bool dshInterruptionNotice: modelData.customType === "umeko-dsh-interruption"

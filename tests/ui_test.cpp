@@ -1110,6 +1110,27 @@ private slots:
     QTRY_COMPARE_WITH_TIMEOUT(state->model.rowCount(),1,10000);QTRY_VERIFY_WITH_TIMEOUT(find("subagentRequestDetails_0")&&find("subagentRequestDetails_0")->isVisible(),5000);QTRY_VERIFY(!find("webPane")->property("moving").toBool());
     click("subagentRequestDetails_0");QTRY_VERIFY(find("requestDetailsText")->isVisible());click("requestDetailsResponseTab");QVERIFY(find("requestDetailsText")->property("text").toString().contains("complete upstream error details"));QTest::keyClick(window,Qt::Key_Escape);
   }
+  void transcriptDelegateSurvivesInvalidatedRole() {
+    configureAPI();backend->newSession();window->setProperty("page","chat");
+    QPointer<QQuickItem> shell;QVariant saved;
+    const auto cleanup=qScopeGuard([&]{if(shell && saved.isValid())shell->setProperty("modelData",saved);backend->newSession();});
+    backend->view->messages={QVariantMap{{"role","user"},{"text","Model reset fixture"}},QVariantMap{{"role","assistant"},{"text","Preserve this native message while the delegate detaches."},{"stopReason","stop"}}};emit backend->chatChanged();
+    QTRY_VERIFY_WITH_TIMEOUT(find("chatMessage_1") && find("chatMessage_1")->isVisible(),5000);
+    shell=find("chatMessage_1");while(shell && !shell->property("messageSlot").toBool())shell=shell->parentItem();QVERIFY(shell);
+    saved=shell->property("modelData");QCOMPARE(saved.toMap()["text"].toString(),QString("Preserve this native message while the delegate detaches."));
+    const auto before=warnings.size();const auto previousHeight=shell->height();
+    // Qt can invalidate a role before its asynchronous delegate is destroyed
+    // during a DSH transcript reset. Exercise that interval deterministically.
+    QVERIFY(shell->setProperty("modelData",QVariant{}));QTest::qWait(40);
+    QTRY_VERIFY_WITH_TIMEOUT(!find("chatMessage_1"),2000);
+    QVERIFY(qAbs(shell->height()-previousHeight)<.5);
+    QCOMPARE(warnings.size(),before);
+    QCOMPARE(backend->view->messages.size(),2);
+    QVERIFY(shell->setProperty("modelData",saved));
+    QTRY_VERIFY_WITH_TIMEOUT(find("chatMessage_1") && find("chatMessage_1")->isVisible(),5000);
+    QCOMPARE(find("chatMessage_1")->property("modelData").toMap()["text"],saved.toMap()["text"]);
+    backend->newSession();QTRY_COMPARE(backend->chat.rowCount(),0);QTest::qWait(40);QCOMPARE(warnings.size(),before);
+  }
   void publishedHistoryStress() {
     configureAPI();window->setProperty("page","chat");window->resize(1320,860);
     const auto cleanup=qScopeGuard([&]{backend->newSession();});
