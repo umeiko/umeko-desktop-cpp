@@ -1039,3 +1039,9 @@ void DesktopPlugins::reviewEvent(QString key, QVariantMap value) {
 bool DesktopPlugins::captureSessionApproval(QString key,QVariantMap event){return host->captureSessionApproval(key,event);}
 
 bool DesktopPlugins::prepareSession(std::shared_ptr<Session> record){return host->prepareSession(record);}
+
+QObject *DesktopPlugins::agentConversation() const{return m_page=="global-agents"?&coordinators->presentation:nullptr;}
+QObject *DesktopPlugins::selectConversation(QString id){
+  if(m_page!="global-agents"||!enabled("global-agents"))return nullptr;
+  try{return coordinators->selectConversation(id);}catch(const std::exception &e){emit b->toast(QString::fromUtf8(e.what()));return nullptr;}
+}

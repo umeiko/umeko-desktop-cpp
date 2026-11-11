@@ -6,6 +6,8 @@ import QtQuick.Window
 
 ApplicationWindow {
     id: window
+    readonly property var conversation: mainConversation.view
+    readonly property var chatSelection: mainConversation.selection
     objectName: "mainWindow"
     width: 1320; height: 860
     minimumWidth: 1060; minimumHeight: 700
@@ -418,275 +420,18 @@ ApplicationWindow {
                 Text { font.family: Theme.fontFamily; objectName: "welcomeGreeting"; anchors.horizontalCenter: parent.horizontalCenter; y: welcomeMascot.height + 21; width: parent.width; text: welcomeMascot.reactionText || welcomeMascot.rareGreeting || Character.greeting(I18n.t(backend.greeting), welcomeMascot.portraitIndex); color: Theme.yanami ? Theme.accent : Theme.muted; font.pixelSize: Theme.font(14, visible); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; lineHeight: 1.35 }
             }
 
-            ListView {
-                id: conversation; objectName: "conversation"
-                property bool followTail: true
-                property bool restoring: false
-                property real restoreOffset: -1
-                property int restoreIndex: -1
-                property int restoreAttempts: 0
-                property bool restorePositioned: false
-                function beginBrowsing() { tailTimer.stop(); restoreTimer.stop(); restoring = false; cancelFlick(); followTail = false }
-                function jumpToMessage(row) {
-                    if (row < 0 || row >= count) return
-                    beginBrowsing()
-                    chatSelection.clear()
-                    restoring = true; restoreIndex = row; restoreOffset = 0; restoreAttempts = 0; restorePositioned = false
-                    restoreTimer.restart()
-                }
-                function jumpToLatest() {
-                    beginBrowsing()
-                    chatSelection.clear()
-                    followTail = true
-                    restoring = true; restoreIndex = -1; restoreOffset = 0; restoreAttempts = 0; restorePositioned = false
-                    backend.messageModel.requestRange(Math.max(0, count - 4), count - 1)
-                    restoreTimer.restart()
-                }
-                function scrollBy(delta) {
-                    beginBrowsing()
-                    const first = itemAtIndex(0), last = itemAtIndex(count - 1)
-                    const top = first ? first.y : originY
-                    const bottom = Math.max(top, last ? last.y + last.height - height : originY + contentHeight - height)
-                    contentY = Math.max(top, Math.min(bottom, contentY + delta))
-                    if (atYEnd && !chatSelection.dragging) followTail = true
-                }
-                function saveViewport() {
-                    if (restoring) return
-                    let index = indexAt(1, contentY + 1)
-                    if (index < 0) index = indexAt(1, contentY + spacing + 2)
-                    const item = index >= 0 ? itemAtIndex(index) : null
-                    backend.saveViewport(index, item ? contentY - item.y : 0, followTail)
-                }
-                function restoreViewport() {
-                    restoring = true
-                    tailTimer.stop()
-                    restoreTimer.stop()
-                    followTail = backend.followTail
-                    restoreOffset = backend.scrollPosition
-                    restoreIndex = backend.scrollAnchor
-                    restoreAttempts = 0
-                    restorePositioned = false
-                    // Empty drafts have no scroll position to restore. A model
-                    // reset can also be briefly empty for a nonempty transcript;
-                    // use the source count so those histories still await rows.
-                    if (backend.messageCount === 0) { restoring = false; return }
-                    restoreTimer.restart()
-                }
-                acceptedButtons: Qt.NoButton
-                visible: backend.messageCount > 0
+            ConversationPane {
+                id: mainConversation
                 x: chatWidth.conversationLeft
-                // Keep text layout stable while the sidebar moves. Commit the
-                // final wrap width once, without changing the sidebar PID motion.
                 Binding on width {
                     value: chatPage.width - chatWidth.conversationLeft - chatWidth.conversationRight
                     when: !conversation.visible || !sidebarWidthMotion.moving || sidebarResizeHandle.resizing
                     restoreMode: Binding.RestoreNone
                 }
                 anchors.top: parent.top; anchors.topMargin: 20; anchors.bottom: composer.top; anchors.bottomMargin: 24
-                clip: true; spacing: 27; model: backend.messageModel
-                cacheBuffer: Math.max(0, height * 0.5)
-                // A hidden attached ScrollBar still writes contentY when its
-                // size changes. Variable-height rows must have one scroll owner.
-                onAtYEndChanged: if (atYEnd && !restoring && !chatSelection.dragging) followTail = true
-                onFollowTailChanged: saveViewport()
-                onContentYChanged: { saveViewport(); pagePrefetch.restart() }
-                Timer { id: pagePrefetch; interval: 0; onTriggered: {
-                    if (conversation.restoring) return
-                    let first = conversation.indexAt(1, conversation.contentY + 1)
-                    let last = conversation.indexAt(1, conversation.contentY + conversation.height - 1)
-                    if (first < 0) first = conversation.atYEnd ? conversation.count - 1 : 0
-                    backend.messageModel.requestRange(first, last < first ? first + 4 : last)
-                } }
-                onContentHeightChanged: if (followTail && !restoring) tailTimer.restart()
-                onCountChanged: if (followTail && !restoring) tailTimer.restart()
-                Timer { id: tailTimer; interval: 0; onTriggered: { if (conversation.followTail && !conversation.restoring) conversation.positionViewAtEnd() } }
-                Timer { id: restoreTimer; interval: 16; repeat: true
-                    onTriggered: {
-                        conversation.forceLayout()
-                        conversation.restoreAttempts++
-                        if (conversation.count===0) {
-                            if (backend.messageCount>0 && conversation.restoreAttempts<200)return
-                            stop(); conversation.restoring = false; return
-                        }
-                        if (conversation.followTail || conversation.restoreIndex < 0) {
-                            backend.messageModel.requestRange(Math.max(0,conversation.count-4),conversation.count-1)
-                            if(!backend.messageModel.rangeReady(Math.max(0,conversation.count-4),conversation.count-1) && conversation.restoreAttempts<200)return
-                            conversation.positionViewAtEnd()
-                        }
-                        else {
-                            const index = Math.min(conversation.restoreIndex, conversation.count - 1)
-                            backend.messageModel.requestRange(index,index+4)
-                            if(!backend.messageModel.rangeReady(index,index+4) && conversation.restoreAttempts<200)return
-                            if (!conversation.restorePositioned) { conversation.positionViewAtIndex(index, ListView.Beginning); conversation.restorePositioned = true; conversation.forceLayout(); return }
-                            const item = conversation.itemAtIndex(index)
-                            if (!item && conversation.restoreAttempts < 5) return
-                            if (item) {
-                                let target = item.y + Math.min(conversation.restoreOffset, item.height - 1)
-                                const last = conversation.itemAtIndex(conversation.count - 1)
-                                if (last) target = Math.min(target, last.y + last.height - conversation.height)
-                                const first = conversation.itemAtIndex(0)
-                                if (first) target = Math.max(target, first.y)
-                                conversation.contentY = target
-                            }
-                        }
-                        if (conversation.restoreAttempts >= 2) {
-                            stop()
-                            conversation.restoring = false
-                            conversation.saveViewport()
-                        }
-                    }
-                }
-                Connections { target: backend
-                    function onTranscriptChanged() { if (conversation.followTail && !conversation.restoring) tailTimer.restart() }
-                    function onViewChanged() { conversation.restoreViewport() }
-                }
-                footer: Item {
-                    width: conversation.width; height: turnStatus.visible ? turnStatus.implicitHeight + 20 : 0
-                    TaskStatus { id: turnStatus; objectName: "turnStatus"; x: 33; y: 8; status: backend.turnStatus }
-                }
-                delegate: Column {
-                    id: messageRow
-                readonly property bool compactionNotice: modelData.customType === "umeko-compaction"
-                    readonly property bool dshInterruptionNotice: modelData.customType === "umeko-dsh-interruption"
-                    readonly property bool statusNotice: compactionNotice || dshInterruptionNotice
-                    readonly property var replyMascot: closingMascot
-                    required property var modelData
-                    required property int index
-                    readonly property point hoverPoint: chatSelection.mapToItem(messageRow, chatSelection.pointer.x, chatSelection.pointer.y)
-                    readonly property bool hovered: chatSelection.hovering && hoverPoint.x >= 0 && hoverPoint.x <= width && hoverPoint.y >= 0 && hoverPoint.y <= height
-                    width: conversation.width - 16; spacing: 10
-                    onImplicitHeightChanged: if (!modelData._loading) backend.messageModel.recordHeight(index, implicitHeight)
-                    Item {
-                        visible: !!modelData._loading
-                        width: parent.width; height: modelData._estimatedHeight || 100
-                        BusyIndicator { objectName: "historyLoading_" + messageRow.index; x: 33; y: 12; width: 22; height: 22; visible: !modelData._loadError; running: visible && messageRow.visible }
-                        ActionButton { x: 33; y: 16; visible: !!modelData._loadError; text: I18n.t("重新加载消息"); glyph: "refresh-cw"; onClicked: backend.messageModel.retryPage(messageRow.index) }
-                    }
-                    Row { visible: !modelData._loading && !messageRow.statusNotice && !modelData.continuation && modelData.role !== "user"; spacing: 9
-                        AssistantAvatar { objectName: "assistantAvatar_" + messageRow.index; messageKey: window.avatarChatKey + "/" + messageRow.index }
-                        SelectableText { font.family: Theme.fontFamily; selectionController: chatSelection; messageIndex: messageRow.index; blockIndex: -100000; text: "umeko"; anchors.verticalCenter: parent.verticalCenter; color: Theme.ink; font.pixelSize: Theme.font(11, visible); font.weight: Font.DemiBold }
-                    }
-                    Rectangle {
-                        visible: !modelData._loading && !messageRow.statusNotice
-                        objectName: "messageBubble_" + messageRow.index
-                        border.width: 1; border.color: window.searchHighlightRow === messageRow.index ? Theme.accent : "transparent"
-                        Behavior on border.color { ColorAnimation { duration: 180 } }
-                        readonly property bool userMessage: modelData.role === "user"
-                        width: userMessage ? (modelData.text.length > 512 ? messageRow.width * 0.82 : Math.min(messageRow.width * 0.82, Math.max(64, userBody.implicitWidth + 28))) : parent.width - 33
-                        x: userMessage ? parent.width - width : 33
-                        height: replyColumn.implicitHeight + (userMessage ? 22 : modelData.error ? 28 : 4); radius: userMessage ? 13 : 8
-                        color: userMessage ? Theme.userBubble : modelData.error ? Theme.accentBg : "transparent"
-                        Column { id: replyColumn; x: parent.userMessage || modelData.error ? 14 : 0; y: parent.userMessage ? 11 : modelData.error ? 14 : 0; width: parent.width - x * 2; spacing: 10
-                            ActivityHistory { width: parent.width; activity: modelData.activity || []; selectionController: chatSelection; messageIndex: messageRow.index }
-                            UserMessageBody { id: userBody; width: parent.width; visible: modelData.role === "user"
-                                text: modelData.role === "user" ? modelData.text : ""; attachments: modelData.attachments || []
-                                selectionController: chatSelection; messageIndex: messageRow.index }
-                            MessageBody { id: reply; width: parent.width
-                                preparedBlocks: modelData._rendered || null
-                                selectionController: chatSelection; messageIndex: messageRow.index
-                                visible: modelData.role !== "user" && text.length > 0 && !(modelData.activity || []).length
-                                text: modelData.role === "user" || (modelData.activity || []).length ? "" : modelData.text || (messageRow.index === conversation.count - 1 && backend.busy ? backend.toolStatus + "…" : "")
-                                markdown: modelData.role === "assistant" && !modelData.error
-                                textColor: modelData.error ? Theme.danger : Theme.ink }
-                        }
-                    }
-                    ActionButton {
-                        objectName: "requestDetails_" + messageRow.index
-                        selectionController: chatSelection
-                        visible: !!modelData.error && (modelData.diagnosticId || "").length > 0
-                        x: 33; text: I18n.t("查看请求与返回"); glyph: "code"; quiet: true
-                        onClicked: requestInspector.show(modelData.diagnosticId)
-                    }
-                    Column {
-                        id: compactionEvent
-                        objectName: "compactionEvent_" + messageRow.index
-                        x: 33; width: parent.width - 33
-                        visible: !modelData._loading && messageRow.compactionNotice
-                        readonly property var record: modelData.compaction || ({})
-                        readonly property string eventState: record.state || "success"
-                        readonly property string heading: eventState === "running" ? I18n.t("正在压缩上下文") : eventState === "failure" ? I18n.t("上下文压缩失败") : I18n.t("上下文已压缩")
-                        property bool expanded: false
-                        spacing: 6
-                        onExpandedChanged: if (!expanded) chatSelection.hideDetails(messageRow.index, 0, 1)
-                        Item {
-                            width: Math.min(parent.width, compactionHeading.implicitWidth); height: Theme.control(24)
-                            Row {
-                                id: compactionHeading; height: parent.height; spacing: 7
-                                ActivitySpinner { visible: compactionEvent.eventState === "running"; width: Theme.icon(12); height: Theme.icon(12); anchors.verticalCenter: parent.verticalCenter }
-                                Text { font.family: Theme.fontFamily; text: compactionEvent.heading; color: compactionHover.interactionHovered ? Theme.ink : Theme.muted; font.pixelSize: Theme.font(12, visible); anchors.verticalCenter: parent.verticalCenter }
-                                Glyph { name: compactionEvent.expanded ? "chevron-down" : "chevron-right"; width: Theme.icon(12); height: Theme.icon(12); anchors.verticalCenter: parent.verticalCenter }
-                            }
-                            ChatHitArea {
-                                id: compactionHover; objectName: "compactionEventToggle_" + messageRow.index
-                                anchors.fill: parent; selectionController: chatSelection
-                                onClicked: compactionEvent.expanded = !compactionEvent.expanded
-                            }
-                            Accessible.role: Accessible.Button; Accessible.name: compactionEvent.heading
-                            Accessible.description: compactionEvent.expanded ? I18n.t("已展开") : I18n.t("已折叠")
-                        }
-                        Item {
-                            visible: compactionEvent.expanded
-                            width: parent.width; height: compactionDetails.implicitHeight
-                            Rectangle { width: 1; height: parent.height; color: Theme.line; x: 6 }
-                            SelectableText {
-                                id: compactionDetails; objectName: "compactionEventDetails_" + messageRow.index
-                                x: 23; width: parent.width - x
-                                text: {
-                                    const detail = compactionEvent.record, lines = []
-                                    if (typeof detail.before === "number") lines.push(I18n.t("压缩前：") + detail.before + " tokens")
-                                    if (typeof detail.after === "number") lines.push(I18n.t("压缩后：") + detail.after + " tokens")
-                                    if (detail.summary) lines.push("\n" + I18n.t("压缩摘要") + "\n" + detail.summary)
-                                    if (detail.error) lines.push("\n" + I18n.t(detail.error))
-                                    return lines.join("\n")
-                                }
-                                color: Theme.muted; font.pixelSize: Theme.font(13, visible); wrapMode: TextEdit.Wrap; textFormat: TextEdit.PlainText
-                                selectionController: chatSelection; messageIndex: messageRow.index; blockIndex: 0
-                                conditionalSelection: true
-                            }
-                        }
-                    }
-                    SelectableText {
-                        objectName: "dshInterruptionNotice_" + messageRow.index
-                        visible: !modelData._loading && messageRow.dshInterruptionNotice
-                        x: 33; width: parent.width - 33
-                        text: I18n.t("已停止上一条请求"); textFormat: TextEdit.PlainText
-                        color: Theme.muted; font.family: Theme.fontFamily; font.pixelSize: Theme.font(11, visible)
-                        selectionController: chatSelection; messageIndex: messageRow.index; blockIndex: 0
-                    }
-                    OutputLimitNotice {
-                        objectName: "outputLimitNotice_" + messageRow.index
-                        x: 33; width: parent.width - 33
-                        visible: !messageRow.statusNotice && modelData.role === "assistant" && modelData.stopReason === "length"
-                        continuable: messageRow.index === conversation.count - 1 && !backend.busy
-                        onContinued: backend.send(I18n.t("继续刚才未完成的回答，从中断处接着输出，不要重复已有内容。"))
-                    }
-                    Item {
-                        objectName: "messageActions_" + messageRow.index
-                        visible: !messageRow.statusNotice
-                        width: parent.width; height: 18
-                        opacity: messageRow.hovered || actionHover.hovered ? 1 : 0
-                        HoverHandler { id: actionHover }
-                        Row {
-                            x: modelData.role === "user" ? parent.width - width : 33
-                            height: parent.height; spacing: 7
-                            Text { font.family: Theme.fontFamily; objectName: "messageTime_" + messageRow.index; anchors.verticalCenter: parent.verticalCenter; color: Theme.muted; font.pixelSize: Theme.font(11, visible)
-                                text: { if (!modelData.timestamp) return ""; const date = new Date(modelData.timestamp); if (isNaN(date.getTime())) return ""; return Qt.formatDateTime(date, date.toDateString() === new Date().toDateString() ? "hh:mm" : "MM-dd hh:mm") } }
-                            ActionButton { objectName: "copyMessage_" + messageRow.index; selectionController: chatSelection; glyph: "copy"; width: Theme.control(22); height: Theme.control(18); quiet: true; enabled: parent.parent.opacity > 0; hint: I18n.t("复制消息")
-                                onClicked: { const activity = modelData.activity || []; const prose = activity.filter(item => item.kind === "text").map(item => item.text).join("\n\n"); backend.copy([prose || modelData.text || "", ...(modelData.attachments || []).map(item => item.name)].filter(part => !!part).join("\n")) } }
-                        }
-                    }
-                    ReplyMascot {
-                        id: closingMascot
-                        objectName: "replyEndMascot_" + messageRow.index
-                        selectionController: chatSelection
-                        width: Character.id === "doubao" ? Theme.icon(72) : 56
-                        visible: !modelData._loading && !messageRow.statusNotice && messageRow.index === conversation.count - 1 && modelData.role === "assistant" && !modelData.error && (modelData.text || "").trim().length > 0 && !backend.running && (backend.turnStatus.state === "finished" || modelData.stopReason === "stop")
-                        x: 33
-                    }
-                }
+                viewKey: window.avatarChatKey; highlightRow: window.searchHighlightRow
+                blocked: chatCover.visible
             }
-
-            ChatSelection { id: chatSelection; anchors.fill: conversation; view: conversation; visible: conversation.visible; enabled: !chatCover.visible }
             ReplyMascot {
                 id: widthLimitMascot; objectName: "chatWidthLimitMascot"
                 x: composer.x+33; y: Math.max(0,composer.y-height-12); z: 50
@@ -696,7 +441,7 @@ ApplicationWindow {
 
             QuestionNavigator {
                 anchors.right: parent.right
-                anchors.top: conversation.top; anchors.bottom: conversation.bottom
+                anchors.top: mainConversation.top; anchors.bottom: mainConversation.bottom
                 view: conversation; enabled: !chatCover.visible; z: 20
             }
             ActionButton {

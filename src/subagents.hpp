@@ -1,5 +1,5 @@
 #pragma once
-#include "chatmodel.hpp"
+#include "conversation_state.hpp"
 #include <memory>
 class Backend;
 struct Session;
@@ -17,7 +17,9 @@ class Subagents : public QObject {
   Q_PROPERTY(
       QVariantList queuedMessages READ queuedMessages NOTIFY queueChanged)
 public:
+  Q_PROPERTY(QObject *conversation READ conversation CONSTANT)
   explicit Subagents(Backend *backend);
+  QObject *conversation(){return &presentation;}
   QVariantList agents() const;
   QVariantList activeAgents() const;
   int activeCount() const { return activeAgents().size(); }
@@ -54,7 +56,10 @@ signals:
 
 private:
   Backend *b;
-  ChatModel model;
+  ConversationState presentation;
+  ChatModel &model;
+  bool fullHistory=false, historyRead=false;
+  QVariantList pendingLive, pendingEvents;
   std::shared_ptr<Session> owner;
   QString selectedId, error;
   bool loading = false, truncated = false;
@@ -70,7 +75,7 @@ private:
   bool submit(QString text, bool interrupt);
   bool queueCommand(QString action, QString id = {});
   void restore(std::shared_ptr<Session> record, QString id, QVariantList items);
-  void loadFile(QString path);
+  void loadFile(QString path, QString leaf = {});
   void publish();
   void liveEvent(QVariantMap event);
 };

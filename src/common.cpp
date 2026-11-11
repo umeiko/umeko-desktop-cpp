@@ -539,7 +539,7 @@ QVariantMap U::compactionStatus(QVariantMap row,QString active) {
   if(row["customType"]=="umeko-compaction" && data["version"].toInt()==2 && data["state"]=="running" && data["eventId"]!=active){data["state"]="failure";data["error"]="Compaction interrupted";row["compaction"]=data;}
   return row;
 }
-QPair<QVariantList, QVariantList> U::preview(const QString &file, qint64 limit) {
+QPair<QVariantList, QVariantList> U::preview(const QString &file, qint64 limit, const QString &leaf) {
   QFile f(file);
   if (!f.open(QIODevice::ReadOnly))
     return {};
@@ -560,6 +560,7 @@ QPair<QVariantList, QVariantList> U::preview(const QString &file, qint64 limit) 
       entries[last] = e;
     }
   }
+  if (!leaf.isEmpty()) last = leaf;
   QList<QVariantMap> branch;
   QSet<QString> seen;
   while (entries.contains(last) && !seen.contains(last)) {

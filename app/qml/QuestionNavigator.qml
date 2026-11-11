@@ -5,7 +5,8 @@ Item {
     id: root
     objectName: "questionNavigator"
     property var view
-    property var questions: backend.messageModel.questions
+    property var messageModel: backend.messageModel
+    property var questions: root.messageModel.questions
     property int activeQuestion: -1
     property real openY: height / 2
     readonly property bool expanded: panel.visible

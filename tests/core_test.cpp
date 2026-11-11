@@ -10,6 +10,22 @@
 class CoreTests : public QObject {
   Q_OBJECT
 private slots:
+  void sharedViewportGroupsAndCompactionWindow() {
+    ChatModel model;QVariantList rows;
+    for(int i=0;i<600;++i)rows<<QVariantMap{{"role",i%2?"assistant":"user"},{"text",QString("row %1").arg(i)}};
+    model.update(rows);QTRY_COMPARE(model.rowCount(),600);model.setGroupHeight(800);
+    QVERIFY(model.groupCount()>1);QCOMPARE(model.groupFirst(0),0);QCOMPARE(model.groupLast(model.groupCount()-1),599);
+    const auto first=model.groupFirst(model.groupOf(230)),last=model.groupLast(model.groupOf(230));
+    model.requestGroups(230,233,1);QTRY_VERIFY(model.rangeReady(first,last));
+    int prepared=0;for(int i=0;i<600;++i)prepared+=!model.data(model.index(i),ChatModel::MessageRole).toMap()["_loading"].toBool();QVERIFY(prepared<=256);
+    model.recordHeight(230,450);QCOMPARE(model.estimatedHeight(230),450.0);model.setLayout("narrow");QVERIFY(model.estimatedHeight(230)!=450);
+    auto receipt=[](QString id,QString state){return QVariantMap{{"role","assistant"},{"customType","umeko-compaction"},{"compaction",QVariantMap{{"eventId",id},{"state",state}}}};};
+    QVariantList history{rows[0],receipt("one","success"),rows[1],receipt("two","success"),rows[2],receipt("failed","failure"),rows[3]};
+    auto source=history;auto window=ChatModel::recentCompactionInterval(history);QCOMPARE(window.size(),6);QCOMPARE(window.first(),history[1]);QCOMPARE(history,source);
+    history<<receipt("three","running")<<receipt("three","success")<<rows[4];
+    window=ChatModel::recentCompactionInterval(history);QCOMPARE(window.first(),history[3]);QCOMPARE(window.last(),rows[4]);QVERIFY(window.contains(history[5]));
+  }
+
   void modelReasoningLevels() {
     const auto unknown = U::normalizeModel({});
     QVERIFY(U::reasoningLevels(unknown).isEmpty()); // Unknown automatic capability must not invent levels.

@@ -13,7 +13,19 @@ QStringList avatars{"lemon-yakishio", "chika-komari", "kaju-nukumizu",
                     "yumeko-shikiya"};
 } // namespace
 Subagents::Subagents(Backend *backend)
-    : QObject(backend), b(backend), model(this) {
+    : QObject(backend), b(backend), presentation(this), model(presentation.model) {
+  presentation.compact=[this]{if(owner)command(owner,{{"action","compact"},{"id",selectedId},{"requestId",U::uuid()}});};
+  presentation.submit=[this](QString text){return send(text);};
+  connect(this,&Subagents::changed,this,[this]{presentation.busy=active(selected())||!presentation.status.isEmpty();emit presentation.chatChanged();});
+  connect(&presentation,&ConversationState::sourceLoaded,this,[this](QVariantList rows,QString message){
+    messages=rows;
+    for(auto value:pendingLive){auto live=value.toMap();bool merged=false;
+      if(live["customType"]=="umeko-compaction")for(auto &message:messages){auto row=message.toMap();if(row["compaction"].toMap()["eventId"]==live["compaction"].toMap()["eventId"]){row["compaction"]=live["compaction"];message=row;merged=true;break;}}
+      if(!merged)messages<<value;
+    }
+    pendingLive.clear();fullHistory=true;historyRead=false;loading=false;error=message;truncated=false;
+    const auto events=std::exchange(pendingEvents,{});for(auto event:events)liveEvent(event.toMap());publish();
+  });
   stream.setSingleShot(true);
   stream.setInterval(32);
   connect(&stream, &QTimer::timeout, this, &Subagents::publish);
@@ -187,6 +199,7 @@ void Subagents::open(QString id) {
   closeView();
   owner = record;
   selectedId = id;
+  presentation.switchTo(key(owner,id));
   loading = true;
   error.clear();
   truncated = false;
@@ -199,9 +212,10 @@ void Subagents::open(QString id) {
     if (!record->ready && !file.isEmpty())
       loadFile(file);
     command(record, {{"action", "watch"}, {"id", id}});
-  } else if (!file.isEmpty())
+  } else if (!file.isEmpty()) {
+    presentation.canCompact=!record->model.isEmpty();
     loadFile(file);
-  else if (!command(record, {{"action", "watch"}, {"id", id}})) {
+  } else if (!command(record, {{"action", "watch"}, {"id", id}})) {
     loading = false;
     error = "暂时无法加载子代理上下文";
     emit contextChanged();
@@ -221,6 +235,8 @@ void Subagents::closeView() {
   owner.reset();
   selectedId.clear();
   messages.clear();
+  fullHistory=false;historyRead=false;pendingLive.clear();pendingEvents.clear();
+  presentation.switchTo({});
   model.update({});
   loading = false;
   error.clear();
@@ -479,11 +495,15 @@ void Subagents::handle(std::shared_ptr<Session> record, QVariantMap event) {
     }
     emit contextChanged();
   } else if (record == owner && id == selectedId) {
+    if(type=="subagent_usage"){presentation.usage=event["usage"].toMap();presentation.busy=event["busy"].toBool();presentation.canCompact=event["compactAvailable"].toBool();emit presentation.chatChanged();return;}
     if (type == "subagent_context") {
       ++generation;
       error.clear();
+      presentation.usage=event["usage"].toMap();
+      presentation.canCompact=event["compactAvailable"].toBool();
+      emit presentation.chatChanged();
       if (!event["file"].toString().isEmpty())
-        loadFile(event["file"].toString());
+        {pendingLive=event["live"].toList();pendingEvents.clear();loadFile(event["file"].toString(),event["leafId"].toString());}
       else {
         messages = event["messages"].toList();
         truncated = event["truncated"].toBool();
@@ -495,8 +515,19 @@ void Subagents::handle(std::shared_ptr<Session> record, QVariantMap event) {
   }
 }
 void Subagents::liveEvent(QVariantMap event) {
+  if(historyRead){pendingEvents<<event;return;}
   loading = false;
   const auto type = event["type"].toString();
+  if(type=="compaction_event"){
+    auto row=U::compactionView({{"type","custom"},{"customType","umeko-compaction"},{"data",event},{"id",event["entryId"]},{"timestamp",event["timestamp"]}});
+    if(!row.isEmpty()){
+      int found=-1;for(int i=0;i<messages.size();++i)if(messages[i].toMap()["compaction"].toMap()["eventId"]==event["eventId"]){found=i;break;}
+      if(found<0)messages<<row;else{auto previous=messages[found].toMap();previous["compaction"]=row["compaction"];messages[found]=previous;}
+      presentation.status=event["state"]=="running"?"正在压缩上下文":"";presentation.busy=!presentation.status.isEmpty()||active(selected());
+    }
+    publish();return;
+  }
+
   if (type == "user_start")
     messages << QVariantMap{{"role", "user"},
                             {"text", event["text"].toString().right(131072)},
@@ -556,7 +587,7 @@ void Subagents::liveEvent(QVariantMap event) {
     stream.start();
 }
 void Subagents::publish() {
-  if (messages.size() > 200) {
+  if (!fullHistory && messages.size() > 200) {
     messages = messages.mid(messages.size() - 200);
     truncated = true;
   }
@@ -566,39 +597,17 @@ void Subagents::publish() {
     weight += m["text"].toString().size() + m["thinking"].toString().size();
     for (auto t : m["tools"].toList())
       weight += t.toMap()["result"].toString().size() + 16384;
-    if (weight > 1024 * 1024 && i < messages.size() - 1) {
+    if (!fullHistory && weight > 1024 * 1024 && i < messages.size() - 1) {
       messages = messages.mid(i + 1);
       truncated = true;
       break;
     }
   }
-  model.update(messages);
+  presentation.update(messages);
   emit contextChanged();
 }
-void Subagents::loadFile(QString path) {
-  const auto token = ++generation;
-  loading = true;
-  emit contextChanged();
-  auto watcher = new QFutureWatcher<QVariantMap>(this);
-  connect(watcher, &QFutureWatcher<QVariantMap>::finished, this,
-          [this, watcher, token] {
-            auto result = watcher->result();
-            watcher->deleteLater();
-            if (token != generation)
-              return;
-            loading = false;
-            error = result["error"].toString();
-            truncated = result["truncated"].toBool();
-            messages = result["messages"].toList();
-            publish();
-          });
-  watcher->setFuture(QtConcurrent::run([path] {
-    if (!QFileInfo(path).isFile())
-      return QVariantMap{{"error", "子代理的会话文件已不存在"}};
-    auto rows = U::preview(path, 4 * 1024 * 1024).first;
-    return QVariantMap{{"messages", rows},
-                       {"truncated", QFileInfo(path).size() > 4 * 1024 * 1024}};
-  }));
+void Subagents::loadFile(QString path,QString leaf) {
+  ++generation;loading=true;emit contextChanged();historyRead=true;presentation.load(path,leaf);
 }
 void Subagents::close() {
   closeView();

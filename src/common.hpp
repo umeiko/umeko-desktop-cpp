@@ -40,7 +40,7 @@ QVariantMap toolView(QString id, QString name, QVariantMap arguments,
                      QString cwd, QVariantMap result = {});
 QVariantList mediaView(QVariantList items);
 QString documentKind(QString path, QString kind = {});
-QPair<QVariantList, QVariantList> preview(const QString &file, qint64 limit = 0);
+QPair<QVariantList, QVariantList> preview(const QString &file, qint64 limit = 0, const QString &leaf = {});
 QString attachmentPrompt(QString text, QVariantList attachments);
 QPair<QString, QVariantList> splitAttachments(QString text);
 } // namespace U

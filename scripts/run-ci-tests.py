@@ -29,7 +29,7 @@ SHARED = [['node', '--test', '--test-concurrency=2', 'tests/background-jobs.test
   'tests/auxiliary-vision-bridge.test.mjs', 'tests/generation.test.mjs',
   'tests/native-generation.test.mjs', 'tests/widget-market.test.mjs'],
  ['python', '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_native_*.py'],
- ['node', '--test', '--test-concurrency=2', 'tests/subagents.test.mjs',
+ ['node', '--test', '--test-concurrency=2', 'tests/subagents.test.mjs', 'tests/subagent-context.test.mjs',
   'tests/subagent-ui.test.mjs', 'tests/subagent-queue.test.mjs', 'tests/rpc-ui.test.mjs'],
  ['python', '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_release_retention.py'],
  ['python', '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_release_replacement.py'],

@@ -34,6 +34,9 @@ public:
   Q_INVOKABLE void setSessionEnabled(QString id, bool enabled);
   Q_INVOKABLE bool openPage(QString id);
   Q_INVOKABLE void closePage();
+  Q_INVOKABLE QObject *selectConversation(QString id);
+  Q_PROPERTY(QObject *agentConversation READ agentConversation NOTIFY pageChanged)
+  QObject *agentConversation() const;
   Q_INVOKABLE QString call(QString method, QString arguments);
   Q_INVOKABLE QString saveConfig(QString id, QString raw);
   Q_INVOKABLE QString settingsCall(QString id, QString method, QString raw);

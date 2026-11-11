@@ -1033,6 +1033,48 @@ private slots:
     backend->chat.requestRange(2396,2399);QTRY_VERIFY_WITH_TIMEOUT(backend->chat.rangeReady(2396,2399),5000);
     QVERIFY(backend->chat.data(backend->chat.index(2399,0),ChatModel::MessageRole).toMap()["text"].toString().contains("2399"));
   }
+  void sharedAgentHistoryNavigation() {
+    configureAPI();backend->newSession();window->setProperty("page","chat");window->resize(1640,1040);
+    auto owner=backend->view;owner->id="shared-agent-owner";
+    const auto path=directory.filePath("shared-agent-history.jsonl");QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(QJsonObject{{"type","session"},{"id","shared-child"},{"cwd",directory.path()}}).toJson(QJsonDocument::Compact)+'\n');
+    QString parent;
+    for(int i=0;i<3000;++i){auto id=QString::number(i);file.write(QJsonDocument(QJsonObject{{"type","message"},{"id",id},{"parentId",parent},{"message",QJsonObject{{"role",i%2?"assistant":"user"},{"content",QString("Question %1\n\n**Shared history**\n\n```python\nprint(%1)\n```").arg(i)},{"timestamp",1700000000000.0+i},{"stopReason","stop"}}}}).toJson(QJsonDocument::Compact)+'\n');parent=id;}file.close();
+    const auto digest=U::sha([&]{QFile f(path);f.open(QIODevice::ReadOnly);return f.readAll();}());
+    backend->children->merge(owner,{{"id","shared-child"},{"status","completed"},{"outputFile",path},{"avatarSlot",0},{"task","完整历史与阅读位置"}});
+    auto child=qobject_cast<ConversationState*>(backend->children->conversation());QVERIFY(child);
+    QElapsedTimer clock;clock.start();qint64 last=0,gap=0;QTimer heartbeat;heartbeat.setInterval(10);connect(&heartbeat,&QTimer::timeout,this,[&]{auto now=clock.elapsed();gap=qMax(gap,now-last);last=now;});heartbeat.start();
+    QVariantList samples;
+    for(int n=0;n<3;++n){QElapsedTimer timing;timing.start();backend->children->open("shared-child");
+      QTRY_COMPARE_WITH_TIMEOUT(child->model.rowCount(),3000,10000);QTRY_VERIFY_WITH_TIMEOUT(find("subagentConversation"),10000);QTRY_VERIFY_WITH_TIMEOUT(!find("subagentConversation")->property("restoring").toBool(),10000);samples<<timing.elapsed();
+      if(n==0){QVERIFY(QMetaObject::invokeMethod(find("subagentConversation"),"jumpToMessage",Q_ARG(QVariant,1200)));QTRY_VERIFY_WITH_TIMEOUT(!find("subagentConversation")->property("restoring").toBool(),5000);QTRY_VERIFY(child->model.rangeReady(1200,1203));child->saveViewport(1200,0,false);}
+      else QVERIFY(!child->follow);
+      backend->children->closeView();QTest::qWait(30);
+    }
+    heartbeat.stop();qInfo()<<"Shared child history cold/warm(ms):"<<samples<<"UI max gap(ms):"<<gap<<"platform:"<<QGuiApplication::platformName();QVERIFY(gap<1000);
+    backend->children->open("shared-child");QTRY_VERIFY(find("subagentContextUsage"));
+    child->usage={{"tokens",3200},{"contextWindow",10000},{"percent",32.0},{"model","child-model"}};child->canCompact=true;child->busy=false;emit child->chatChanged();
+    auto originalChildCompact=child->compact;const auto restoreCompact=qScopeGuard([&]{child->compact=originalChildCompact;});int childCompactions=0;child->compact=[&]{++childCompactions;};
+    QTRY_VERIFY(!find("webPane")->property("moving").toBool());auto childRing=find("subagentContextUsage");QTRY_COMPARE(childRing->property("fraction").toDouble(),.32);
+    QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point(childRing));
+    auto childPopup=childRing->findChild<QObject*>("compactContextPopup");QVERIFY(childPopup);QTRY_VERIFY(childPopup->property("visible").toBool());
+    auto childAction=childPopup->findChild<QQuickItem*>("compactContextAction");QVERIFY(childAction);QTRY_VERIFY(childAction->isEnabled());QTRY_VERIFY(!childPopup->property("animating").toBool());QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point(childAction));QTRY_COMPARE(childCompactions,1);
+    backend->children->closeView();
+    auto manager=backend->desktopExtensions;auto g=manager->globalAgents();QVERIFY(g);QVERIFY(!manager->selectConversation("forbidden"));
+    manager->setEnabled("global-agents",true);QVERIFY(manager->openPage("global-agents"));QTRY_VERIFY(find("globalAgentsPage"));
+    auto created=g->ui("create",{{"name","共享历史验收"}});QVERIFY(created["ok"].toBool());auto id=created["result"].toMap()["id"].toString();auto record=g->ensure(id);record->file=path;record->usage={{"tokens",3200},{"contextWindow",10000},{"percent",32.0},{"model",record->model}};
+    const auto cleanup=qScopeGuard([&]{g->ui("delete",{{"id",id}});manager->closePage();backend->newSession();});
+    QVERIFY(QMetaObject::invokeMethod(find("globalAgentsPage"),"openAgent",Q_ARG(QVariant,id)));
+    QTRY_COMPARE_WITH_TIMEOUT(g->presentation.model.rowCount(),3000,10000);QTRY_VERIFY(find("globalAgentConversation"));QCOMPARE(g->presentation.model.questions().size(),1500);QCOMPARE(g->presentation.usage["percent"].toDouble(),32.0);g->changed(false);QTest::qWait(100);QCOMPARE(g->presentation.model.rowCount(),3000);
+    QTRY_VERIFY(find("globalAgentContextUsage"));auto ring=find("globalAgentContextUsage");QTRY_COMPARE(ring->property("fraction").toDouble(),.32);
+    auto originalCompact=g->presentation.compact;const auto restoreGlobalCompact=qScopeGuard([&]{g->presentation.compact=originalCompact;});int globalCompactions=0;g->presentation.compact=[&]{++globalCompactions;};g->presentation.canCompact=true;g->presentation.busy=false;emit g->presentation.chatChanged();
+    QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point(ring));auto popup=ring->findChild<QObject*>("compactContextPopup");QVERIFY(popup);QTRY_VERIFY(popup->property("visible").toBool());auto action=popup->findChild<QQuickItem*>("compactContextAction");QVERIFY(action);QTRY_VERIFY(action->isEnabled());QTRY_VERIFY(!popup->property("animating").toBool());QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point(action));QTRY_COMPARE(globalCompactions,1);QCOMPARE(childCompactions,1);
+    g->presentation.compact=originalCompact;
+    auto navigator=find("globalAgentConversationQuestions");QVERIFY(navigator);QVERIFY(QMetaObject::invokeMethod(navigator,"jump",Q_ARG(QVariant,10)));
+    QTRY_VERIFY(g->presentation.model.rangeReady(20,23));QCOMPARE(g->presentation.token,"global/"+id);QVERIFY(backend->view==owner);
+    int prepared=0;for(int i=0;i<3000;++i)prepared+=!g->presentation.model.data(g->presentation.model.index(i),ChatModel::MessageRole).toMap()["_loading"].toBool();QVERIFY(prepared<=256);
+    QDir().mkpath(root+"/build/issue131");QVERIFY(window->grabWindow().save(root+"/build/issue131/shared-history.png"));QCOMPARE(U::sha([&]{QFile f(path);f.open(QIODevice::ReadOnly);return f.readAll();}()),digest);
+  }
   void publishedHistoryStress() {
     configureAPI();window->setProperty("page","chat");window->resize(1320,860);
     const auto cleanup=qScopeGuard([&]{backend->newSession();});
@@ -1051,7 +1093,7 @@ private slots:
     QVariantList samples;
     for(int iteration=0;iteration<4;++iteration){backend->newSession();QSignalSpy ready(backend->previewLoader,&SessionPreview::ready);QElapsedTimer timing;timing.start();
       backend->previewLoader->prepare("published-stress",7000+iteration);QTRY_VERIFY_WITH_TIMEOUT(!ready.isEmpty(),10000);QVERIFY(ready.last()[1].toBool());
-      QVERIFY(backend->previewLoader->activate(7000+iteration));QTRY_COMPARE_WITH_TIMEOUT(backend->chat.rowCount(),6000,5000);QTRY_VERIFY_WITH_TIMEOUT(backend->chat.rangeReady(5996,5999),5000);QTRY_VERIFY_WITH_TIMEOUT(!find("conversation")->property("restoring").toBool(),5000);QVERIFY(backend->scrollAnchor()>5980);samples<<timing.elapsed();
+      QVERIFY(backend->previewLoader->activate(7000+iteration));QTRY_COMPARE_WITH_TIMEOUT(backend->chat.rowCount(),6000,5000);QTRY_VERIFY_WITH_TIMEOUT(backend->chat.rangeReady(5996,5999),5000);QTRY_VERIFY_WITH_TIMEOUT(!find("conversation")->property("restoring").toBool(),5000);qInfo()<<"Restore diagnostic"<<iteration<<backend->scrollAnchor()<<find("conversation")->property("restoreIndex")<<find("conversation")->property("restoreAttempts")<<find("conversation")->property("contentY")<<find("conversation")->property("followTail");QVERIFY(backend->scrollAnchor()>5980);samples<<timing.elapsed();
       QVERIFY(backend->chat.data(backend->chat.index(5999),ChatModel::MessageRole).toMap()["text"].toString().size()<1000);
     }
     phase="rapid switching";

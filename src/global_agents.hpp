@@ -1,5 +1,6 @@
 #pragma once
 #include "common.hpp"
+#include "conversation_state.hpp"
 #include <memory>
 class Backend;
 class DesktopPlugins;
@@ -9,6 +10,9 @@ class GlobalAgents : public QObject {
   Q_OBJECT
 public:
   explicit GlobalAgents(DesktopPlugins *manager);
+  ConversationState presentation;
+  QString selectedConversation;
+  QObject *selectConversation(QString id);
   void start();
   void stop();
   void close();
@@ -29,7 +33,7 @@ private:
   bool active = false;
   bool allowAutomaticCreation = false;
   int revision = 0;
-  QTimer timer, saveTimer;
+  QTimer timer, saveTimer, chatRefresh;
   QList<QPointer<QProcess>> retiring;
   void changed(bool persist = true);
   void save();
@@ -53,7 +57,7 @@ private:
   bool ownsCreation(QVariantMap row, std::shared_ptr<Session> caller) const;
   int creationIndex(QString id) const;
   void notifyCreation(QVariantMap row);
-  QVariantMap snapshot(QString selected) const;
+  QVariantMap snapshot(QString selected, bool includeMessages=true) const;
   QVariantMap handle(QString method, QVariantMap args, bool agent);
   void finish(QString id, QString status, QString result);
   void enqueue(QString target, QVariantMap request, QString message, bool wake);

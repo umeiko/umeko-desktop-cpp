@@ -154,7 +154,7 @@ bool ChatModel::rangeReady(int first,int last) const {
 }
 void ChatModel::switchContext(QString token) {
   if(context==token)return;
-  context=token;++revision;input.clear();pendingInput.clear();prepared.clear();cached.clear();heights.clear();
+  context=token;groups.clear();priority.clear();++revision;input.clear();pendingInput.clear();prepared.clear();cached.clear();heights.clear();
   beginResetModel();rows.clear();questionRows.clear();endResetModel();emit questionsChanged();
 }
 void ChatModel::seed(QVariantList messages,QVariantList projected,int anchor) {
@@ -178,7 +178,7 @@ void ChatModel::projectPending() {
   });watcher->setFuture(QtConcurrent::run([snapshot]{return project(snapshot);}));
 }
 void ChatModel::publish(QVariantList projected) {
-  ++revision;
+  ++revision;groups.clear();
   if(projected.size()<rows.size())for(auto i:prepared.keys())if(i>=projected.size()){prepared.remove(i);cached.removeAll(i);}
   auto common = qMin(rows.size(), projected.size());
   bool questionsDirty = rows.size() != projected.size();
@@ -257,12 +257,13 @@ QVariantMap renderMessage(QVariantMap row) {
 }
 void ChatModel::requestRange(int first,int last) {
   wantedFirst=qMax(0,first-4);wantedLast=qMin(int(rows.size())-1,qMax(first,last)+6);
+  priority.clear();for(int i=qMax(0,first);i<=qMin(last,int(rows.size())-1);++i)priority<<i;for(int i=wantedFirst;i<=wantedLast;++i)if(!priority.contains(i))priority<<i;
   renderRange();
 }
 void ChatModel::renderRange() {
   if(!paged() || rendering || rows.isEmpty())return;
   QList<int> indices;QVariantList values;
-  for(int i=wantedFirst;i<=wantedLast && indices.size()<32;++i)if(!prepared.contains(i)){indices<<i;values<<rows[i];}
+  for(int i:priority)if(i>=0 && i<rows.size() && indices.size()<32 && !prepared.contains(i)){indices<<i;values<<rows[i];}
   if(indices.isEmpty())return;
   rendering=true;
   auto watcher=new QFutureWatcher<QVariantList>(this);
@@ -278,4 +279,34 @@ void ChatModel::renderRange() {
     renderRange();
   });
   watcher->setFuture(QtConcurrent::run([values]{QVariantList result;for(const auto &v:values)result<<renderMessage(v.toMap());return result;}));
+}
+
+double ChatModel::hint(int row) const {
+  if(row<0||row>=rows.size())return 100;
+  auto message=rows[row].toMap();QString text;int headers=0;const auto activity=message["activity"].toList();
+  if(activity.isEmpty())text=message["text"].toString();else for(auto value:activity){auto step=value.toMap();if(step["kind"]=="text")text+=step["text"].toString()+"\n";else ++headers;}
+  return qBound(80.0,70.0+headers*24+qMax(double(text.count('\n')),text.size()/70.0)*22,50000.0);
+}
+double ChatModel::estimatedHeight(int row) const{return heights.value(row,hint(row));}
+double ChatModel::spanHeight(int first,int last) const{double sum=0;for(int i=qMax(0,first);i<=qMin(last,int(rows.size())-1);++i)sum+=estimatedHeight(i)+27;return sum;}
+void ChatModel::setGroupHeight(double pixels){if(std::isfinite(pixels)&&qAbs(pixels-groupPixels)>=1){groupPixels=qMax(0.0,pixels);groups.clear();}}
+void ChatModel::partition(){if(!groups.isEmpty()||rows.isEmpty())return;double used=-1;for(int i=0;i<rows.size();++i){if(used<0||used>=groupPixels){groups<<i;used=0;}used+=hint(i)+27;}}
+int ChatModel::groupOf(int row){partition();return groups.isEmpty()?0:qMax(0,int(std::upper_bound(groups.begin(),groups.end(),row)-groups.begin())-1);}
+int ChatModel::groupFirst(int group){partition();return groups.isEmpty()?0:groups[qBound(0,group,int(groups.size())-1)];}
+int ChatModel::groupLast(int group){partition();return groups.isEmpty()?-1:group+1<groups.size()?groups[qMax(0,group+1)]-1:int(rows.size())-1;}
+int ChatModel::groupCount(){partition();return groups.size();}
+void ChatModel::requestGroups(int first,int last,int keep){
+  first=qBound(0,first,qMax(0,int(rows.size())-1));last=qBound(first,last,qMax(first,int(rows.size())-1));partition();priority.clear();
+  auto add=[&](int start,int end){for(int i=start;i<=end&&priority.size()<256;++i)if(!priority.contains(i))priority<<i;};
+  add(first,last);const auto a=groupOf(first),z=groupOf(last);add(groupFirst(a),groupLast(z));
+  for(int n=1;n<=qBound(0,keep,2);++n){if(z+n<groups.size())add(groupFirst(z+n),groupLast(z+n));if(a-n>=0)add(groupFirst(a-n),groupLast(a-n));}
+  wantedFirst=priority.isEmpty()?0:*std::min_element(priority.begin(),priority.end());wantedLast=priority.isEmpty()?-1:*std::max_element(priority.begin(),priority.end());renderRange();
+}
+QVariantList ChatModel::recentCompactionInterval(const QVariantList &messages){
+  QList<int> boundaries;QSet<QString> seen;
+  for(int i=messages.size()-1;i>=0;--i){auto row=messages[i].toMap(),event=row["compaction"].toMap();auto id=event["eventId"].toString();if(row["customType"]=="umeko-compaction"&&event.value("state","success")=="success"&&!id.isEmpty()&&!seen.contains(id)){seen<<id;boundaries.prepend(i);if(boundaries.size()==2)break;}}
+  if(boundaries.size()<2)return messages;
+  auto first=boundaries.first();const auto id=messages[first].toMap()["compaction"].toMap()["eventId"];
+  while(first>0&&messages[first-1].toMap()["compaction"].toMap()["eventId"]==id)--first;
+  return messages.mid(first);
 }
