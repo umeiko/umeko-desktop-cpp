@@ -406,3 +406,13 @@ void GlobalAgents::observe(QString key,QVariantMap event){
   if(!s->globalAgent.isEmpty()&&s->globalAgent==selectedConversation&&!chatRefresh.isActive())chatRefresh.start();
   if(!s->globalAgent.isEmpty())changed(QStringList{"session","state","done","exit","error"}.contains(type));
 }
+
+void GlobalAgents::forgetSessions(QSet<QString> ids,QStringList keys){
+  QSet<QString> addresses;for(const auto &id:ids){addresses.insert("session:"+id);bridges.remove(id);bridges.remove("session:"+id);}
+  for(const auto &key:keys){addresses.insert("session:"+key);bridges.remove("draft:"+key);bridges.remove("session:"+key);}
+  QSet<QString> requestsLeft;
+  for(int i=requests.size()-1;i>=0;--i){const auto row=requests[i].toMap();if(addresses.contains(row["source"].toString())||addresses.contains(row["target"].toString()))requests.removeAt(i);else requestsLeft.insert(row["id"].toString());}
+  for(int i=creationRequests.size()-1;i>=0;--i)if(addresses.contains(creationRequests[i].toMap()["source"].toString()))creationRequests.removeAt(i);
+  for(auto it=outbox.begin();it!=outbox.end();){const auto row=it.value().toMap();if(addresses.contains(row["target"].toString())||!requestsLeft.contains(row["requestId"].toString()))it=outbox.erase(it);else++it;}
+  changed();save();
+}

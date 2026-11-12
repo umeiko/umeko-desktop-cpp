@@ -198,6 +198,7 @@ void Backend::newSession() {
   activate(s);
 }
 void Backend::openSession(QString id) {
+  if(files->pending.contains(id)||files->deleted.contains(id))return;
   auto s = findSession(id);
   if (!s) {
     static int next=1000000;const int request=++next;
@@ -223,6 +224,8 @@ void Backend::loadNativeIndex() {
                            .toVariantList();
            for (auto v : rows) {
              auto item = v.toMap();
+             if(files->deleted.contains(item["id"].toString())||files->pending.contains(item["id"].toString()))continue;
+             if(U::cleanPath(item["workspace"].toString())==U::cleanPath(store.directory+"/workspace"))item["workspace"]="";
              bool found = false;
              for (auto &sv : sessionIndex) {
                auto s = sv.toMap();
@@ -267,6 +270,7 @@ void Backend::writePi(std::shared_ptr<Session> s, QVariantMap payload) {
 }
 bool Backend::command(std::shared_ptr<Session> s, QString action,
                       QVariantMap values) {
+  if(files && (files->pending.contains(s->id)||files->deleted.contains(s->id))){emit toast("会话数据正在删除，请稍后再试");return false;}
   if (desktopExtensions->checkpointLocked(s->workspace)) return false;
   cancelReasoningDetection(s->provider);
   if(s->backend=="dsh")return commandDsh(s,action,values);
@@ -434,6 +438,7 @@ void Backend::removeQueued(QString id) {
     }
 }
 void Backend::sendText(QString text, bool steering) {
+  if(files->pending.contains(view->id)){emit toast("会话数据正在删除，请稍后再试");return;}
   auto s = view;
   text = text.trimmed();
   sendError.clear();
@@ -1028,50 +1033,4 @@ void Backend::forkSession() {
   if (!view->id.isEmpty() && !view->busy())
     forkSessionById(view->id);
 }
-void Backend::deleteSession(QString id) {
-  auto live = findSession(id);
-  if (live && live->busy()) {
-    emit toast("此会话正在运行，请先停止该会话");
-    return;
-  }
-  for (int i = sessionIndex.size() - 1; i >= 0; --i) {
-    auto s = sessionIndex[i].toMap();
-    if (s["id"] != id)
-      continue;
-    if(s["backend"]=="dsh") {
-      if(!QRegularExpression("^dsh-[a-f0-9-]{32,36}$").match(id).hasMatch()){emit toast("会话编号无效");return;}
-      if(live){retire(live);dshDirty.remove(live->key);live->phase="working";}
-      const auto file=store.directory+"/dsh/transcripts/"+id+".json";auto previous=dshWriter;
-      auto watcher=new QFutureWatcher<bool>(this);
-      connect(watcher,&QFutureWatcher<bool>::finished,this,[this,watcher,id,live]{const bool ok=watcher->result();watcher->deleteLater();if(live)live->phase="idle";if(!ok){emit toast("无法删除会话文件");return;}
-        for(int i=sessionIndex.size()-1;i>=0;--i)if(sessionIndex[i].toMap()["id"]==id)sessionIndex.removeAt(i);
-        if(live)records.remove(live->key);auto meta=store.data["sessionMeta"].toMap();meta.remove(id);store.data["sessionMeta"]=meta;store.save();saveSessions();if(view->id==id)newSession();emit chatChanged();});
-      watcher->setFuture(QtConcurrent::run([file,previous]() mutable {previous.waitForFinished();return !QFileInfo::exists(file) || QFile::remove(file);}));return;
-    }
-    auto file = s["file"].toString();
-    if (!file.isEmpty()) {
-      auto base = U::cleanPath(store.directory + "/pi/sessions") + "/";
-      if (!U::cleanPath(file).startsWith(base, Qt::CaseInsensitive)) {
-        emit toast("只能删除 Umeko 会话目录中的文件");
-        return;
-      }
-      if (live)
-        retire(live);
-      if (QFileInfo::exists(file) && !QFile::remove(file)) {
-        emit toast("无法删除会话文件");
-        return;
-      }
-    }
-    sessionIndex.removeAt(i);
-  }
-  if (live)
-    records.remove(live->key);
-  auto meta = store.data["sessionMeta"].toMap();
-  meta.remove(id);
-  store.data["sessionMeta"] = meta;
-  store.save();
-  saveSessions();
-  if (view->id == id)
-    newSession();
-  emit chatChanged();
-}
+void Backend::deleteSession(QString id) { files->deleteSession(id); }

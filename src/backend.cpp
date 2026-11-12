@@ -85,6 +85,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
   about = new AppAbout(this);
   previewLoader = new SessionPreview(this);
   conversationSearch = new ConversationSearch(this);
+  files = new SessionFiles(this);
   documents = new DocumentPreview(this, &store, root);
   children = new Subagents(this);
   desktopExtensions = new DesktopPlugins(this);
@@ -298,86 +299,37 @@ QVariantMap Backend::ensureProject(QString path, bool reopen) {
   return p;
 }
 QVariantList Backend::projectRows() const {
-  QVariantList rows;
-  QSet<QString> grouped;
-  auto projects = store.data["projects"].toList();
-  std::stable_sort(projects.begin(), projects.end(), [](auto a, auto b) {
-    return a.toMap()["pinned"].toBool() > b.toMap()["pinned"].toBool();
-  });
-  auto sessions = sessionIndex;
-  std::stable_sort(sessions.begin(), sessions.end(), [this](auto a, auto b) {
-    return metadata(a.toMap()["id"].toString())["pinned"].toBool() >
-           metadata(b.toMap()["id"].toString())["pinned"].toBool();
-  });
-  auto rowFor = [this](QVariantMap s) {
-    auto id = s["id"].toString();
-    auto meta = metadata(id);
-    s["kind"] = "session";
-    s["selected"] = view->id == id;
-    s["pinned"] = meta["pinned"].toBool();
-    s["archived"] = meta["archived"].toBool();
-    s["running"] = false;
-    s["loading"] = false;
-    s["waiting"] = false;
-    s["busy"] = false;
-    s["unread"] = meta["unread"].toBool();
-    s["outcome"]=meta["lastTurn"].toMap()["state"];
-    for (auto live : records)
-      if (live->id == id) {
-        s["outcome"]=sessionTurnStatus(live)["state"];
-        s["running"] = live->phase == "running" || s["outcome"]=="running" || s["outcome"]=="stopping";
-        s["loading"] = live->phase == "loading" || live->phase == "working";
-        s["waiting"] = !live->approval.isEmpty();
-        s["busy"] = live->busy();
-      }
-    return s;
-  };
-  for (auto pv : projects) {
-    auto p = pv.toMap();
-    QVariantList children;
-    for (auto sv : sessions) {
-      auto s = sv.toMap();
-      if (U::cleanPath(s["workspace"].toString()) == p["path"].toString() &&
-          metadata(s["id"].toString())["archived"].toBool() == archived)
-        children << s;
-    }
-    if (archived && children.isEmpty())
-      continue;
-    p["kind"] = "project";
-    p["title"] = p["name"];
-    p["collapsed"] = collapsed.contains(p["id"].toString());
-    p["selected"] = p["id"] == store.data["activeProject"];
-    p["pinned"] = p.value("pinned", false);
-    rows << p;
-    for (auto sv : children) {
-      auto s = sv.toMap();
-      grouped.insert(s["id"].toString());
-      if (!p["collapsed"].toBool())
-        rows << rowFor(s);
-    }
-  }
-  QVariantList ungrouped;
-  for (auto sv : sessions) {
-    auto s = sv.toMap();
-    if (grouped.contains(s["id"].toString()) ||
-        metadata(s["id"].toString())["archived"].toBool() != archived)
-      continue;
-    auto key = U::cleanPath(s["workspace"].toString());
+  QVariantList rows;QSet<QString> grouped;
+  auto projects=store.data["projects"].toList();auto sessions=sessionIndex;
+  const auto key=[](QString path){if(path.isEmpty())return QString();auto result=U::cleanPath(path);
 #ifdef Q_OS_WIN
-    key = key.toLower();
+    result=result.toLower();
 #endif
-    if (store.data["removedProjects"].toList().contains(
-            U::sha(key.toUtf8()).left(16)))
-      continue;
-    ungrouped << rowFor(s);
+    return result;
+  };
+  const auto meta=store.data["sessionMeta"].toMap();QHash<QString,QVariantMap> byWorkspace;QHash<QString,QString> paths;QHash<QString,bool> archivedState;
+  for(const auto &value:projects)byWorkspace[key(value.toMap()["path"].toString())]=value.toMap();
+  for(const auto &value:sessions){const auto session=value.toMap();const auto id=session["id"].toString(),path=key(session["workspace"].toString());paths[id]=path;
+    const bool removed=!path.isEmpty()&&store.data["removedProjects"].toList().contains(U::sha(path.toUtf8()).left(16));
+    archivedState[id]=meta.value(id).toMap()["archived"].toBool()||byWorkspace.value(path)["archived"].toBool()||removed;
   }
-  if (!ungrouped.isEmpty()) {
-    rows << QVariantMap{{"id", "ungrouped"},
-                        {"kind", "label"},
-                        {"title", "其他会话"},
-                        {"selected", false}};
-    rows.append(ungrouped);
+  std::stable_sort(projects.begin(),projects.end(),[](const auto &a,const auto &b){return a.toMap()["pinned"].toBool()>b.toMap()["pinned"].toBool();});
+  std::stable_sort(sessions.begin(),sessions.end(),[&meta](const auto &a,const auto &b){return meta.value(a.toMap()["id"].toString()).toMap()["pinned"].toBool()>meta.value(b.toMap()["id"].toString()).toMap()["pinned"].toBool();});
+  const auto rowFor=[this,&meta,&archivedState,&paths,&byWorkspace](QVariantMap session){
+    const auto id=session["id"].toString();const auto saved=meta.value(id).toMap();
+    session.insert({{"kind","session"},{"selected",view->id==id},{"pinned",saved["pinned"]},{"archived",archivedState.value(id)},
+      {"projectId",byWorkspace.value(paths.value(id))["id"]},{"running",false},{"loading",false},{"waiting",false},{"busy",files&&files->pending.contains(id)},{"unread",saved["unread"]},{"outcome",saved["lastTurn"].toMap()["state"]}});
+    for(const auto &live:records)if(live->id==id){const auto outcome=sessionTurnStatus(live)["state"];session.insert({{"outcome",outcome},{"running",live->phase=="running"||outcome=="running"||outcome=="stopping"},{"loading",live->phase=="loading"||live->phase=="working"},{"waiting",!live->approval.isEmpty()},{"busy",live->busy()||live->subagentsActive||files&&files->pending.contains(id)}});}
+    return session;
+  };
+  for(const auto &value:projects){auto project=value.toMap();if(project["archived"].toBool()&&!archived)continue;QVariantList children;
+    const auto path=key(project["path"].toString());for(const auto &entry:sessions){const auto session=entry.toMap();const auto id=session["id"].toString();if(paths.value(id)==path&&archivedState.value(id)==archived)children<<entry;}
+    if(archived&&children.isEmpty()&&!project["archived"].toBool())continue;
+    project.insert({{"kind","project"},{"title",project["name"]},{"collapsed",collapsed.contains(project["id"].toString())},{"selected",project["id"]==store.data["activeProject"]}});rows<<project;
+    for(const auto &entry:children){const auto session=entry.toMap();grouped.insert(session["id"].toString());if(!project["collapsed"].toBool())rows<<rowFor(session);}
   }
+  QVariantList ungrouped;for(const auto &value:sessions){const auto session=value.toMap();const auto id=session["id"].toString();if(!grouped.contains(id)&&archivedState.value(id)==archived)ungrouped<<rowFor(session);}
+  if(!ungrouped.isEmpty()){rows<<QVariantMap{{"id","ungrouped"},{"kind","label"},{"title",archived?"归档会话":"其他会话"},{"selected",false}};rows.append(ungrouped);}
   return rows;
 }
 void Backend::setWorkspace(QString url) {
@@ -517,52 +469,26 @@ void Backend::togglePinned(QString kind, QString id) {
     setMetadata(id, {{"pinned", !metadata(id)["pinned"].toBool()}});
   emit chatChanged();
 }
-void Backend::archiveSession(QString id, bool value) {
-  setMetadata(id, {{"archived", value}});
-  if (view->id == id)
-    newSession();
-  emit chatChanged();
-}
-void Backend::archiveProject(QString id, bool value) {
-  auto projects = store.data["projects"].toList();
-  QString path;
-  for (auto p : projects)
-    if (p.toMap()["id"] == id)
-      path = p.toMap()["path"].toString();
-  for (auto s : sessionIndex)
-    if (s.toMap()["workspace"] == path)
-      setMetadata(s.toMap()["id"].toString(), {{"archived", value}});
-  if (view->workspace == path)
-    newSession();
-  emit chatChanged();
-}
-void Backend::removeProject(QString id) {
-  auto projects = store.data["projects"].toList();
-  for (int i = projects.size() - 1; i >= 0; --i)
-    if (projects[i].toMap()["id"] == id) {
-      auto path = projects[i].toMap()["path"].toString();
-      bool running = false;
-      for (auto record : records)
-        running |= record->busy() && record->workspace == path;
-      if (running) {
-        emit toast("项目仍有任务运行，请等待结束");
-        return;
-      }
-      projects.removeAt(i);
-    }
-  store.data["projects"] = projects;
-  auto removed = store.data["removedProjects"].toList();
-  if (!removed.contains(id))
-    removed << id;
-  store.data["removedProjects"] = removed;
-  if (store.data["activeProject"] == id) {
-    store.data["activeProject"] = "";
-    store.data["workspace"] = "";
-    activate(fresh());
+void Backend::archiveSession(QString id,bool value){
+  if(files->pending.contains(id))return;
+  auto all=store.data["sessionMeta"].toMap(),meta=all.value(id).toMap();meta["archived"]=value;if(value)meta.remove("dangerousAllowed");all[id]=meta;store.data["sessionMeta"]=all;
+  if(!value)for(const auto &entry:sessionIndex)if(entry.toMap()["id"]==id&&!entry.toMap()["workspace"].toString().isEmpty()){
+    const auto project=ensureProject(entry.toMap()["workspace"].toString(),true);auto projects=store.data["projects"].toList();for(auto &item:projects)if(item.toMap()["id"]==project["id"]){auto p=item.toMap();p["archived"]=false;item=p;}store.data["projects"]=projects;
   }
-  store.save();
-  emit chatChanged();
+  store.save();if(value&&view->id==id)newSession();emit chatChanged();
 }
+void Backend::archiveProject(QString id,bool value){
+  if(files->busy())return;QString path;auto projects=store.data["projects"].toList();
+  for(auto &entry:projects){auto p=entry.toMap();if(p["id"]==id){path=p["path"].toString();p["archived"]=value;entry=p;}}
+  if(path.isEmpty())return;store.data["projects"]=projects;auto all=store.data["sessionMeta"].toMap();
+  for(const auto &entry:sessionIndex){const auto session=entry.toMap();if(session["workspace"].toString().isEmpty()||U::cleanPath(session["workspace"].toString())!=U::cleanPath(path))continue;
+    const auto key=session["id"].toString();auto meta=all.value(key).toMap();meta["archived"]=value;if(value)meta.remove("dangerousAllowed");all[key]=meta;
+  }
+  store.data["sessionMeta"]=all;
+  if(value&&U::cleanPath(view->workspace)==U::cleanPath(path)){store.data["activeProject"]="";store.data["workspace"]="";activate(fresh());}
+  store.save();emit chatChanged();
+}
+void Backend::removeProject(QString id) { files->deleteProject(id); }
 void Backend::openProject(QString id) {
   for (auto v : store.data["projects"].toList())
     if (v.toMap()["id"] == id) {
@@ -600,10 +526,14 @@ void Backend::toggleProject(QString id) {
     collapsed.insert(id);
   emit chatChanged();
 }
-void Backend::dropProjects(QString raw) {
-  for (auto v : QJsonDocument::fromJson(raw.toUtf8()).array())
-    if (QFileInfo(U::localPath(v.toString())).isDir())
-      setWorkspace(v.toString());
+void Backend::dropProjects(QString raw,QString project) {
+  QVariantList imports;
+  for(const auto &value:QJsonDocument::fromJson(raw.toUtf8()).array()) {
+    const QUrl url(value.toString());
+    if(url.isLocalFile() && QFileInfo(url.toLocalFile()).isDir())setWorkspace(value.toString());
+    else imports<<value.toString();
+  }
+  if(!imports.isEmpty())files->importFiles(QString::fromUtf8(QJsonDocument::fromVariant(imports).toJson(QJsonDocument::Compact)),project);
 }
 bool Backend::addAttachments(QString raw) {
   bool accepted = false;

@@ -244,6 +244,20 @@ void Subagents::closeView() {
   emit contextChanged();
   emit queueChanged();
 }
+void Subagents::forget(const QList<std::shared_ptr<Session>> &records) {
+  presentation.discardFileCache();
+  for (const auto &record : records) {
+    if (owner == record) closeView();
+    const auto prefix = record->key + "/";
+    for (const auto &id : drafts.keys()) if (id.startsWith(prefix)) drafts.remove(id);
+    for (auto cache : {&attachments, &queues})
+      for (const auto &id : cache->keys()) if (id.startsWith(prefix)) cache->remove(id);
+    deferred.remove(record->key);
+    for (const auto &id : pending.keys())
+      if (pending[id]["key"].toString().startsWith(prefix)) pending.remove(id);
+  }
+  emit changed(); emit queueChanged();
+}
 bool Subagents::command(std::shared_ptr<Session> record, QVariantMap input) {
   const bool switching =
       record->busy() &&

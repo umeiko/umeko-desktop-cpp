@@ -11,6 +11,7 @@
 #include "dsh.hpp"
 #include <QFuture>
 #include "slash_commands.hpp"
+#include "session_files.hpp"
 #include <QtQuick>
 #include <chrono>
 #include <optional>
@@ -279,6 +280,7 @@ class Backend : public QObject {
   Q_PROPERTY(QString lineSpacing READ lineSpacing NOTIFY typographyChanged)
   Q_PROPERTY(QString userDataDirectory READ userDataDirectory CONSTANT)
   Q_PROPERTY(QVariantList projectRows READ projectRows NOTIFY sidebarChanged)
+  Q_PROPERTY(QObject *sessionFiles READ sessionFiles CONSTANT)
   Q_PROPERTY(int sidebarWidth READ sidebarWidth NOTIFY layoutChanged)
   Q_PROPERTY(bool sidebarCollapsed READ sidebarCollapsed NOTIFY layoutChanged)
   Q_PROPERTY(bool showArchived READ showArchived NOTIFY chatChanged)
@@ -432,6 +434,7 @@ public:
   Q_INVOKABLE bool setProviderNetwork(QString id, QString mode, QString address, QString caFile);
   Q_INVOKABLE QString requestReport(QString id) const;
   QVariantList projectRows() const;
+  QObject *sessionFiles() const { return files; }
   int sidebarWidth() const {
     return store.data["ui"].toMap().value("sidebarWidth", 244).toInt();
   }
@@ -511,7 +514,7 @@ public:
   Q_INVOKABLE void forkSession();
   Q_INVOKABLE void deleteSession(QString id);
   Q_INVOKABLE void toggleProject(QString id);
-  Q_INVOKABLE void dropProjects(QString urls);
+  Q_INVOKABLE void dropProjects(QString urls, QString project = {});
   Q_INVOKABLE bool addAttachments(QString urls);
   Q_INVOKABLE bool pasteAttachments();
   Q_INVOKABLE void removeAttachment(QString id);
@@ -600,6 +603,8 @@ signals:
 
 private:
   friend class DshRuntime;
+  friend class SessionFiles;
+  SessionFiles *files = nullptr;
   DshRuntime *dshRuntime=nullptr;
   QTimer dshSaveTimer;
   QSet<QString> dshDirty;
