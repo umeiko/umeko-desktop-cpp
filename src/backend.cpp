@@ -1,5 +1,6 @@
 #include "backend.hpp"
 #include <QClipboard>
+#include <QtConcurrent>
 #include <QDesktopServices>
 #include <QImageReader>
 #include <QFontDatabase>
@@ -16,6 +17,7 @@
 Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
     : QObject(parent), store(directory), root(U::cleanPath(resourceRoot)),
       chat(this) {
+  connect(this, &Backend::viewChanged, this, [this] { ++selectionEpoch; });
   if(!fontFamily().isEmpty()){auto font=QGuiApplication::font();font.setFamily(fontFamily());QGuiApplication::setFont(font);}
   auto accounts=store.data["providers"].toList();
   for(auto &value:accounts){auto p=value.toMap();auto models=p["models"].toList();for(auto &entry:models){auto m=entry.toMap();for(const auto &field:QStringList{"reasoningDetection","reasoningFormatDetection"})if(m[field].toMap()["state"]=="probing")m[field]=QVariantMap{{"state","unknown"}};entry=m;}p["models"]=models;value=p;}
@@ -605,6 +607,51 @@ void Backend::dropProjects(QString raw) {
     if (QFileInfo(U::localPath(v.toString())).isDir())
       setWorkspace(v.toString());
 }
+void Backend::attachChatSelection(QString raw) {
+  if (selectionPreparing) return;
+  if (view->attachments.size() >= 20) { emit toast("最多添加 20 个附件"); return; }
+  const auto range = QJsonDocument::fromJson(raw.toUtf8()).object().toVariantMap();
+  if (!range.contains("anchor") || !range.contains("cursor")) return;
+  const auto session = view;
+  const auto epoch = selectionEpoch, revision = chat.contentRevision();
+  const auto rows = chat.rows;
+  const auto workspace = session->workspace.isEmpty() ? store.data["workspace"].toString() : session->workspace;
+  const auto embedded = QString(":/qt/qml/Umeko/App/app/qml/markdown.js");
+  const auto scriptPath = QFile::exists(embedded) ? embedded : root + "/app/qml/markdown.js";
+  selectionPreparing = true;
+  emit attachmentsChanged();
+  auto watcher = new QFutureWatcher<QVariantMap>(this);
+  connect(watcher, &QFutureWatcher<QVariantMap>::finished, this,
+          [this, watcher, session, epoch, revision] {
+    const auto result = watcher->result();
+    watcher->deleteLater();
+    selectionPreparing = false;
+    auto item = result["item"].toMap();
+    const bool valid = !closing && session == view && epoch == selectionEpoch && revision == chat.contentRevision();
+    if (!item.isEmpty() && valid && session->attachments.size() < 20) {
+      item["id"] = U::uuid();
+      session->attachments << item;
+    } else if (!item.isEmpty()) {
+      const auto path = item["path"].toString();
+      (void)QtConcurrent::run([path] { QFile::remove(path); });
+      if (valid) emit toast("最多添加 20 个附件");
+    } else if (valid && result.contains("error")) {
+      emit toast("无法附加所选内容：" + result["error"].toString());
+    }
+    emit attachmentsChanged();
+  });
+  watcher->setFuture(QtConcurrent::run([scriptPath, rows, range, workspace] {
+    try {
+      QFile file(scriptPath);
+      if (!file.open(QIODevice::ReadOnly)) throw std::runtime_error("无法读取文本排版脚本");
+      const auto text = U::selectedChatText(QString::fromUtf8(file.readAll()), rows, range);
+      return QVariantMap{{"item", U::writeSelectionAttachment(workspace, text)}};
+    } catch (const std::exception &error) {
+      return QVariantMap{{"error", QString::fromUtf8(error.what())}};
+    }
+  }));
+}
+
 bool Backend::addAttachments(QString raw) {
   bool accepted = false;
   for (auto v : QJsonDocument::fromJson(raw.toUtf8()).array()) {

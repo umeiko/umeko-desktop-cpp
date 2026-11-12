@@ -141,33 +141,7 @@ Item {
         const end = compare(anchor, cursor) < 0 ? cursor : anchor
         const rows = dataSource.displayMessages, pieces = []
         for (let row = start.row; row <= end.row && row < rows.length; row++) {
-            const message = rows[row], segments = message.role === "user" ? [] : [{block:-100000,text:"umeko",markdown:false}]
-            const activity = message.activity || []
-            if (activity.length) {
-                for (let stepIndex = 0; stepIndex < activity.length; stepIndex++) {
-                    const step = activity[stepIndex]
-                    if (step.kind === "text") {
-                        Markdown.blocks(step.text || "", !step.error, stepIndex < activity.length - 1).forEach((block, index) => segments.push({block:step.blockOffset + index,text:block.text,markdown:!step.error && !block.code}))
-                    } else if (step.kind === "thinking" && expandedDetails[row + ":" + step.blockOffset]) {
-                        segments.push({block:step.blockOffset,text:step.text,markdown:false})
-                    } else if (step.kind === "media") {
-                        (step.items || []).forEach((item, index) => {
-                            const key = step.blockOffset + index * 3
-                            segments.push({block:key,text:item.title || item.name || "",markdown:false})
-                            if (item.kind === "image" && item.preview && item.caption) segments.push({block:key + 1,text:item.caption,markdown:false})
-                        })
-                    } else if (step.kind === "tools") {
-                        step.tools.forEach((tool, index) => {
-                            const key = step.blockOffset + index + 1
-                            if (expandedDetails[row + ":" + key]) segments.push({block:key,text:JSON.stringify(tool.arguments || {}, null, 2) + (tool.result ? "\n\n" + tool.result : ""),markdown:false})
-                        })
-                    }
-                }
-            } else {
-                const markdown = message.role === "assistant" && !message.error
-                Markdown.blocks(message.text || "", markdown).forEach((block, index) => segments.push({block:index,text:block.text,markdown:markdown && !block.code}))
-                if (message.role === "user") (message.attachments || []).forEach((item, index) => segments.push({block:10000 + index,text:item.name,markdown:false}))
-            }
+            const segments = Markdown.selectionSegments(rows[row], row, expandedDetails)
             for (const segment of segments) {
                 const text = plain(segment.text, segment.markdown, row, segment.block)
                 const first = {row:row,block:segment.block,offset:0}, last = {row:row,block:segment.block,offset:text.length}
@@ -178,6 +152,10 @@ Item {
         return pieces.join("\n\n").replace(/\u2029|\u2028/g, "\n")
     }
     function copy() { if (hasSelection) { if(dataSource.documentSelection) dataSource.copyChatSelection({anchor:anchor,cursor:cursor}); else dataSource.copy(selectedText()) } }
+    function attachToChat() {
+        if (hasSelection && dataSource === backend)
+            backend.attachChatSelection(JSON.stringify({anchor:anchor, cursor:cursor, expanded:expandedDetails}))
+    }
     function selectAll() {
         const count = dataSource.documentSelection ? dataSource.messageCount : dataSource.displayMessages.length
         if (!count) return
@@ -208,6 +186,7 @@ Item {
     FloatingMenu {
         id: selectionMenu; objectName: "selectionContextMenu"
         ContextAction { objectName: "copySelectedText"; text: I18n.t("复制"); glyph: "copy"; enabled: root.hasSelection; onTriggered: root.copy() }
+        ContextAction { objectName: "attachSelectedText"; text: I18n.t("附加到聊天"); glyph: "plus"; visible: root.dataSource === backend; enabled: root.hasSelection && !backend.selectionAttachmentBusy; onTriggered: root.attachToChat() }
         ContextAction { objectName: "selectAllChatText"; text: I18n.t("全选"); onTriggered: root.selectAll() }
         onClosed: if (root.visible) root.forceActiveFocus()
     }

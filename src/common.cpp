@@ -1,4 +1,7 @@
 #include "common.hpp"
+#include <QJSEngine>
+#include <QTextDocument>
+#include <tuple>
 #include <QImageReader>
 #include <stdexcept>
 #ifdef Q_OS_WIN
@@ -6,6 +9,77 @@
 #endif
 
 QString U::uuid() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
+
+QString U::selectedChatText(QString script, QVariantList rows, QVariantMap range) {
+  const auto order = [](QVariantMap point) {
+    return std::tuple(point["row"].toInt(), point["block"].toInt(), point["offset"].toInt());
+  };
+  auto start = range["anchor"].toMap(), end = range["cursor"].toMap();
+  if (order(start) > order(end)) qSwap(start, end);
+  if (start.isEmpty() || end.isEmpty() || order(start) == order(end)) return {};
+  QJSEngine engine;
+  script.remove(".pragma library");
+  auto check = [](QJSValue result) {
+    if (result.isError()) throw std::runtime_error(result.toString().toStdString());
+    return result;
+  };
+  check(engine.evaluate(script));
+  auto segments = engine.globalObject().property("selectionSegments");
+  auto format = engine.globalObject().property("forQt");
+  class SelectionDocument : public QTextDocument {
+    QVariant loadResource(int, const QUrl &) override { return {}; }
+  } document;
+  QStringList pieces;
+  for (int row = qMax(0, start["row"].toInt()); row < rows.size() && row <= end["row"].toInt(); ++row) {
+    const auto parts = check(segments.call({engine.toScriptValue(rows[row].toMap()), QJSValue(row),
+        engine.toScriptValue(range["expanded"].toMap())})).toVariant().toList();
+    for (const auto &value : parts) {
+      const auto part = value.toMap();
+      if (part["markdown"].toBool()) document.setMarkdown(check(format.call({part["text"].toString()})).toString());
+      else document.setPlainText(part["text"].toString());
+      const auto text = document.toPlainText();
+      const auto first = std::tuple(row, part["block"].toInt(), 0);
+      const auto last = std::tuple(row, part["block"].toInt(), int(text.size()));
+      if (last <= order(start) || first >= order(end)) continue;
+      const int lo = first < order(start) ? qBound(0, start["offset"].toInt(), int(text.size())) : 0;
+      const int hi = last > order(end) ? qBound(0, end["offset"].toInt(), int(text.size())) : text.size();
+      pieces << text.mid(lo, qMax(0, hi - lo));
+    }
+  }
+  return pieces.join("\n\n").replace(QChar(0x2029), '\n').replace(QChar(0x2028), '\n');
+}
+
+QVariantMap U::writeSelectionAttachment(QString workspace, QString text) {
+  if (text.trimmed().isEmpty()) return {};
+  const auto project = QFileInfo(workspace).canonicalFilePath();
+  if (project.isEmpty() || !QFileInfo(project).isDir()) throw std::runtime_error("当前会话目录不存在");
+  const auto folder = project + "/.umeko";
+  if (QFileInfo(folder).isSymLink()) throw std::runtime_error(".umeko 不能是符号链接");
+  if (!QDir().mkpath(folder)) throw std::runtime_error("无法创建 .umeko 目录");
+  const auto points = text.simplified().toUcs4();
+  auto stem = QString::fromUcs4(points.constData(), qMin(20, int(points.size())));
+  stem.replace(QRegularExpression("[<>:\"/\\\\|?*\\x00-\\x1f\\x7f-\\x9f]"), "_");
+  stem.remove(QRegularExpression("^[ .]+|[ .]+$"));
+  if (stem.isEmpty()) stem = "选中文本";
+  if (QRegularExpression("^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\\..*)?$", QRegularExpression::CaseInsensitiveOption).match(stem).hasMatch()) stem.prepend("选文-");
+  for (int index = 1; index <= 10000; ++index) {
+    const auto name = stem + (index > 1 ? QString(" (%1)").arg(index) : QString()) + ".md";
+    const auto path = folder + '/' + name;
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+      if (QFileInfo::exists(path)) continue;
+      throw std::runtime_error(file.errorString().toStdString());
+    }
+    const auto bytes = text.toUtf8();
+    if (file.write(bytes) != bytes.size() || !file.flush()) {
+      const auto error = file.errorString();
+      file.close(); file.remove();
+      throw std::runtime_error(error.toStdString());
+    }
+    return {{"path", path}, {"name", name}, {"kind", "file"}};
+  }
+  throw std::runtime_error("同名临时文件过多");
+}
 QString U::stamp() {
   return QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
 }
