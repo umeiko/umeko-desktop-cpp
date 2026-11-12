@@ -2260,7 +2260,12 @@ Item {
     auto modelsJob = call("plugins.refreshModels", {{"id", account}});
     QTRY_COMPARE_WITH_TIMEOUT(job(modelsJob["jobId"].toString())["status"].toString(), QString("done"), 15000);
     QVERIFY(!call("plugins.uninstall", {{"plugin", account}, {"version", "0.1.0"}})["ok"].toBool());
-    QVERIFY(call("plugins.uninstall", {{"plugin", "example-job"}, {"version", "0.1.0"}})["ok"].toBool());
+    // Model refresh can launch background capability probes. The uninstall
+    // contract rejects live provider workers, even after the refresh job ends.
+    auto providers=qobject_cast<Providers*>(backend->providerPlugins());QVERIFY(providers);
+    QTRY_VERIFY_WITH_TIMEOUT(([&]{for(auto process:providers->findChildren<QProcess*>())if(process->state()!=QProcess::NotRunning)return false;return true;})(),20000);
+    const auto uninstalled=call("plugins.uninstall", {{"plugin", "example-job"}, {"version", "0.1.0"}});
+    QVERIFY2(uninstalled["ok"].toBool(),qPrintable(report(uninstalled)));
   }
   void documentDeliveryAndResize() {
     const auto previousSize = window->size();
@@ -5764,6 +5769,75 @@ def create_provider(context): return Interactive(context)
     const auto count=requests.size();backend->send("Official DSH via native fixture proxy");QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),45000);
     QVERIFY2(lastText().startsWith("Got: "),qPrintable(lastText()));QVERIFY(requests.size()>count);QVERIFY(!backend->view->acpSessionId.isEmpty());
     bool delivered=false;for(int i=count;i<requests.size();++i)if(QString::fromUtf8(QJsonDocument::fromVariant(requests[i]).toJson()).contains("Official DSH via native fixture proxy"))delivered=true;QVERIFY(delivered);
+  }
+  void nativeWidgetPromptInjectionAndCallerScope() {
+    configureAPI();backend->newSession();window->setProperty("page","chat");
+    auto manager=backend->desktopExtensions;
+    const auto oldEntries=manager->entries, oldSettings=manager->settings;
+    const auto restore=qScopeGuard([&]{manager->entries=oldEntries;manager->settings=oldSettings;backend->retire(backend->view);backend->newSession();});
+    const auto s=backend->view;
+    auto widget=manager->entry("file-tree");
+    QVERIFY(!widget["agent"].toMap().contains("prompt")); // The shipped file manager has no prompt injection.
+    widget["agent"]=QVariantMap{{"prompt","Native Widget prompt fixture."}};
+    manager->entries["file-tree"]=widget;
+    auto service=manager->entry("global-agents");service["agent"]=QVariantMap{{"prompt","Application Widget instructions."}};
+    manager->entries["global-agents"]=service;
+    manager->settings["enabled"]=QVariantMap{{"file-tree",true},{"global-agents",true},{"system-prompt",false}};
+    manager->settings["sessions"]=QVariantMap{{"draft:"+s->key,QVariantList{"file-tree"}}};
+    QCOMPARE(manager->promptSources(s->key).size(),2);
+    QVERIFY(manager->promptSources("missing-token").isEmpty());
+    auto background=std::make_shared<Session>();background->key="background-prompt-fixture";background->id="background-prompt-id";
+    backend->records[background->key]=background;
+    const auto removeBackground=qScopeGuard([&]{backend->records.remove(background->key);});
+    QCOMPARE(manager->promptSources(background->key).size(),2); // Built-ins default active in an unconfigured chat.
+    auto backgroundChoices=manager->settings["sessions"].toMap();backgroundChoices[background->id]=QVariantList{};manager->settings["sessions"]=backgroundChoices;
+    QCOMPARE(manager->promptSources(background->key).size(),1);
+    auto enabled=manager->settings["enabled"].toMap();enabled["system-prompt"]=true;manager->settings["enabled"]=enabled;
+    auto promptChoices=manager->settings["sessions"].toMap();promptChoices[background->id]=QVariantList{"system-prompt"};manager->settings["sessions"]=promptChoices;
+    QVERIFY(manager->systemPromptEnabled(background->key));QVERIFY(!manager->systemPromptEnabled(s->key));
+    enabled["system-prompt"]=false;manager->settings["enabled"]=enabled;
+    background->globalAgent="coordinator";
+    auto choices=manager->settings["sessions"].toMap();choices[background->id]=QVariantList{"file-tree"};manager->settings["sessions"]=choices;
+    QCOMPARE(manager->promptSources(background->key).size(),1);
+    QVERIFY(!manager->workers.contains("file-tree"));
+    backend->send("Check declared Widget prompt");QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
+    const auto prompt=[&]{QString text;for(const auto &value:requests.last().toMap()["messages"].toList())if(value.toMap()["role"]=="system")text+=value.toMap()["content"].toString();return text;};
+    QVERIFY(prompt().contains("Native Widget prompt fixture."));QVERIFY(prompt().contains("Application Widget instructions."));
+    const auto process=s->process;
+    auto manifest=manager->entry("file-tree");manifest["agent"]=QVariantMap{{"prompt","Updated Widget prompt fixture."}};manager->entries["file-tree"]=manifest;
+    backend->send("Check updated Widget prompt");QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
+    QCOMPARE(s->process,process);QVERIFY(prompt().contains("Updated Widget prompt fixture."));QVERIFY(!prompt().contains("Native Widget prompt fixture."));
+    choices=manager->settings["sessions"].toMap();choices[s->id]=QVariantList{};manager->settings["sessions"]=choices;
+    backend->send("Check inactive Widget prompt");QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
+    QCOMPARE(s->process,process);QVERIFY(!prompt().contains("Updated Widget prompt fixture."));QVERIFY(prompt().contains("Application Widget instructions."));
+    manager->entries.remove("global-agents");
+    backend->send("Check removed application Widget");QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
+    QVERIFY(!prompt().contains("Application Widget instructions."));
+    if (qEnvironmentVariableIsSet("UMEKO_WIDGET_PROMPT_REVIEW")) {
+      // Review the shipped manifests, without the temporary test contributions above.
+      manager->entries=oldEntries;manager->settings=oldSettings;
+      backend->retire(backend->view);backend->newSession();
+      QVERIFY(manager->promptSources(backend->view->key).isEmpty());
+      backend->setTheme("white");backend->setLanguage("zh");window->resize(1500,980);
+      manager->setEnabled("system-prompt",true);manager->setSessionEnabled("system-prompt",true);
+      QVERIFY(manager->openPage("system-prompt"));
+      QTRY_VERIFY_WITH_TIMEOUT(find("systemPromptWidget") && find("systemPromptWidget")->property("initialized").toBool(),15000);
+      QTRY_VERIFY_WITH_TIMEOUT(find("systemPromptWidget")->property("available").toBool() && !backend->busy(),15000);
+      auto page=find("systemPromptWidget");
+      QQmlExpression treeExpression(qmlContext(page),page,"JSON.stringify(tree)");
+      auto tree=QJsonDocument::fromJson(treeExpression.evaluate().toString().toUtf8()).array().toVariantList();
+      QVariantMap collapsed;QString selected;
+      for (const auto &v:tree) {
+        const auto group=v.toMap();
+        if (group["labelKey"]!="group:widgets") collapsed[group["id"].toString()]=true;
+        else {QVERIFY(group["children"].toList().isEmpty());selected=group["id"].toString();}
+      }
+      QVERIFY(!selected.isEmpty());page->setProperty("collapsed",collapsed);page->setProperty("selectedId",selected);
+      window->setTitle(QString::fromUtf8("Umeko C++ · Widget 提示词验收"));QTest::qWait(500);
+      QDir().mkpath(root+"/build/screenshots");QVERIFY(window->grabWindow().save(root+"/build/screenshots/widget-prompt-preview.png"));
+      qInfo()<<"WIDGET_PROMPT_REVIEW_READY"<<directory.path();
+      QEventLoop loop;connect(window,&QWindow::visibleChanged,&loop,[&loop](bool visible){if(!visible)loop.quit();});loop.exec();
+    }
   }
   void nativeSystemPromptSourcesAndHostBoundary() {
     configureAPI();backend->newSession();window->setProperty("page","chat");auto manager=backend->desktopExtensions;
