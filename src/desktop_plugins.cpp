@@ -116,6 +116,36 @@ bool DesktopPlugins::skillsEnabled(QString token) const {
   const auto sessions=settings["sessions"].toMap();
   return sessions.contains(key)?sessions[key].toList().contains("skill-manager"):entry("skill-manager")["builtin"].toBool();
 }
+bool DesktopPlugins::systemPromptEnabled(QString token) const {
+  if (!enabled("system-prompt")) return false;
+  const auto record = b->records.value(token);
+  if (!record) return false;
+  const auto sessions = settings.value("sessions").toMap();
+  for (const auto &key : {record->id, "draft:" + record->key})
+    if (!key.isEmpty() && sessions.contains(key)) return sessions[key].toList().contains("system-prompt");
+  return entry("system-prompt")["builtin"].toBool();
+}
+QVariantList DesktopPlugins::promptSources(QString token) const {
+  const auto record = b->records.value(token);
+  if (!record) return {};
+  const auto sessions = settings.value("sessions").toMap();
+  const auto key = sessions.contains(record->id) ? record->id : "draft:" + record->key;
+  const auto selected = sessions.value(key).toList();
+  auto ids = entries.keys();
+  ids.sort();
+  QVariantList result;
+  for (const auto &id : ids) {
+    const auto manifest = entry(id);
+    const auto prompt = manifest.value("agent").toMap().value("prompt");
+    if (prompt.metaType().id() != QMetaType::QString) continue;
+    const auto text = prompt.toString();
+    if (text.trimmed().isEmpty() || text.toUtf8().size() > 8192 || !enabled(id)) continue;
+    if (!application(id) && (!record->globalAgent.isEmpty() ||
+        !(sessions.contains(key) ? selected.contains(id) : manifest.value("builtin").toBool()))) continue;
+    result.append(QVariantMap{{"id", id}, {"name", manifest.value("name", id)}, {"text", text}});
+  }
+  return result;
+}
 QVariantList DesktopPlugins::rows() const {
   QVariantList result;
   for (auto id : entries.keys()) {

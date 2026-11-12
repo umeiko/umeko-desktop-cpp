@@ -7,6 +7,20 @@ from umeko_plugin_sdk import Context,PluginError
 from umeko_plugin_sdk.packages import validate,install
 
 class DesktopPluginSdkTests(unittest.TestCase):
+    def test_optional_agent_prompt_is_literal_bounded_and_backward_compatible(self):
+        with tempfile.TemporaryDirectory() as name:
+            folder=Path(name)/'widget';shutil.copytree(ROOT/'umeko-plugins/file-tree',folder)
+            file=folder/'manifest.json';original=json.loads(file.read_text(encoding='utf-8'))
+            self.assertNotIn('prompt',validate(folder)[0]['agent'])
+            for prompt in ('', '  \n', 'Use widgets.docs before calling this Widget.', '中'*2730):
+                manifest={**original,'agent':{**original['agent'],'prompt':prompt}}
+                file.write_text(json.dumps(manifest),encoding='utf-8')
+                self.assertEqual(validate(folder)[0]['agent']['prompt'],prompt)
+            for prompt in (None, False, 1, [], {}, '中'*2731, 'x'*8193):
+                file.write_text(json.dumps({**original,'agent':{**original['agent'],'prompt':prompt}}),encoding='utf-8')
+                with self.subTest(prompt_type=type(prompt).__name__),self.assertRaisesRegex(PluginError,'agent.prompt'):
+                    validate(folder)
+
     def test_documents_summary_and_public_schema_are_required(self):
         with tempfile.TemporaryDirectory() as name:
             folder=Path(name)/'widget';shutil.copytree(ROOT/'umeko-plugins/file-tree',folder)

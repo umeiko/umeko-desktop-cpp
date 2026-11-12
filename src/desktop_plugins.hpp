@@ -23,7 +23,8 @@ public:
   QVariantList rows() const;
   QVariantList sessionPlugins() const;
   bool skillsEnabled(QString token) const;
-  bool systemPromptEnabled() const {return enabled("system-prompt") && sessionEnabled("system-prompt");}
+  bool systemPromptEnabled(QString token) const;
+  QVariantList promptSources(QString token) const;
   QVariantMap session() const;
   QVariantMap page() const;
   bool busy() const { return m_busy; }

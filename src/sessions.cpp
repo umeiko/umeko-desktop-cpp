@@ -292,8 +292,9 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
           ? (action == "prompt" || action == "widget-notify" || action == "compact" ? "running" : "working")
           : "loading";
   s->status = s->phase == "loading" ? "正在加载 Pi" : "正在生成";
-  values["systemPromptEnabled"] = desktopExtensions->systemPromptEnabled();
+  values["systemPromptEnabled"] = desktopExtensions->systemPromptEnabled(s->key);
   values["systemPromptStateDir"] = store.directory+"/system-prompts";
+  values["widgetPrompts"] = desktopExtensions->promptSources(s->key);
   values["type"] = action;
   values["model"] = s->model;
   reconcileReasoning(s);
