@@ -148,4 +148,9 @@ void ConversationSearch::finishJump(){
   if(target>=0)emit jumpReady(target,entry);
   else {emit b->toast("原消息已不可用，请刷新搜索");emit jumpReady(-1,{});}
 }
+QProcess *ConversationSearch::retire(){
+  outputPump.stop();auto process=worker;worker=nullptr;
+  if(process){disconnect(process,nullptr,this,nullptr);connect(process,&QProcess::finished,process,&QObject::deleteLater);process->kill();}
+  return process;
+}
 void ConversationSearch::close(){outputPump.stop();if(worker){worker->disconnect(this);write({{"type","cancel"}});worker->closeWriteChannel();if(!worker->waitForFinished(1000)){worker->kill();worker->waitForFinished(1000);}worker->deleteLater();worker=nullptr;}}

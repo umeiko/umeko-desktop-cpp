@@ -16,6 +16,7 @@ public:
   void start();
   void stop();
   void close();
+  void forgetSessions(QSet<QString> identifiers,QStringList keys);
   QVariantMap ui(QString method, QVariantMap args, bool agent = false);
   QVariantMap execute(QString operation, QVariantMap args, QString callerKey);
   void observe(QString key, QVariantMap event);

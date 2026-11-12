@@ -1736,6 +1736,51 @@ Item {
     editor->setProperty("text", "const restored = 42");
     QTRY_VERIFY_WITH_TIMEOUT(highlighter->colored(), 2000);
   }
+  void sessionFilesImportArchiveDeleteAndDrop() {
+    QTemporaryDir temporary;
+    const auto workspace=temporary.filePath("project");QVERIFY(QDir().mkpath(workspace));
+    const auto source=temporary.filePath("backup.jsonl"),bad=temporary.filePath("broken.jsonl");
+    const auto stamp="2026-11-12T12:00:00Z";
+    const QByteArray original=QJsonDocument(QJsonObject{{"type","session"},{"version",3},{"id","import-source"},{"timestamp",stamp},{"cwd",workspace}}).toJson(QJsonDocument::Compact)+'\n'+
+      QJsonDocument(QJsonObject{{"type","message"},{"id","message-1"},{"parentId",QJsonValue::Null},{"timestamp",stamp},{"message",QJsonObject{{"role","user"},{"content","Imported conversation fixture"},{"timestamp",1}}}}).toJson(QJsonDocument::Compact)+'\n';
+    {QFile file(source);QVERIFY(file.open(QIODevice::WriteOnly));QCOMPARE(file.write(original),original.size());}
+    {QFile file(bad);QVERIFY(file.open(QIODevice::WriteOnly));file.write(original+"{\"type\":");}
+    backend->archived=false;backend->setWorkspace(QUrl::fromLocalFile(workspace).toString());window->setProperty("page","chat");
+    const auto project=backend->store.data["activeProject"].toString();QVERIFY(!project.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(find("sidebarRow_"+project),4000);
+    auto target=find("sidebarRow_"+project);QVERIFY(target->isVisible());window->update();QTest::qWait(100);
+    const auto at=point(target);QMimeData mime;mime.setUrls({QUrl::fromLocalFile(source)});
+    QDragEnterEvent enter(at,Qt::CopyAction,&mime,Qt::LeftButton,Qt::NoModifier);QCoreApplication::sendEvent(window,&enter);
+    QDragMoveEvent move(at,Qt::CopyAction,&mime,Qt::LeftButton,Qt::NoModifier);QCoreApplication::sendEvent(window,&move);
+    auto drop=find("projectDropArea");QVERIFY(drop);QVERIFY(drop->property("containsDrag").toBool());
+    QCOMPARE(drop->property("targetProjectId").toString(),project);
+    QDropEvent event(QPointF(at),Qt::CopyAction,&mime,Qt::LeftButton,Qt::NoModifier);QCoreApplication::sendEvent(window,&event);QVERIFY(event.isAccepted());
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->files->busy(),10000);QVERIFY2(backend->files->failure().isEmpty(),qPrintable(backend->files->failure().value("details").toString()));
+    QVariantMap imported;for(const auto &value:backend->sessionIndex)if(value.toMap()["title"].toString().startsWith("Imported conversation"))imported=value.toMap();
+    QVERIFY(!imported.isEmpty());QCOMPARE(imported["workspace"].toString(),U::cleanPath(workspace));QVERIFY(imported["id"]!="import-source");
+    const auto file=imported["file"].toString(),id=imported["id"].toString();QVERIFY(QFileInfo::exists(file));
+    backend->dropProjects(QString::fromUtf8(QJsonDocument(QJsonArray{QUrl::fromLocalFile(bad).toString()}).toJson()),project);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->files->busy(),10000);QVERIFY(!backend->files->failure().isEmpty());
+    auto notice=window->findChild<QObject*>("sessionFilesFailurePopup");QVERIFY(notice);QTRY_VERIFY(notice->property("visible").toBool());QDir().mkpath(root+"/build/issue133");QTest::qWait(150);QVERIFY(window->grabWindow().save(root+"/build/issue133/invalid-import.png"));QMetaObject::invokeMethod(notice,"close");
+    backend->archiveProject(project,true);const auto normalRows=backend->projectRows();QVERIFY(std::none_of(normalRows.begin(),normalRows.end(),[&](const QVariant &v){return v.toMap()["id"]==project;}));
+    backend->toggleArchived();const auto archiveRows=backend->projectRows();QVERIFY(std::any_of(archiveRows.begin(),archiveRows.end(),[&](const QVariant &v){return v.toMap()["id"]==id;}));
+    backend->archiveProject(project,false);backend->toggleArchived();
+    auto live=backend->fresh(workspace);live->id=id;live->file=file;live->subagentsActive=true;
+    backend->removeProject(project);QVERIFY(!backend->files->busy());QVERIFY(QFileInfo::exists(file));live->subagentsActive=false;
+    QDir().mkpath(file+".images");{QFile image(file+".images/private.png");QVERIFY(image.open(QIODevice::WriteOnly));image.write("private");}
+    const auto child=file.left(file.size()-6)+"/tasks/child.jsonl";QDir().mkpath(QFileInfo(child).absolutePath());QVERIFY(QFile::copy(source,child));
+    // Exercise the destructive confirmation through the same sidebar menu as users.
+    QTRY_VERIFY(find("sidebarRow_"+project));
+    QTest::mouseClick(window,Qt::RightButton,Qt::NoModifier,point(find("sidebarRow_"+project)));
+    auto menu=window->findChild<QObject*>("projectContextMenu");QVERIFY(menu);QTRY_VERIFY(menu->property("visible").toBool());
+    click("contextRemoveProject");auto confirmation=window->findChild<QObject*>("deleteProjectPopup");QVERIFY(confirmation);QTRY_VERIFY(confirmation->property("visible").toBool());
+    QDir().mkpath(root+"/build/issue133");QTest::qWait(150);QVERIFY(window->grabWindow().save(root+"/build/issue133/delete-confirmation.png"));
+    click("confirmDeleteProjectButton");QTRY_VERIFY_WITH_TIMEOUT(!backend->files->busy(),10000);
+    QVERIFY2(backend->files->failure().isEmpty(),qPrintable(backend->files->failure().value("details").toString()));
+    QVERIFY(!QFileInfo::exists(file));QVERIFY(!QFileInfo::exists(file+".images"));QVERIFY(!QFileInfo::exists(child));
+    QVERIFY(backend->metadata(id).isEmpty());QVERIFY(QFileInfo(workspace).isDir());
+    QFile untouched(source);QVERIFY(untouched.open(QIODevice::ReadOnly));QCOMPARE(untouched.readAll(),original);
+  }
   void migratedProjectHistoryStaysUniqueAndClickable() {
     QTemporaryDir temporary;
     const auto workspace = temporary.filePath("workspace");
@@ -2685,8 +2730,14 @@ Item {
     QTRY_VERIFY_WITH_TIMEOUT(!backend->activeSession().isEmpty() && backend->activeSession() != owner->id, 15000);
     QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
     const auto fork = backend->activeSession();
+    const auto forkFile = backend->view->file;
     QVERIFY(call("sessions.delete", {{"id", fork}})["ok"].toBool());
+    // Managed transcript cleanup waits for process shutdown and runs off-thread.
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->files->busy(), 10000);
+    QVERIFY2(backend->files->failure().isEmpty(), qPrintable(report(backend->files->failure())));
     QVERIFY(!call("sessions.get", {{"id", fork}})["ok"].toBool());
+    QVERIFY(!QFileInfo::exists(forkFile));
+    QVERIFY(backend->metadata(fork).isEmpty());
     const auto archive = directory.filePath("control-provider.zip");
     QVERIFY(package(archive, false, false, "example-control"));
     const auto imported = call("plugins.import", {{"path", archive}});

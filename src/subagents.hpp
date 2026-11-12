@@ -46,6 +46,7 @@ public:
   void processReady(std::shared_ptr<Session> record);
   void processExit(std::shared_ptr<Session> record);
   void close();
+  void forget(const QList<std::shared_ptr<Session>> &records);
 signals:
   void changed();
   void contextChanged();

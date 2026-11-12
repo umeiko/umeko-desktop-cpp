@@ -35,6 +35,7 @@ public:
   Q_INVOKABLE void collapseAll();
   Q_INVOKABLE QVariantMap item(int row) const;
   Q_INVOKABLE void open(int row);
+  QProcess *retire();
   void close();
 signals:
   void changed();

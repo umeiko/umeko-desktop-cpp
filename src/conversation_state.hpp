@@ -40,6 +40,7 @@ public:
   QVariantMap turnStatus() const{return {{"state",busy?"running":"finished"}};}
   bool activeSession() const{return !token.isEmpty();}
   void switchTo(QString key);
+  void discardFileCache(){files.clear();fileOrder.clear();}
   void update(QVariantList rows);
   void load(QString file, QString leaf = {});
   Q_INVOKABLE void saveViewport(int row,double y,bool tail){if(row>=0){anchor=row;offset=qMax(0.0,y);follow=tail;}}
