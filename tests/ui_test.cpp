@@ -2215,7 +2215,12 @@ Item {
     auto modelsJob = call("plugins.refreshModels", {{"id", account}});
     QTRY_COMPARE_WITH_TIMEOUT(job(modelsJob["jobId"].toString())["status"].toString(), QString("done"), 15000);
     QVERIFY(!call("plugins.uninstall", {{"plugin", account}, {"version", "0.1.0"}})["ok"].toBool());
-    QVERIFY(call("plugins.uninstall", {{"plugin", "example-job"}, {"version", "0.1.0"}})["ok"].toBool());
+    // Model refresh can launch background capability probes. The uninstall
+    // contract rejects live provider workers, even after the refresh job ends.
+    auto providers=qobject_cast<Providers*>(backend->providerPlugins());QVERIFY(providers);
+    QTRY_VERIFY_WITH_TIMEOUT(([&]{for(auto process:providers->findChildren<QProcess*>())if(process->state()!=QProcess::NotRunning)return false;return true;})(),20000);
+    const auto uninstalled=call("plugins.uninstall", {{"plugin", "example-job"}, {"version", "0.1.0"}});
+    QVERIFY2(uninstalled["ok"].toBool(),qPrintable(report(uninstalled)));
   }
   void documentDeliveryAndResize() {
     const auto previousSize = window->size();
