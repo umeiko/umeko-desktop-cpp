@@ -26,6 +26,34 @@ private slots:
     window=ChatModel::recentCompactionInterval(history);QCOMPARE(window.first(),history[3]);QCOMPARE(window.last(),rows[4]);QVERIFY(window.contains(history[5]));
   }
 
+  void selectedPassageFiles() {
+    QTemporaryDir project;
+    QVERIFY(project.isValid());
+    const QString text = "中文𠮷 selected words\n\n```python\nprint(\"preserved\")\n```\n";
+    const auto first = U::writeSelectionAttachment(project.path(), text);
+    const auto second = U::writeSelectionAttachment(project.path(), text + "second");
+    QVERIFY(first["path"] != second["path"]);
+    QCOMPARE(first["name"].toString(), QString("中文𠮷 selected words `.md"));
+    QCOMPARE(second["name"].toString(), QString("中文𠮷 selected words ` (2).md"));
+    QFile file(first["path"].toString()); QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(QString::fromUtf8(file.readAll()), text);
+    QCOMPARE(QFileInfo(file).absolutePath(), project.path() + "/.umeko");
+    for (const auto &value : QStringList{"../../danger:<name>?*|\"", "CON", "nul.txt", "..."}) {
+      const auto item = U::writeSelectionAttachment(project.path(), value);
+      QCOMPARE(QFileInfo(item["path"].toString()).absolutePath(), project.path() + "/.umeko");
+      QVERIFY(!item["name"].toString().contains(QRegularExpression("[<>:\"/\\\\|?*]")));
+    }
+    QVERIFY(U::writeSelectionAttachment(project.path(), " \n\t").isEmpty());
+    QVERIFY_EXCEPTION_THROWN(U::writeSelectionAttachment(project.filePath("missing"), "text"), std::runtime_error);
+    QFile script(QDir::currentPath() + "/app/qml/markdown.js"); QVERIFY(script.open(QIODevice::ReadOnly));
+    const auto source = QString::fromUtf8(script.readAll());
+    const QVariantList rows{QVariantMap{{"role","assistant"},{"text","中文𠮷 selected words\n\n```python\nprint(\"preserved\")\n```\n\nLast paragraph."}}};
+    const QVariantMap start{{"row",0},{"block",0},{"offset",0}}, end{{"row",0},{"block",2},{"offset",5}};
+    QCOMPARE(U::selectedChatText(source, rows, {{"anchor",end},{"cursor",start}}),
+             QString("中文𠮷 selected words\n\nprint(\"preserved\")\n\nLast "));
+    QCOMPARE(U::selectedChatText(source, rows, {{"anchor",QVariantMap{{"row",0},{"block",0},{"offset",2}}},{"cursor",QVariantMap{{"row",0},{"block",0},{"offset",4}}}}), QString("𠮷"));
+  }
+
   void modelReasoningLevels() {
     const auto unknown = U::normalizeModel({});
     QVERIFY(U::reasoningLevels(unknown).isEmpty()); // Unknown automatic capability must not invent levels.
