@@ -2730,8 +2730,14 @@ Item {
     QTRY_VERIFY_WITH_TIMEOUT(!backend->activeSession().isEmpty() && backend->activeSession() != owner->id, 15000);
     QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
     const auto fork = backend->activeSession();
+    const auto forkFile = backend->view->file;
     QVERIFY(call("sessions.delete", {{"id", fork}})["ok"].toBool());
+    // Managed transcript cleanup waits for process shutdown and runs off-thread.
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->files->busy(), 10000);
+    QVERIFY2(backend->files->failure().isEmpty(), qPrintable(report(backend->files->failure())));
     QVERIFY(!call("sessions.get", {{"id", fork}})["ok"].toBool());
+    QVERIFY(!QFileInfo::exists(forkFile));
+    QVERIFY(backend->metadata(fork).isEmpty());
     const auto archive = directory.filePath("control-provider.zip");
     QVERIFY(package(archive, false, false, "example-control"));
     const auto imported = call("plugins.import", {{"path", archive}});
