@@ -41,6 +41,8 @@ QVariantMap toolView(QString id, QString name, QVariantMap arguments,
 QVariantList mediaView(QVariantList items);
 QString documentKind(QString path, QString kind = {});
 QPair<QVariantList, QVariantList> preview(const QString &file, qint64 limit = 0, const QString &leaf = {});
+QString selectedChatText(QString script, QVariantList rows, QVariantMap range);
+QVariantMap writeSelectionAttachment(QString workspace, QString text);
 QString attachmentPrompt(QString text, QVariantList attachments);
 QPair<QString, QVariantList> splitAttachments(QString text);
 } // namespace U

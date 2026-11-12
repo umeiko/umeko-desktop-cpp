@@ -515,6 +515,9 @@ public:
   Q_INVOKABLE void deleteSession(QString id);
   Q_INVOKABLE void toggleProject(QString id);
   Q_INVOKABLE void dropProjects(QString urls, QString project = {});
+  Q_PROPERTY(bool selectionAttachmentBusy READ selectionAttachmentBusy NOTIFY attachmentsChanged)
+  bool selectionAttachmentBusy() const { return selectionPreparing; }
+  Q_INVOKABLE void attachChatSelection(QString range);
   Q_INVOKABLE bool addAttachments(QString urls);
   Q_INVOKABLE bool pasteAttachments();
   Q_INVOKABLE void removeAttachment(QString id);
@@ -636,6 +639,8 @@ private:
   friend class WidgetChannel;
   friend class DesktopPet;
   friend class GlobalAgents;
+  quint64 selectionEpoch = 0;
+  bool selectionPreparing = false;
   ChatModel chat;
   Providers *providers;
   PiManagement *management;

@@ -25,6 +25,7 @@ public:
   Q_INVOKABLE void retryPage(int row) {requestRange(row,row);}
   Q_INVOKABLE void recordHeight(int row,double height);
   Q_INVOKABLE bool rangeReady(int first,int last) const;
+  quint64 contentRevision() const { return revision; }
   QVariantList rows;
   QVariantList questions() const { return questionRows; }
   int rowCount(const QModelIndex &parent = {}) const override {

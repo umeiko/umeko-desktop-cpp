@@ -1570,6 +1570,76 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(!process || process->state() == QProcess::NotRunning, 3000);
     QVERIFY(manager->uninstall(id));
   }
+  void selectedTextAttachment() {
+    const auto previousSession = backend->view;
+    const auto previousSettings = backend->store.data;
+    const auto restore = qScopeGuard([this, previousSession, previousSettings] {
+      backend->store.data = previousSettings;
+      backend->activate(previousSession);
+    });
+    const auto project = directory.filePath("selection-project");
+    QVERIFY(QDir().mkpath(project));
+    backend->setWorkspace(QUrl::fromLocalFile(project).toString());
+    const auto original = backend->view;
+    const QString text = "中文𠮷 selected words\n\n```python\nprint(\"preserved\")\n```\n\nLast paragraph.";
+    original->messages = {QVariantMap{{"role","assistant"},{"text",text},{"error",false}}};
+    emit backend->chatChanged(); QTest::qWait(200);
+    find("promptInput")->setProperty("text", "existing draft question");
+    backend->setDraft("existing draft question");
+    const auto existing = project + "/existing.txt";
+    QFile existingFile(existing); QVERIFY(existingFile.open(QIODevice::WriteOnly)); existingFile.write("keep"); existingFile.close();
+    QVERIFY(backend->addAttachments(QString::fromUtf8(QJsonDocument(QJsonArray{QUrl::fromLocalFile(existing).toString()}).toJson())));
+    QGuiApplication::clipboard()->setText("clipboard stays intact");
+    auto selection = find("chatSelection"); QVERIFY(selection);
+    const QVariantMap start{{"row",0},{"block",0},{"offset",0}}, end{{"row",0},{"block",2},{"offset",5}};
+    selection->setProperty("anchor",start); selection->setProperty("cursor",end);
+    QMetaObject::invokeMethod(selection,"refresh");
+    auto editor = find("selectText_0_0"); QVERIFY(editor);
+    QTest::mouseClick(window,Qt::RightButton,Qt::NoModifier,point(editor,8,6)); QTest::qWait(100);
+    auto action = find("attachSelectedText"); QVERIFY(action && action->isVisible() && action->isEnabled());
+    QDir().mkpath(root+"/artifacts/screenshots");
+    window->grabWindow().save(root+"/artifacts/screenshots/issue135-selection-menu.png");
+    click("attachSelectedText");
+    QTRY_COMPARE(backend->attachments().size(),2);
+    QVERIFY(!backend->selectionAttachmentBusy());
+    const auto item = backend->attachments().last().toMap();
+    QCOMPARE(item["kind"].toString(),QString("file"));
+    QCOMPARE(item["name"].toString(),QString("中文𠮷 selected words p.md"));
+    const auto path = item["path"].toString();
+    QCOMPARE(QFileInfo(path).absolutePath(),project+"/.umeko");
+    QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly));
+    const auto expected = QString("中文𠮷 selected words\n\nprint(\"preserved\")\n\nLast ");
+    QCOMPARE(QString::fromUtf8(file.readAll()),expected); file.close();
+    QCOMPARE(original->draft,QString("existing draft question"));
+    QCOMPARE(find("promptInput")->property("text").toString(),original->draft);
+    QCOMPARE(backend->attachments().first().toMap()["path"].toString(),existing);
+    QCOMPARE(QGuiApplication::clipboard()->text(),QString("clipboard stays intact"));
+    QCOMPARE(backend->messages().size(),1);
+    QVERIFY(U::attachmentPrompt("follow up",backend->attachments()).contains(path));
+    window->grabWindow().save(root+"/artifacts/screenshots/issue135-text-attachment.png");
+    const auto raw = QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap({{"anchor",start},{"cursor",end}})).toJson());
+    backend->attachChatSelection(raw);
+    QTRY_COMPARE(backend->attachments().size(),3);
+    QVERIFY(backend->attachments().last().toMap()["name"].toString().endsWith(" (2).md"));
+    // Completion cannot reach another session, even if it finishes before navigation returns.
+    backend->attachChatSelection(raw); backend->newSession();
+    QTRY_VERIFY(!backend->selectionAttachmentBusy());
+    QVERIFY(backend->attachments().isEmpty()); QCOMPARE(original->attachments.size(),3);
+    backend->view->messages = {QVariantMap{{"role","assistant"},{"text",text}}}; emit backend->chatChanged();
+    backend->attachChatSelection(raw);
+    backend->view->messages = {QVariantMap{{"role","assistant"},{"text","replacement"}}}; emit backend->chatChanged();
+    QTRY_VERIFY(!backend->selectionAttachmentBusy()); QVERIFY(backend->attachments().isEmpty());
+    QCOMPARE(QGuiApplication::clipboard()->text(),QString("clipboard stays intact"));
+    // Test write failure and attachment limit without replacing a project file.
+    const auto blocked = directory.filePath("blocked-selection"); QVERIFY(QDir().mkpath(blocked));
+    QFile obstacle(blocked+"/.umeko"); QVERIFY(obstacle.open(QIODevice::WriteOnly)); obstacle.write("keep"); obstacle.close();
+    backend->view->workspace=blocked;
+    backend->attachChatSelection(raw); QTRY_VERIFY(!backend->selectionAttachmentBusy()); QVERIFY(backend->attachments().isEmpty());
+    for(int i=0;i<20;++i)backend->view->attachments<<QVariantMap{{"id",QString::number(i)}};
+    backend->attachChatSelection(raw); QVERIFY(!backend->selectionAttachmentBusy()); QCOMPARE(backend->attachments().size(),20);
+    backend->view->attachments.clear(); emit backend->attachmentsChanged();
+  }
+
   void historyFoldsAndSelection() {
     backend->injectDemo();
     const auto fixture=directory.filePath("site.config.ts");
