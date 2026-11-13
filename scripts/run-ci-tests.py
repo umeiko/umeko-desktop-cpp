@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-SHARED = [['node', '--test', '--test-concurrency=2', 'tests/background-jobs.test.mjs',
+SHARED = [['node', '--test', '--test-concurrency=2', 'tests/request-headers.test.mjs', 'tests/background-jobs.test.mjs',
   'tests/tool-permissions.test.mjs', 'tests/tool-permissions-integration.test.mjs',
   'tests/compaction-bridge.test.mjs', 'tests/recent-images-bridge.test.mjs',
   'tests/provider-errors.test.mjs'],

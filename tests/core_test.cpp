@@ -2,6 +2,7 @@
 #include "pet_reminders.hpp"
 #include "pi_capabilities.hpp"
 #include "common.hpp"
+#include "request_headers.hpp"
 #include "store.hpp"
 #include "document_preview.hpp"
 #include "webview_support.hpp"
@@ -10,6 +11,19 @@
 class CoreTests : public QObject {
   Q_OBJECT
 private slots:
+  void customRequestHeadersValidation() {
+    using namespace RequestHeaders;
+    QCOMPARE(validate(QVariantList{}),defaults());
+    for (const auto &patch:QVariantList{QVariantMap{{"name","Host"}},QVariantMap{{"name","Bad Header"}},QVariantMap{{"value","line\nnext"}},QVariantMap{{"value",QString::fromUtf8("中文")}},QVariantMap{{"enabled",1}}}) {
+      auto rows=defaults(); auto row=rows.first().toMap();
+      const auto changes=patch.toMap();for (auto it=changes.cbegin();it!=changes.cend();++it)row[it.key()]=it.value(); rows[0]=row;
+      QVERIFY_EXCEPTION_THROWN(validate(rows),std::runtime_error);
+    }
+    auto rows=defaults();rows<<QVariantMap{{"id","custom-1"},{"name","USER-AGENT"},{"value","fixture"},{"enabled",true}};
+    QVERIFY_EXCEPTION_THROWN(validate(rows),std::runtime_error);
+    auto custom=rows.last().toMap();custom["enabled"]=false;rows.last()=custom;QCOMPARE(validate(rows),rows);
+    rows<<rows.first();QVERIFY_EXCEPTION_THROWN(validate(rows),std::runtime_error);
+  }
   void sharedViewportGroupsAndCompactionWindow() {
     ChatModel model;QVariantList rows;
     for(int i=0;i<600;++i)rows<<QVariantMap{{"role",i%2?"assistant":"user"},{"text",QString("row %1").arg(i)}};

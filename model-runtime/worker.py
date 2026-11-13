@@ -22,7 +22,8 @@ class Diagnostics:
         status = response.get('status')
         message = (format_http_error(status, response.get('body', ''), response.get('headers', {}))
                    if str(status).isdigit() and int(status) >= 400 else str(error))
-        return ValueError(safe_text(message, [provider.get('key', '')])[:2000])
+        secrets = [provider.get('key', '')] + [value for call in records for value in call.get('request', {}).get('headers', {}).values()]
+        return ValueError(safe_text(message, secrets)[:2000])
 
 
 def main():

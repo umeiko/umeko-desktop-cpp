@@ -1085,6 +1085,7 @@ void Backend::configureGateway() {
                 {"providers", rows},
                 {"python", providers->resolvePython()},
                 {"multimodal", store.data["multimodal"]},
+                {"requestHeaders", store.data.value("requestHeaders",QVariantList{})},
                 {"generationDirectory",store.directory+"/generation-transfer"},
                 {"models", modelCatalog()},
                 {"settings", store.data["server"]}});

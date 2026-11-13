@@ -10,6 +10,7 @@ import { fetchProvider, failureReport } from './transport.mjs';
 import { responsesRequest, responsesEvents } from './openai-responses.mjs';
 import {generateMedia} from './native-generation.mjs';
 import {thinkingParameters,selectedFormat} from './thinking-formats.mjs';
+import {buildHeaders} from './request-headers.mjs';
 import fs from 'node:fs/promises';
 import {resolve,sep} from 'node:path';
 
@@ -175,7 +176,7 @@ class EventQueue {
 }
 export class Gateway {
   constructor(emit = () => {}) { this.emit = emit; this.providers = []; this.models = []; this.token = ''; this.settings = {}; this.pending = new Map(); this.controllers = new Set(); this.privateServer = this.server(true); }
-  configure(input) { this.diagnosticsDir = input.diagnosticsDir; this.providers = input.providers || []; this.models = input.models || []; this.token = input.token || ''; this.settings = input.settings || this.settings; this.mediaConfig = {python:input.python, multimodal:input.multimodal, providers:this.providers, generationDirectory:input.generationDirectory}; }
+  configure(input) { this.diagnosticsDir = input.diagnosticsDir; this.providers = input.providers || []; this.models = input.models || []; this.token = input.token || ''; this.settings = input.settings || this.settings; this.requestHeaders = input.requestHeaders; this.mediaConfig = {python:input.python, multimodal:input.multimodal, providers:this.providers, requestHeaders:input.requestHeaders, generationDirectory:input.generationDirectory}; }
   server(isPrivate) {
     const server = http.createServer((req, res) => { void this.handle(req, res, isPrivate).catch(() => {
       if (!res.headersSent) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { type: 'invalid_request_error', message: 'Invalid request structure' } })); }
@@ -264,7 +265,7 @@ export class Gateway {
       return;
     }
     const anthropic = provider.api === 'anthropic', responses = provider.wireApi === 'responses', base = validateBase(provider.baseUrl);
-    const headers = { 'Content-Type': 'application/json', 'User-Agent':'Umeko-Desktop', ...(anthropic ? { 'x-api-key': provider.key || '', 'anthropic-version': '2023-06-01' } : { Authorization: `Bearer ${provider.key || ''}` }) };
+    const {headers,omitHeaders} = buildHeaders(this.requestHeaders, provider);
     const messages = body.messages.map(message => message.role === 'assistant' && message.tool_calls && message.content == null ? {...message, content:''} : message);
     const payload = anthropic ? openaiToAnthropic(messages, body.tools, body.max_tokens, body.parameters) : responses ? responsesRequest(messages, body.tools, body.max_tokens, body.parameters) : { messages, max_tokens: body.max_tokens, stream: true, stream_options: { include_usage: true }, ...(body.tools.length ? { tools: body.tools.map(t => ({ type: 'function', function: t })) } : {}), ...body.parameters };
     payload.model = model.upstream;
@@ -274,7 +275,7 @@ export class Gateway {
     http.push(record);
     let agent;
     try {
-      const fetched = await fetchProvider(provider, base + suffix, { method: 'POST', headers, body: JSON.stringify(payload), redirect: 'error',
+      const fetched = await fetchProvider(provider, base + suffix, { method: 'POST', headers, omitHeaders, body: JSON.stringify(payload), redirect: 'error',
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(300000)]) }, record);
       const response = fetched.response; agent = fetched.agent;
       record.response.status = response.status;
