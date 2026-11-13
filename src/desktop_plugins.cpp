@@ -84,6 +84,13 @@ void DesktopPlugins::incubatePage() {
       connect(window,&QWindow::activeChanged,this,[this]{if(!m_closed)pageIncubation.start();});
     }
     if(window->isActive()&&window->isExposed())continue;
+    auto surface=window->findChild<QObject*>("desktopPluginSurfaceLoader");
+    auto item=surface?surface->property("item").value<QObject*>():nullptr;
+    auto page=item?item->findChild<QObject*>("desktopPluginPageLoader"):nullptr;
+    const auto loading=[](QObject *loader){return loader&&loader->property("status").toInt()==2;}; // Loader.Loading
+    // Loading includes preparation on the QML thread, before an incubator
+    // exists. Keep the idle driver alive until both stages finish.
+    pending|=loading(surface)||loading(page);
     auto engine=qmlEngine(window);auto controller=engine?engine->incubationController():nullptr;
     if(!controller||!controller->incubatingObjectCount())continue;
     // Occluded/inactive windows may stop rendering frames. Finish pending

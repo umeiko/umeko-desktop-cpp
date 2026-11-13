@@ -4900,20 +4900,38 @@ def create_provider(context): return Interactive(context)
     QVERIFY(manager->saveNpmConfig("{}"));
   }
   void widgetPageIncubationFinishesWithoutRenderFrames() {
-    backend->newSession();window->setProperty("page","chat");
+    backend->newSession();window->setProperty("page","chat");window->show();window->requestActivate();
     auto manager=backend->desktopExtensions;manager->closePage();
-    auto automatic=engine->incubationController();QQmlIncubationController paused;
-    // Keep the scene visible and pause incubation explicitly, independent of
-    // platform-specific behavior of fully hidden windows.
-    QWindow occluder;occluder.resize(100,100);occluder.show();occluder.requestActivate();
-    const auto restore=qScopeGuard([&]{manager->closePage();engine->setIncubationController(automatic);occluder.close();window->show();window->requestActivate();});
-    QTRY_VERIFY(!window->isActive());
-    engine->setIncubationController(&paused);
-    QElapsedTimer elapsed;elapsed.start();
     QVERIFY(manager->openPage("scheduled-tasks"));
-    QTRY_VERIFY_WITH_TIMEOUT(find("desktopPluginPageLoader")&&find("desktopPluginPageLoader")->property("status").toInt()==1,5000);
-    QVERIFY(find("scheduledTasksWidget"));
-    qInfo()<<"Widget creation without render frames (ms):"<<elapsed.elapsed();
+    QTRY_VERIFY_WITH_TIMEOUT(manager->workers.value("scheduled-tasks")&&manager->workers["scheduled-tasks"]->ready,15000);
+    QTRY_VERIFY_WITH_TIMEOUT(find("desktopPluginPageLoader")&&find("desktopPluginPageLoader")->property("status").toInt()==1,10000);
+    QTRY_VERIFY(!find("webPane")->property("moving").toBool());
+    auto loader=find("desktopPluginPageLoader");QVERIFY(loader);
+    QTcpServer deferred;QVERIFY(deferred.listen(QHostAddress::LocalHost,0));
+    connect(&deferred,&QTcpServer::newConnection,this,[&]{
+      while(deferred.hasPendingConnections()) {
+        auto socket=deferred.nextPendingConnection();
+        connect(socket,&QTcpSocket::disconnected,socket,&QObject::deleteLater);
+        connect(socket,&QTcpSocket::readyRead,socket,[socket]{
+          const auto request=socket->property("request").toByteArray()+socket->readAll();socket->setProperty("request",request);
+          if(socket->property("served").toBool()||!request.contains("\r\n\r\n"))return;socket->setProperty("served",true);
+          if(!request.startsWith("GET /Deferred.qml ")){socket->write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");socket->disconnectFromHost();return;}
+          // Model the asynchronous preparation interval before an incubator exists.
+          QTimer::singleShot(500,socket,[socket]{const QByteArray body="import QtQuick\nItem { objectName: \"delayedWidgetProbe\" }\n";
+            socket->write("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: "+QByteArray::number(body.size())+"\r\n\r\n"+body);socket->disconnectFromHost();});
+        });
+      }
+    });
+    auto automatic=engine->incubationController();QQmlIncubationController paused;QWindow occluder;
+    const auto restore=qScopeGuard([&]{manager->closePage();engine->setIncubationController(automatic);window->show();occluder.close();window->requestActivate();});
+    engine->setIncubationController(&paused);
+    QQmlExpression load(qmlContext(loader),loader,QString("setSource('http://127.0.0.1:%1/Deferred.qml', {})").arg(deferred.serverPort()));
+    load.evaluate();QVERIFY2(!load.hasError(),qPrintable(load.error().toString()));
+    occluder.resize(100,100);occluder.show();occluder.requestActivate();QTRY_VERIFY(!window->isActive());
+    QElapsedTimer elapsed;elapsed.start();
+    QTRY_VERIFY2_WITH_TIMEOUT(find("delayedWidgetProbe"),qPrintable(QString("loader=%1 incubators=%2 timer=%3").arg(loader->property("status").toInt()).arg(paused.incubatingObjectCount()).arg(manager->pageIncubation.isActive())),5000);
+    QCOMPARE(loader->property("status").toInt(),1);
+    qInfo()<<"Deferred Widget creation without render frames (ms):"<<elapsed.elapsed();
   }
   void scheduledTasksLocalTimeGlobalScopeAndNativeDelivery() {
     configureAPI();backend->newSession();window->setProperty("page","chat");window->resize(1440,950);
