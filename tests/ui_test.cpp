@@ -4900,10 +4900,15 @@ def create_provider(context): return Interactive(context)
     QVERIFY(manager->saveNpmConfig("{}"));
   }
   void widgetPageIncubationFinishesWithoutRenderFrames() {
+    backend->newSession();window->setProperty("page","chat");
     auto manager=backend->desktopExtensions;manager->closePage();
     auto automatic=engine->incubationController();QQmlIncubationController paused;
-    const auto restore=qScopeGuard([&]{manager->closePage();engine->setIncubationController(automatic);window->show();window->requestActivate();});
-    window->hide();engine->setIncubationController(&paused);
+    // Keep the scene visible and pause incubation explicitly, independent of
+    // platform-specific behavior of fully hidden windows.
+    QWindow occluder;occluder.resize(100,100);occluder.show();occluder.requestActivate();
+    const auto restore=qScopeGuard([&]{manager->closePage();engine->setIncubationController(automatic);occluder.close();window->show();window->requestActivate();});
+    QTRY_VERIFY(!window->isActive());
+    engine->setIncubationController(&paused);
     QElapsedTimer elapsed;elapsed.start();
     QVERIFY(manager->openPage("scheduled-tasks"));
     QTRY_VERIFY_WITH_TIMEOUT(find("desktopPluginPageLoader")&&find("desktopPluginPageLoader")->property("status").toInt()==1,5000);
