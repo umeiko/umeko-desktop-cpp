@@ -18,7 +18,11 @@ QVariant redact(QVariant value) {
       const bool content = (type == QMetaType::QString && !it.value().toString().isEmpty()) ||
                            (type == QMetaType::QVariantMap && !it.value().toMap().isEmpty()) ||
                            (type == QMetaType::QVariantList && !it.value().toList().isEmpty());
-      if (it.key() == "fields" && type == QMetaType::QVariantList) {
+      if (it.key() == "requestHeaders" && type == QMetaType::QVariantList) {
+        auto headers=it.value().toList();
+        for (auto &item:headers) { auto row=item.toMap(); row["value"]="[redacted]"; item=row; }
+        it.value()=headers;
+      } else if (it.key() == "fields" && type == QMetaType::QVariantList) {
         auto fields = it.value().toList();
         for (auto &item : fields) {
           const auto original = item.toMap();

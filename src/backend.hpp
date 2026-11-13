@@ -253,6 +253,7 @@ class Backend : public QObject {
   Q_OBJECT
   friend class NativeUiTests;
   Q_PROPERTY(QVariantMap config READ config NOTIFY changed)
+  Q_PROPERTY(QVariantList requestHeaders READ requestHeaders NOTIFY changed)
   Q_PROPERTY(QVariantList auxiliaryVisionModels READ auxiliaryVisionModels NOTIFY changed)
   Q_PROPERTY(QVariantList customThemes READ customThemes NOTIFY changed)
   Q_PROPERTY(QVariantMap themeStyle READ themeStyle NOTIFY changed)
@@ -409,6 +410,8 @@ public:
   int messageCount() const { return view->messages.size(); }
   Q_INVOKABLE void showRequestDetails(QString id) { if(!requestReport(id).isEmpty())emit requestDetailsRequested(id); }
   Q_INVOKABLE bool saveDesktopSettings(QString raw);
+  Q_INVOKABLE bool saveRequestHeaders(QString raw);
+  QVariantList requestHeaders() const;
   Q_INVOKABLE bool openExternalHtml(QString path);
   Q_INVOKABLE void openWebPreview(QString url, QString title = {});
   QObject *sessionPreview() { return previewLoader; }

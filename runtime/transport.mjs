@@ -59,6 +59,18 @@ export async function fetchProvider(provider, url, options, record) {
     let agent;
     try {
       agent = dispatcher(provider, {systemCa: expanded});
+      if (options.omitHeaders?.length) {
+        const omitted = new Set(options.omitHeaders), dispatch = agent.dispatch.bind(agent);
+        // Fetch supplies fallback headers before dispatch. Remove them here so
+        // disabling User-Agent really omits it rather than sending an empty value.
+        agent.dispatch = (request, handler) => {
+          const headers = request.headers;
+          const filtered = Array.isArray(headers)
+            ? headers.flatMap((value,index)=>index % 2 || omitted.has(String(value).toLowerCase()) ? [] : [value,headers[index+1]])
+            : Object.fromEntries(Object.entries(headers || {}).filter(([key])=>!omitted.has(key.toLowerCase())));
+          return dispatch({...request,headers:filtered},handler);
+        };
+      }
       const response = await providerFetch(url, {...options, dispatcher: agent});
       if (expanded) {
         recoveredProviders.delete(key); recoveredProviders.add(key);
@@ -87,8 +99,9 @@ export function redact(value, secrets = []) {
 }
 export function failureReport(directory, provider, request, response, failure, http = []) {
   const id = randomUUID();
+  const secrets = [provider.key,...http.flatMap(call=>Object.values(call.request?.headers || {}))];
   const record = redact({ id, at: new Date().toISOString(), provider: provider.name, request, response,
-    error: describeFailure(failure), http }, [provider.key]);
+    error: describeFailure(failure), http }, secrets);
   if (directory) {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     writeFileSync(join(directory, id + '.json'), JSON.stringify(record, null, 2), { mode: 0o600 });
@@ -98,8 +111,8 @@ export function failureReport(directory, provider, request, response, failure, h
   const certificate = certificateFailure(failure);
   const error = new Error(certificate
     ? `TLS certificate validation failed (${certificate.code}); check the provider's Network settings and CA file, then open request details [Umeko:${id}]`
-    : response.status >= 400 ? `${formatHttpError(response.status,response.body,response.headers,[provider.key])} [Umeko:${id}]`
-    : /供应商返回 HTTP \d+：/.test(failure.message) ? `${redact(failure.message,[provider.key])} [Umeko:${id}]`
+    : response.status >= 400 ? `${formatHttpError(response.status,response.body,response.headers,secrets)} [Umeko:${id}]`
+    : /供应商返回 HTTP \d+：/.test(failure.message) ? `${redact(failure.message,secrets)} [Umeko:${id}]`
     : `Provider request failed; open request details [Umeko:${id}]`);
   error.reportId = id; error.cause = failure; error.retryable = transientFailure(failure, http);
   if (certificate) error.tlsCode = certificate.code;

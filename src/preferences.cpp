@@ -1,4 +1,5 @@
 #include "backend.hpp"
+#include "request_headers.hpp"
 #include <cmath>
 #include <QFontDatabase>
 #include <QGuiApplication>
@@ -152,6 +153,22 @@ QString Backend::requestReport(QString id) const {
                                         : QString();
 }
 
+QVariantList Backend::requestHeaders() const {
+  try { return RequestHeaders::validate(store.data.value("requestHeaders",QVariantList{})); }
+  catch (const std::exception &) { return RequestHeaders::defaults(); }
+}
+bool Backend::saveRequestHeaders(QString raw) {
+  QJsonParseError error; const auto doc=QJsonDocument::fromJson(raw.toUtf8(),&error);
+  const auto old=store.data.value("requestHeaders",QVariantList{});
+  try {
+    if (error.error!=QJsonParseError::NoError || !doc.isArray()) throw std::runtime_error("请求头配置格式无效");
+    const auto rows=RequestHeaders::validate(doc.toVariant());
+    if (rows==old) return true;
+    store.data["requestHeaders"]=rows;
+    if (!store.save()) { store.data["requestHeaders"]=old; emit toast("请求头保存失败"); return false; }
+  } catch (const std::exception &failure) { emit toast(QString::fromUtf8(failure.what())); return false; }
+  configureGateway(); emit changed(); emit toast("请求头已保存，将用于后续模型请求"); return true;
+}
 bool Backend::saveDesktopSettings(QString raw) {
   QJsonParseError error;auto doc=QJsonDocument::fromJson(raw.toUtf8(),&error);
   if(error.error!=QJsonParseError::NoError || !doc.isObject())return false;

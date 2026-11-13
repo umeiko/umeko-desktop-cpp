@@ -2636,6 +2636,66 @@ Item {
     QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, position);
     QTRY_COMPARE_WITH_TIMEOUT(fixture->property("clicks").toInt(), 1, 1000);
   }
+  void customRequestHeadersSettings() {
+    const auto saved=backend->store.data;
+    const auto previousPage=window->property("page"),previousTab=window->property("settingsTab");
+    const auto previousSize=window->size();
+    const auto restore=qScopeGuard([&] {
+      backend->store.data=saved;backend->store.save();backend->configureGateway();backend->notify();
+      backend->setFontScale(1);backend->setLanguage("zh");window->resize(previousSize);
+      window->setProperty("page",previousPage);window->setProperty("settingsTab",previousTab);
+    });
+    window->resize(1200,900);window->setProperty("page","settings");window->setProperty("settingsTab",3);QTest::qWait(150);
+    click("openUmekoDesktopSettingsButton");
+    QVERIFY(find("openRequestHeaders")->isVisible());
+    QVERIFY(!find("requestHeadersSettings")->isVisible());
+    QVERIFY(find("desktopChatWidthHints")->isVisible());
+    click("openRequestHeaders");
+    QVERIFY(find("customRequestsPage")->isVisible());
+    QVERIFY(!find("desktopChatWidthHints")->isVisible());
+    QVERIFY(!find("openRequestHeaders")->isVisible());
+    QVERIFY(find("requestHeaderValue_user-agent"));
+    auto editor=find("requestHeadersSettings");QVERIFY(editor);
+    const auto edit=[&](QString name,QString value) {
+      auto field=find(name);QVERIFY(field);field->forceActiveFocus();
+      QTest::keyClick(window,Qt::Key_A,Qt::ControlModifier);QInputMethodEvent typing;typing.setCommitString(value);QCoreApplication::sendEvent(field,&typing);QTest::keyClick(window,Qt::Key_Tab);
+    };
+    edit("requestHeaderValue_user-agent","My-Client/1.0");
+    QVERIFY(editor->property("dirty").toBool());
+    click("backFromRequestHeaders");
+    QVERIFY(!editor->isVisible());QVERIFY(find("desktopChatWidthHints")->isVisible());
+    QVERIFY(editor->property("dirty").toBool());
+    click("openRequestHeaders");
+    QCOMPARE(find("requestHeaderValue_user-agent")->property("text").toString(),QString("My-Client/1.0"));
+    QVERIFY(QMetaObject::invokeMethod(editor,"save",Q_ARG(QVariant,false)));
+    QCOMPARE(backend->requestHeaders()[1].toMap()["value"].toString(),QString("My-Client/1.0"));
+    Store reloaded(backend->store.directory);QCOMPARE(reloaded.data["requestHeaders"].toList(),backend->requestHeaders());
+    click("requestHeaderEnabled_user-agent");
+    QVERIFY(QMetaObject::invokeMethod(editor,"save",Q_ARG(QVariant,false)));
+    QVERIFY(!backend->requestHeaders()[1].toMap()["enabled"].toBool());
+    QVERIFY(QMetaObject::invokeMethod(find("addRequestHeader"),"clicked"));QTest::qWait(50);
+    QVERIFY(editor->property("dirty").toBool());
+    QVERIFY(QMetaObject::invokeMethod(editor,"save",Q_ARG(QVariant,false))); // Blank name is rejected, draft stays visible.
+    QCOMPARE(backend->requestHeaders().size(),5);QVERIFY(editor->property("dirty").toBool());
+    QVERIFY(QMetaObject::invokeMethod(find("discardRequestHeaderChanges"),"clicked"));
+    QVERIFY(!editor->property("dirty").toBool());
+    for (const auto &language:QStringList{"zh","en"}) {
+      backend->setLanguage(language);backend->setFontScale(language=="en"?1.6:1);window->resize(language=="en"?900:1200,900);QTest::qWait(150);
+      for (const auto &name:QStringList{"requestHeaderName_user-agent","requestHeaderValue_user-agent","requestHeaderEnabled_authorization","saveRequestHeaders"}) {
+        const auto item=find(name);QVERIFY(item);QVERIFY(item->isVisible());
+        const auto bounds=item->mapRectToItem(editor,item->boundingRect());QVERIFY(bounds.left()>=0);QVERIFY(bounds.right()<=editor->width()+1);
+      }
+      QDir().mkpath(root+"/build/request-headers-ui");window->grabWindow().save(root+"/build/request-headers-ui/"+language+".png");
+    }
+    QVERIFY(QMetaObject::invokeMethod(editor,"save",Q_ARG(QVariant,true)));
+    QCOMPARE(backend->requestHeaders()[1].toMap()["value"].toString(),QString("Umeko-Desktop"));
+    const auto controlled=backend->umekoRequest({{"operation","settings.get"}})["config"].toMap()["requestHeaders"].toList();
+    QVERIFY(!controlled.isEmpty());QCOMPARE(controlled[1].toMap()["value"].toString(),QString("[redacted]"));
+    QVERIFY2(warnings.isEmpty(),qPrintable(warnings.join('\n')));
+    click("backFromRequestHeaders");click("backFromUmekoDesktopButton");click("openUmekoDesktopSettingsButton");
+    QVERIFY(find("openRequestHeaders")->isVisible());QVERIFY(!editor->isVisible());
+    click("backFromUmekoDesktopButton");
+  }
   void umekoDesktopControl() {
     configureAPI();
     const auto savedAgent = backend->store.data["agent"];

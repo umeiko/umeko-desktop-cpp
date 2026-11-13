@@ -26,7 +26,7 @@ export async function* generateMedia(config, body, signal) {
   signal?.addEventListener('abort', stop, {once:true});
   const deadline = setTimeout(() => {expired=true;stop();}, 15 * 60 * 1000);
   child.stdin.on('error', () => {});
-  child.stdin.write(JSON.stringify({settings:{providers:[account],multimodal:config.multimodal},body})+'\n');
+  child.stdin.write(JSON.stringify({settings:{providers:[account],multimodal:config.multimodal,requestHeaders:config.requestHeaders},body})+'\n');
   let buffer = '', finished = false, exitCode;
   const exit = new Promise((resolve,reject) => {child.once('error',reject);child.once('close',code=>{exitCode=code;resolve(code);});});
   // Keep spawn errors observed even when stdout exits first.
