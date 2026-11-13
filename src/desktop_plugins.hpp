@@ -1,6 +1,7 @@
 #pragma once
 #include "common.hpp"
 class Backend;
+class QWindow;
 class WidgetChannel;
 class DesktopPet;
 class GlobalAgents;
@@ -86,7 +87,9 @@ private:
     QVariantList queue;
     QSet<QString> pending;
   };
-  QTimer contextRefresh;
+  QTimer contextRefresh, pageIncubation;
+  QPointer<QWindow> incubationWindow;
+  void incubatePage();
   Backend *b;
   QString root, registry, m_page, m_error, m_status, storageKey;
   bool m_busy = false, m_closed = false;

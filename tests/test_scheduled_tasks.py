@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from datetime import date, datetime, time
 from pathlib import Path
 import json
@@ -266,7 +267,7 @@ class ScheduledTasksTests(TestCase):
 
     def test_legacy_unmarked_rows_are_migrated_without_becoming_reusable(self):
         legacy = self.database.with_name('legacy.sqlite3')
-        with sqlite3.connect(legacy) as db:
+        with closing(sqlite3.connect(legacy)) as db, db:
             db.execute('''CREATE TABLE schedules (id TEXT PRIMARY KEY, name TEXT NOT NULL,
                 message TEXT NOT NULL, profile TEXT NOT NULL, schedule TEXT NOT NULL,
                 enabled INTEGER NOT NULL, next_at INTEGER)''')

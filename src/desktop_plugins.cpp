@@ -7,6 +7,9 @@
 #include <QClipboard>
 #include <QDesktopServices>
 #include <QMimeData>
+#include <QQuickWindow>
+#include <QQmlEngine>
+#include <QQmlIncubationController>
 
 static QByteArray frame(QVariantMap value) {
   return QJsonDocument::fromVariant(value).toJson(QJsonDocument::Compact) +
@@ -67,7 +70,29 @@ DesktopPlugins::DesktopPlugins(Backend *backend)
     if (auto record = b->records.value(target.first))
       b->writePi(record, {{"type", "loop_review_response"}, {"id", target.second}});
   });
+  pageIncubation.setInterval(32);
+  connect(&pageIncubation,&QTimer::timeout,this,&DesktopPlugins::incubatePage);
+  connect(this,&DesktopPlugins::pageChanged,this,[this]{if(!m_closed)pageIncubation.start();});
   synchronize();
+}
+void DesktopPlugins::incubatePage() {
+  bool pending=false;
+  for(auto window:QGuiApplication::topLevelWindows()) {
+    if(window->objectName()!="mainWindow")continue;
+    if(incubationWindow!=window) {
+      incubationWindow=window;
+      connect(window,&QWindow::activeChanged,this,[this]{if(!m_closed)pageIncubation.start();});
+    }
+    if(window->isActive()&&window->isExposed())continue;
+    auto engine=qmlEngine(window);auto controller=engine?engine->incubationController():nullptr;
+    if(!controller||!controller->incubatingObjectCount())continue;
+    // Occluded/inactive windows may stop rendering frames. Finish pending
+    // Widget creation in small idle slices without changing foreground frames.
+    if(qEnvironmentVariableIsSet("UMEKO_SCHEDULED_TRACE"))qInfo()<<"WIDGET_IDLE_INCUBATION"<<controller->incubatingObjectCount();
+    controller->incubateFor(2);
+    pending|=controller->incubatingObjectCount()>0;
+  }
+  if(!pending)pageIncubation.stop();
 }
 DesktopPlugins::~DesktopPlugins() { close(); }
 QObject *DesktopPlugins::hostServices() const { return host; }
@@ -990,7 +1015,7 @@ void DesktopPlugins::close() {
   if (m_closed)
     return;
   m_closed = true;
-  contextRefresh.stop();
+  contextRefresh.stop();pageIncubation.stop();
   coordinators->close();
   companion->close();
   QList<QPointer<QProcess>> processes;

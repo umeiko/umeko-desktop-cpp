@@ -18,6 +18,7 @@
 #include <QAbstractItemModelTester>
 #include <QJSValue>
 #include <QQmlExpression>
+#include <QQmlIncubationController>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
@@ -4897,6 +4898,17 @@ def create_provider(context): return Interactive(context)
     QVERIFY(!manager->saveNpmConfig(
         "{\"npmRegistry\":\"https://user:secret@example.invalid/\"}"));
     QVERIFY(manager->saveNpmConfig("{}"));
+  }
+  void widgetPageIncubationFinishesWithoutRenderFrames() {
+    auto manager=backend->desktopExtensions;manager->closePage();
+    auto automatic=engine->incubationController();QQmlIncubationController paused;
+    const auto restore=qScopeGuard([&]{manager->closePage();engine->setIncubationController(automatic);window->show();window->requestActivate();});
+    window->hide();engine->setIncubationController(&paused);
+    QElapsedTimer elapsed;elapsed.start();
+    QVERIFY(manager->openPage("scheduled-tasks"));
+    QTRY_VERIFY_WITH_TIMEOUT(find("desktopPluginPageLoader")&&find("desktopPluginPageLoader")->property("status").toInt()==1,5000);
+    QVERIFY(find("scheduledTasksWidget"));
+    qInfo()<<"Widget creation without render frames (ms):"<<elapsed.elapsed();
   }
   void scheduledTasksLocalTimeGlobalScopeAndNativeDelivery() {
     configureAPI();backend->newSession();window->setProperty("page","chat");window->resize(1440,950);
