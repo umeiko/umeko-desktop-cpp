@@ -4898,12 +4898,107 @@ def create_provider(context): return Interactive(context)
         "{\"npmRegistry\":\"https://user:secret@example.invalid/\"}"));
     QVERIFY(manager->saveNpmConfig("{}"));
   }
+  void scheduledTasksLocalTimeGlobalScopeAndNativeDelivery() {
+    configureAPI();backend->newSession();window->setProperty("page","chat");window->resize(1440,950);
+    auto manager=backend->desktopExtensions;auto bus=manager->globalAgents();
+    const auto originalSettings=manager->settings;
+    QMetaObject::Connection trace;
+    if(qEnvironmentVariableIsSet("UMEKO_SCHEDULED_TRACE"))trace=connect(manager,&DesktopPlugins::pageChanged,this,[&]{qInfo()<<"TIMER_PAGE"<<manager->page()<<"session"<<manager->m_session["token"]<<"view"<<backend->view->key;});
+    const auto stopTrace=qScopeGuard([&]{disconnect(trace);});
+    auto source=backend->view;QTemporaryDir workspace;QVERIFY(workspace.isValid());backend->setWorkspace(workspace.path());
+    QStringList tasks,agents;globalBridge=true;
+    const auto invoke=[&](QString method,QVariantMap args=QVariantMap{},std::shared_ptr<Session> caller=std::shared_ptr<Session>{}) {
+      QSignalSpy replies(manager,&DesktopPlugins::response);
+      const auto id=manager->callFor("scheduled-tasks",method,QString::fromUtf8(QJsonDocument::fromVariant(args).toJson(QJsonDocument::Compact)),false,20000,
+          QVariantMap{{"token",(caller?caller:source)->key},{"id",(caller?caller:source)->id},{"workspace",(caller?caller:source)->workspace}});
+      QElapsedTimer elapsed;elapsed.start();
+      while(!id.isEmpty()&&elapsed.elapsed()<20000){for(const auto &row:replies)if(row[0]==id)return row[1].toMap();QTest::qWait(20);}
+      return QVariantMap{{"ok",false},{"error","Timer call timed out: "+method}};
+    };
+    const auto restore=qScopeGuard([&]{
+      for(const auto &id:tasks)invoke("delete",{{"task_id",id}});
+      for(const auto &id:agents)if(bus->agents.contains(id))bus->ui("delete",{{"id",id}});
+      globalBridge=false;manager->closePage();manager->settings=originalSettings;manager->save();backend->newSession();
+    });
+    QVERIFY(manager->enabled("scheduled-tasks"));QTRY_VERIFY_WITH_TIMEOUT(manager->workers.value("scheduled-tasks")&&manager->workers["scheduled-tasks"]->ready,15000);
+    const QString draft="保留未发送草稿";source->draft=draft;
+    const auto savedAttachments=source->attachments;
+    const QVariantMap interval{{"frequency","interval"},{"interval_value",0.25},{"interval_unit","minutes"}};
+    const auto privateReply=invoke("save",{{"name","本会话计时器"},{"message","Native timer main delivery"},{"target","main"},{"enabled",false},{"schedule",interval}});
+    QVERIFY2(privateReply["ok"].toBool(),qPrintable(privateReply["error"].toString()));
+    const auto local=privateReply["result"].toMap()["task_id"].toString();tasks<<local;
+    QVERIFY(invoke("run",{{"task_id",local}})["ok"].toBool());
+    const auto runs=[&](QString id){return invoke("history",{{"task_id",id}})["result"].toMap()["runs"].toList();};
+    QTRY_VERIFY_WITH_TIMEOUT(runs(local).size()==1&&runs(local).first().toMap()["state"]=="delivered",15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!source->busy(),15000);QVERIFY(!source->id.isEmpty());
+    const auto created=bus->ui("create",{{"name","全局日报助手"},{"model",source->model}});
+    QVERIFY2(created["ok"].toBool(),qPrintable(created["error"].toString()));const auto agent=created["result"].toMap()["id"].toString();agents<<agent;
+    QVERIFY(bus->ui("setBridge",{{"id","session:"+source->id},{"agentId",agent},{"enabled",true}})["ok"].toBool());
+    const QVariantMap calendar{{"frequency","once"},{"first_date","2030-01-01"},{"local_time","04:00:00"},{"zone","America/Los_Angeles"}};
+    const auto globalReply=invoke("save",{{"name","全局计时器 · 本地时间"},{"message","Native timer global delivery"},{"target","agent:"+agent},{"enabled",true},{"schedule",calendar}});
+    QVERIFY2(globalReply["ok"].toBool(),qPrintable(globalReply["error"].toString()));const auto shared=globalReply["result"].toMap()["task_id"].toString();tasks<<shared;
+    QVERIFY(manager->openPage("scheduled-tasks"));QTRY_VERIFY(find("scheduledTasksWidget"));
+    QTRY_VERIFY_WITH_TIMEOUT(find("scheduledTaskGlobal_"+shared)&&find("scheduledTaskGlobal_"+shared)->isVisible(),15000);
+    const auto next=find("scheduledTaskNext_"+shared)->property("text").toString();
+    const auto expected=QDateTime::fromSecsSinceEpoch(1893499200).toLocalTime().toString("yyyy-MM-dd HH:mm:ss");
+    QVERIFY2(next.contains(expected),qPrintable(next+" != "+expected));
+    if(QTimeZone::systemTimeZoneId()=="Asia/Shanghai")QVERIFY(next.contains("2030-01-01 20:00:00"));
+    QTRY_VERIFY_WITH_TIMEOUT(!find("webPane")->property("moving").toBool(),5000);
+    QTRY_VERIFY(find("scheduledNewOrBack")->isEnabled());
+    click("scheduledNewOrBack");QTRY_COMPARE(find("scheduledTasksWidget")->property("page").toString(),QString("edit"));QTRY_VERIFY(find("scheduledTaskZone"));
+    QCOMPARE(find("scheduledTaskZone")->property("text").toString(),QString::fromUtf8(QTimeZone::systemTimeZoneId()));
+    click("scheduledNewOrBack");QTRY_COMPARE(find("scheduledTasksWidget")->property("page").toString(),QString("list"));
+    QVERIFY(invoke("run",{{"task_id",shared}})["ok"].toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(runs(shared).size()==1&&runs(shared).first().toMap()["state"]=="delivered",20000);
+    const auto history=runs(shared);QVERIFY(!history.first().toMap()["session_id"].toString().isEmpty());
+    QVERIFY(invoke("enable",{{"task_id",local}})["ok"].toBool());
+    backend->newSession();auto other=backend->view;
+    auto visible=invoke("list",{},other)["result"].toMap()["tasks"].toList();QCOMPARE(visible.size(),1);QCOMPARE(visible.first().toMap()["id"].toString(),shared);
+    QVERIFY(!invoke("delete",{{"task_id",local}},other)["ok"].toBool());
+    // The visible global timer occupies a slot even in an unconnected new chat.
+    QStringList extras;
+    for(int i=0;i<4;++i){const auto result=invoke("save",{{"name",QString("Private %1").arg(i)},{"message","Quota fixture"},{"target","main"},{"enabled",false},{"schedule",interval}},other);
+      QVERIFY(result["ok"].toBool());extras<<result["result"].toMap()["task_id"].toString();}
+    QVERIFY(!invoke("save",{{"name","Sixth"},{"message","Must fail"},{"target","main"},{"enabled",false},{"schedule",interval}},other)["ok"].toBool());
+    for(const auto &id:extras)QVERIFY(invoke("delete",{{"task_id",id}},other)["ok"].toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(runs(local).size()>=3&&runs(local).first().toMap()["state"]=="delivered",40000);
+    const auto periodic=runs(local);QCOMPARE(periodic[0].toMap()["state"].toString(),QString("delivered"));
+    QCOMPARE(periodic[0].toMap()["scheduled_at"].toLongLong()-periodic[1].toMap()["scheduled_at"].toLongLong(),15LL);
+    QVERIFY(backend->view==other);QCOMPARE(source->draft,draft);QCOMPARE(source->attachments,savedAttachments);
+    QVERIFY(invoke("disable",{{"task_id",local}})["ok"].toBool());
+    manager->closePage();QVERIFY(bus->ui("delete",{{"id",agent}})["ok"].toBool());
+    // Observe persistence without calling list (which also refreshes metadata).
+    QProcess inspector;const auto db=manager->root+"/state/scheduled-tasks/application/schedules.sqlite3";
+    QTest::qWait(500);
+    inspector.start(backend->providers->resolvePython(),{"-B","-c","import sqlite3,sys;print(sqlite3.connect(sys.argv[1]).execute('select enabled,next_at from schedules where id=?',(sys.argv[2],)).fetchone())",db,shared});
+    QVERIFY(inspector.waitForFinished(5000));QCOMPARE(inspector.readAllStandardOutput().trimmed(),QByteArray("(0, None)"));
+    QVERIFY(manager->openPage("scheduled-tasks"));
+    QTRY_VERIFY2_WITH_TIMEOUT(find("scheduledTaskTargetName_"+shared),qPrintable(QString::fromUtf8(QJsonDocument::fromVariant(manager->page()).toJson())),15000);
+    QTRY_COMPARE(find("scheduledTaskTargetName_"+shared)->property("text").toString(),backend->language()=="en"?QString("None"):QString("无"));
+    QVERIFY(!find("scheduledTaskToggle_"+shared)->isEnabled());QCOMPARE(runs(shared),history);
+    QVERIFY(!invoke("enable",{{"task_id",shared}},other)["ok"].toBool());
+    backend->openSession(source->id);QVERIFY(manager->openPage("scheduled-tasks"));QTRY_VERIFY_WITH_TIMEOUT(find("scheduledTaskEdit_"+local),15000);
+    const auto screenshots=root+"/build/screenshots";QDir().mkpath(screenshots);window->grabWindow().save(screenshots+"/scheduled-tasks-native.png");
+    for(const auto &warning:warnings)QVERIFY2(!warning.contains("scheduled-tasks/qml"),qPrintable(warning));
+    if(!qEnvironmentVariable("UMEKO_SCHEDULED_REVIEW_DIR").isEmpty()) {
+      const auto output=qEnvironmentVariable("UMEKO_SCHEDULED_REVIEW_DIR");QDir().mkpath(output);
+      backend->setLanguage("zh");backend->setTheme("white");window->setTitle("Umeko C++ · #147 全局计时器预览");
+      const auto added=bus->ui("create",{{"name","日报助手 · 演示"},{"model",source->model}})["result"].toMap()["id"].toString();agents<<added;
+      QVERIFY(bus->ui("setBridge",{{"id","session:"+source->id},{"agentId",added},{"enabled",true}})["ok"].toBool());
+      const auto result=invoke("save",{{"name","全局计时器 · 东八区 20:00"},{"message","【演示】整理项目日报。"},{"target","agent:"+added},{"enabled",true},{"schedule",calendar}});
+      QVERIFY(result["ok"].toBool());tasks<<result["result"].toMap()["task_id"].toString();
+      QTest::qWait(2200);window->grabWindow().save(output+"/preview.png");
+      U::writeJson(output+"/ready.json",QVariantMap{{"pid",QCoreApplication::applicationPid()},{"profile",directory.path()},{"source",root}});
+      window->raise();window->requestActivate();QEventLoop review;QTimer stop;stop.setInterval(250);
+      connect(&stop,&QTimer::timeout,&review,[&]{if(QFileInfo::exists(output+"/stop"))review.quit();});stop.start();review.exec();
+    }
+  }
   void desktopPluginPagesAndSessionBoundary() {
     auto manager=qobject_cast<DesktopPlugins*>(backend->desktopPlugins());
     QVERIFY(manager);
     QSet<QString> builtins;
     for(const auto &row:manager->rows())builtins.insert(row.toMap()["id"].toString());
-    QCOMPARE(builtins,QSet<QString>({"file-tree","git-viewer","terminal","desktop-pet","global-agents","pi-manager","change-review","skill-manager","widget-market","system-prompt"}));
+    QCOMPARE(builtins,QSet<QString>({"file-tree","git-viewer","terminal","desktop-pet","global-agents","pi-manager","change-review","skill-manager","widget-market","system-prompt","scheduled-tasks"}));
     QTemporaryDir workspace;QVERIFY(workspace.isValid());
     QFile file(workspace.filePath("hello.md"));QVERIFY(file.open(QIODevice::WriteOnly));file.write("# Plugin fixture\n");file.close();
 #ifndef Q_OS_WIN
@@ -5848,7 +5943,7 @@ def create_provider(context): return Interactive(context)
     manager->entries["file-tree"]=widget;
     auto service=manager->entry("global-agents");service["agent"]=QVariantMap{{"prompt","Application Widget instructions."}};
     manager->entries["global-agents"]=service;
-    manager->settings["enabled"]=QVariantMap{{"file-tree",true},{"global-agents",true},{"system-prompt",false}};
+    manager->settings["enabled"]=QVariantMap{{"file-tree",true},{"global-agents",true},{"system-prompt",false},{"scheduled-tasks",false}};
     manager->settings["sessions"]=QVariantMap{{"draft:"+s->key,QVariantList{"file-tree"}}};
     QCOMPARE(manager->promptSources(s->key).size(),2);
     QVERIFY(manager->promptSources("missing-token").isEmpty());
@@ -5883,6 +5978,7 @@ def create_provider(context): return Interactive(context)
       // Review the shipped manifests, without the temporary test contributions above.
       manager->entries=oldEntries;manager->settings=oldSettings;
       backend->retire(backend->view);backend->newSession();
+      manager->setEnabled("scheduled-tasks",false);
       QVERIFY(manager->promptSources(backend->view->key).isEmpty());
       backend->setTheme("white");backend->setLanguage("zh");window->resize(1500,980);
       manager->setEnabled("system-prompt",true);manager->setSessionEnabled("system-prompt",true);

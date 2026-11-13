@@ -74,3 +74,7 @@ The command and path detector adapts @xynogen/pix-gate 0.4.5 (MIT). Its full cop
 ## Agent Client Protocol SDK
 
 The optional DeepSeek Harness backend uses the official `@agentclientprotocol/sdk` 2.4.0, licensed under Apache-2.0. The original license is included in `licenses/acp-sdk-LICENSE`. Source: https://github.com/agentclientprotocol/typescript-sdk.
+
+## Scheduled Tasks time-zone data
+
+The scheduled-tasks Widget includes the unmodified PSF tzdata 2026.6 wheel as an offline IANA fallback, from https://pypi.org/project/tzdata/2026.6/. Its SHA-256 and bundled Apache-2.0/IANA license locations are recorded in `umeko-plugins/scheduled-tasks/vendor/README.md`. The Widget scheduler uses the bundled Python standard library; PySide6 is not required.

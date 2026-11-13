@@ -23,6 +23,7 @@ public:
   QVariantMap runtimeConfig(std::shared_ptr<Session> record);
 private:
   friend class NativeUiTests;
+  friend class WidgetHost;
   DesktopPlugins *m;
   Backend *b;
   QString root, registry, error;

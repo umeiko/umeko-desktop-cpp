@@ -67,9 +67,10 @@ QVariantMap WidgetHost::capabilities() const {
   names << "sessions.acquire" << "sessions.submit" << "sessions.subscribe" << "sessions.wait" << "sessions.cancel" << "sessions.history" << "sessions.release" << "approvals.registerHandler" << "approvals.respond";
   names << "systemPrompt.inspect" << "systemPrompt.toggle" << "systemPrompt.save" << "systemPrompt.restore";
   names << "checkpoints.acquire" << "checkpoints.release";
+  names << "scheduledTasks.targets" << "scheduledTasks.trigger" << "scheduledTasks.status" << "scheduledTasks.openTarget";
   for (const auto &name : names)
     operations[name] =
-        QVariantMap{{"permission", name.startsWith("sessions.") || name.startsWith("approvals.") ? "sessions.manage" : name.startsWith("checkpoints.") ? "workspace.write" : name.startsWith("skills.") ? (name=="skills.insert" ? "session.write" : mutation(name) ? "skills.manage" : "skills.read") : (name.startsWith("systemPrompt.") && name!="systemPrompt.inspect") || mutation(name) || name=="pi.cancel" ? "pi.manage" : "pi.read"},
+        QVariantMap{{"permission", name.startsWith("sessions.") || name.startsWith("approvals.") || name.startsWith("scheduledTasks.") ? "sessions.manage" : name.startsWith("checkpoints.") ? "workspace.write" : name.startsWith("skills.") ? (name=="skills.insert" ? "session.write" : mutation(name) ? "skills.manage" : "skills.read") : (name.startsWith("systemPrompt.") && name!="systemPrompt.inspect") || mutation(name) || name=="pi.cancel" ? "pi.manage" : "pi.read"},
                     {"confirmation", mutation(name)}};
   return {{"version", 1},
           {"operations", operations},
@@ -90,6 +91,9 @@ void WidgetHost::owner(Task request) const {
           "Widget is not enabled");
   if(request->operation.startsWith("sessions.") || request->operation.startsWith("approvals.")) {
     require(m->application(request->widget),"Session service requires an application lifecycle Widget");return;
+  }
+  if(request->operation.startsWith("scheduledTasks.")) {
+    require(request->widget=="scheduled-tasks" && m->entry(request->widget)["builtin"].toBool(),"Available only to built-in Scheduled Tasks");return;
   }
   require(!request->session["token"].toString().isEmpty() &&
               request->session["token"] == m->m_session["token"] &&
@@ -159,6 +163,7 @@ void WidgetHost::begin(Task request) {
     require(
         m->entry(request->widget)["permissions"].toList().contains(permission),
         QString("Widget permission is required: ") + permission);
+    if(operation.startsWith("scheduledTasks.")){scheduledTasks(request);return;}
     if(operation.startsWith("systemPrompt.")){systemPrompt(request);return;}
     if(operation.startsWith("sessions.") || operation.startsWith("approvals.")){sessionService(request);return;}
     const QMap<QString, QStringList> fields{
@@ -569,6 +574,7 @@ void WidgetHost::stop(QString id) {
 }
 
 void WidgetHost::observe(QString key, QVariantMap event) {
+  timerObserve(key,event);
   QTimer::singleShot(0,this,[this,key,event]{sessionObserve(key,event);});
   if (event["type"] == "system_prompt") {
     const auto identifier=event["requestId"].toString();

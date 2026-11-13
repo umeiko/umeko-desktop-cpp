@@ -57,6 +57,7 @@ public:
   Q_INVOKABLE bool uninstall(QString id);
   Q_INVOKABLE bool exportSdk(QString url);
   void synchronize();
+  void scheduledTargetsChanged();
   void close();
 signals:
   void changed();
@@ -98,6 +99,8 @@ private:
   QVariantList icons;
   QSet<QString> failedServices;
   QString applicationToken, selection;
+  QByteArray timerTargetSignature;
+  QVariantMap workerSession(QString id, QVariantMap source) const;
   bool application(QString id) const;
   QVariantMap iconFor(QString id) const;
   QVariantMap entry(QString id) const;
