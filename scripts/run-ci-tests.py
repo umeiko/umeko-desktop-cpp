@@ -4,6 +4,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+SCHEDULED = [['python', '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_scheduled*.py']]
+
 SHARED = [['node', '--test', '--test-concurrency=2', 'tests/request-headers.test.mjs', 'tests/background-jobs.test.mjs',
   'tests/tool-permissions.test.mjs', 'tests/tool-permissions-integration.test.mjs',
   'tests/compaction-bridge.test.mjs', 'tests/recent-images-bridge.test.mjs',
@@ -63,7 +65,7 @@ def main():
     parser.add_argument('--scope',choices=['shared','platform'],required=True)
     args=parser.parse_args()
     root=Path(__file__).resolve().parents[1]
-    commands=list(SHARED if args.scope=='shared' else PLATFORM)
+    commands=list(SHARED if args.scope=='shared' else PLATFORM)+SCHEDULED
     if args.scope=='shared':commands.append(['python','-m','unittest','discover','-s','tests','-p','test_ci_plan.py'])
     for command in commands:
         command=list(command)

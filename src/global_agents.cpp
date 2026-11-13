@@ -78,7 +78,7 @@ void GlobalAgents::stop(){
   outbox.clear();save();
 }
 void GlobalAgents::close(){stop();saveTimer.stop();for(auto p:retiring)if(p&&p->state()!=QProcess::NotRunning&&!p->waitForFinished(150)){p->kill();p->waitForFinished(150);}retiring.clear();}
-void GlobalAgents::changed(bool persist){++revision;if(!selectedConversation.isEmpty()&&!chatRefresh.isActive())chatRefresh.start();if(persist&&!saveTimer.isActive())saveTimer.start();}
+void GlobalAgents::changed(bool persist){m->scheduledTargetsChanged();++revision;if(!selectedConversation.isEmpty()&&!chatRefresh.isActive())chatRefresh.start();if(persist&&!saveTimer.isActive())saveTimer.start();}
 void GlobalAgents::save(){
   for(auto it=records.cbegin();it!=records.cend();++it)if(agents.contains(it.key())) {
     auto row=agents[it.key()].toMap();row["sessionId"]=it.value()->id;row["sessionFile"]=it.value()->file;

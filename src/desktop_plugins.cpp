@@ -7,6 +7,9 @@
 #include <QClipboard>
 #include <QDesktopServices>
 #include <QMimeData>
+#include <QQuickWindow>
+#include <QQmlEngine>
+#include <QQmlIncubationController>
 
 static QByteArray frame(QVariantMap value) {
   return QJsonDocument::fromVariant(value).toJson(QJsonDocument::Compact) +
@@ -67,7 +70,36 @@ DesktopPlugins::DesktopPlugins(Backend *backend)
     if (auto record = b->records.value(target.first))
       b->writePi(record, {{"type", "loop_review_response"}, {"id", target.second}});
   });
+  pageIncubation.setInterval(32);
+  connect(&pageIncubation,&QTimer::timeout,this,&DesktopPlugins::incubatePage);
+  connect(this,&DesktopPlugins::pageChanged,this,[this]{if(!m_closed)pageIncubation.start();});
   synchronize();
+}
+void DesktopPlugins::incubatePage() {
+  bool pending=false;
+  for(auto window:QGuiApplication::topLevelWindows()) {
+    if(window->objectName()!="mainWindow")continue;
+    if(incubationWindow!=window) {
+      incubationWindow=window;
+      connect(window,&QWindow::activeChanged,this,[this]{if(!m_closed)pageIncubation.start();});
+    }
+    if(window->isActive()&&window->isExposed())continue;
+    auto surface=window->findChild<QObject*>("desktopPluginSurfaceLoader");
+    auto item=surface?surface->property("item").value<QObject*>():nullptr;
+    auto page=item?item->findChild<QObject*>("desktopPluginPageLoader"):nullptr;
+    const auto loading=[](QObject *loader){return loader&&loader->property("status").toInt()==2;}; // Loader.Loading
+    // Loading includes preparation on the QML thread, before an incubator
+    // exists. Keep the idle driver alive until both stages finish.
+    pending|=loading(surface)||loading(page);
+    auto engine=qmlEngine(window);auto controller=engine?engine->incubationController():nullptr;
+    if(!controller||!controller->incubatingObjectCount())continue;
+    // Occluded/inactive windows may stop rendering frames. Finish pending
+    // Widget creation in small idle slices without changing foreground frames.
+    if(qEnvironmentVariableIsSet("UMEKO_SCHEDULED_TRACE"))qInfo()<<"WIDGET_IDLE_INCUBATION"<<controller->incubatingObjectCount();
+    controller->incubateFor(2);
+    pending|=controller->incubatingObjectCount()>0;
+  }
+  if(!pending)pageIncubation.stop();
 }
 DesktopPlugins::~DesktopPlugins() { close(); }
 QObject *DesktopPlugins::hostServices() const { return host; }
@@ -97,7 +129,7 @@ bool DesktopPlugins::enabled(QString id) const {
   return entries.contains(id) &&
          settings.value("enabled")
              .toMap()
-             .value(id, !application(id) || ((id == "desktop-pet" || id == "global-agents") &&
+             .value(id, !application(id) || ((id == "desktop-pet" || id == "global-agents" || id == "scheduled-tasks") &&
                                              entry(id)["builtin"].toBool()))
              .toBool();
 }
@@ -286,12 +318,25 @@ void DesktopPlugins::synchronize() {
   for (auto id : workers.keys())
     send(id, {{"id", U::uuid()},
               {"operation", "session"},
-              {"arguments", QVariantMap{{"session", m_session}}}});
+              {"arguments", QVariantMap{{"session", workerSession(id,m_session)}}}});
   // Headless plugins run only for the current, explicitly enabled session.
   for (auto id : entries.keys())
     if (enabled(id) && sessionEnabled(id) &&
         (application(id) || entry(id)["page"].toString().isEmpty()))
       start(id);
+}
+QVariantMap DesktopPlugins::workerSession(QString id,QVariantMap source) const {
+  if(id=="scheduled-tasks"&&entry(id)["builtin"].toBool()) {
+    const auto info=host->timerMetadata();source["timerGlobalTargets"]=info["global_targets"];source["timerTimeZone"]=info["time_zone"];
+  }
+  return source;
+}
+void DesktopPlugins::scheduledTargetsChanged() {
+  const auto worker=workers.value("scheduled-tasks");if(!worker||!worker->ready)return;
+  const auto info=host->timerMetadata();const auto signature=QJsonDocument::fromVariant(info["global_targets"]).toJson(QJsonDocument::Compact);
+  if(signature==timerTargetSignature)return;
+  timerTargetSignature=signature;
+  send("scheduled-tasks",{{"id",U::uuid()},{"operation","event"},{"arguments",QVariantMap{{"name","scheduledTasks.targetsChanged"},{"data",info}}}});
 }
 void DesktopPlugins::setEnabled(QString id, bool value) {
   if (!entries.contains(id))
@@ -484,7 +529,7 @@ void DesktopPlugins::start(QString id) {
         {"arguments",
          QVariantMap{{"path", packagePath(id)},
                      {"config", config},
-                     {"session", m_session},
+                     {"session", workerSession(id,m_session)},
                      {"hostCapabilities", host->capabilities()},
                      {"runtimes", QVariantMap{{"node", QVariantMap{{"executable", U::node()}}}}},
                      {"stateDir",
@@ -589,6 +634,14 @@ QString DesktopPlugins::callFor(QString id, QString method, QString raw,
   } else {
     if (snapshot.isEmpty())
       snapshot = m_session;
+    if(id=="scheduled-tasks"&&entry(id)["builtin"].toBool()) {
+      try { snapshot=host->captureTimerSession(snapshot); }
+      catch(const std::exception &error) {
+        w->pending.remove(request);
+        QTimer::singleShot(0,this,[this,request,message=QString::fromUtf8(error.what())]{emit response(request,{{"ok",false},{"error",message}});});
+        return request;
+      }
+    }
     snapshot["language"] = b->language();
     send(id, {{"id", request},
               {"operation", agent ? "agentCall" : "call"},
@@ -644,6 +697,7 @@ void DesktopPlugins::receive(QString id, std::shared_ptr<Worker> w) {
       w->queue.clear();
       for (auto item : queue)
         send(id, item.toMap());
+      if(id=="scheduled-tasks"){timerTargetSignature.clear();scheduledTargetsChanged();}
       emit pageChanged();
       emit changed();
     } else if (w->pending.remove(request))
@@ -968,7 +1022,7 @@ void DesktopPlugins::close() {
   if (m_closed)
     return;
   m_closed = true;
-  contextRefresh.stop();
+  contextRefresh.stop();pageIncubation.stop();
   coordinators->close();
   companion->close();
   QList<QPointer<QProcess>> processes;
@@ -978,9 +1032,14 @@ void DesktopPlugins::close() {
     stop(id);
   for (auto process : processes)
     if (process && process->state() != QProcess::NotRunning &&
-        !process->waitForFinished(300)) {
+        !process->waitForFinished(1500)) {
+#ifdef Q_OS_WIN
+      QProcess killer;U::hideConsole(&killer);
+      killer.start(qEnvironmentVariable("SystemRoot","C:/Windows")+"/System32/taskkill.exe",{"/PID",QString::number(process->processId()),"/T","/F"});
+      if(!killer.waitForFinished(3000)){killer.kill();killer.waitForFinished(500);}
+#endif
       process->kill();
-      process->waitForFinished(100);
+      process->waitForFinished(1000);
     }
 }
 

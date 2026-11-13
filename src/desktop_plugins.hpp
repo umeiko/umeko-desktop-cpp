@@ -1,6 +1,7 @@
 #pragma once
 #include "common.hpp"
 class Backend;
+class QWindow;
 class WidgetChannel;
 class DesktopPet;
 class GlobalAgents;
@@ -57,6 +58,7 @@ public:
   Q_INVOKABLE bool uninstall(QString id);
   Q_INVOKABLE bool exportSdk(QString url);
   void synchronize();
+  void scheduledTargetsChanged();
   void close();
 signals:
   void changed();
@@ -85,7 +87,9 @@ private:
     QVariantList queue;
     QSet<QString> pending;
   };
-  QTimer contextRefresh;
+  QTimer contextRefresh, pageIncubation;
+  QPointer<QWindow> incubationWindow;
+  void incubatePage();
   Backend *b;
   QString root, registry, m_page, m_error, m_status, storageKey;
   bool m_busy = false, m_closed = false;
@@ -98,6 +102,8 @@ private:
   QVariantList icons;
   QSet<QString> failedServices;
   QString applicationToken, selection;
+  QByteArray timerTargetSignature;
+  QVariantMap workerSession(QString id, QVariantMap source) const;
   bool application(QString id) const;
   QVariantMap iconFor(QString id) const;
   QVariantMap entry(QString id) const;

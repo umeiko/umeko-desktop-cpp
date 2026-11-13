@@ -90,6 +90,9 @@ Open **Settings → Agent → Plugin management** to enable Widgets, import a ZI
 - **Terminal**: colored shared shells, vertical splits and chat attachment. The Agent operates the same terminal you see.
 - **Desktop pet**: a native animated companion with task states, interactions and importable appearances.
 
+
+Scheduled Tasks is enabled by default. Its [clock Widget](umeko-plugins/scheduled-tasks/README.md) sends one-time or recurring messages to the current main Agent or a connected global Agent. Global timers are shared across chats, count toward each chat’s five slots and show a globe. Times use the system zone; deleting a global target pauses its timers while keeping history.
+
 Widgets may have a page or run as a headless service, with a session or application lifetime. Packages include a short introduction, full Agent documentation and explicit public methods. See the [Widget SDK](plugin-runtime/README.md) and [Agent communication guide](runtime/umeko-docs/widget-plugins.md).
 
 ## Provider packages

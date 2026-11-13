@@ -70,4 +70,7 @@ Agent 可以通过 `umeko_desktop` 管理应用的供应商、主题、设置、
 - **终端**：ANSI 着色、上下分栏和聊天附加；Agent 操作的就是用户看见的同一个终端。
 - **桌宠**：原生动画服务，展示任务状态、支持点击互动和导入自定义形象。
 
+
+「[定时任务](umeko-plugins/scheduled-tasks/README.md)」默认开启，支持单次和周期消息。绑定全局子智能体的计时器跨会话共享、计入每个会话的五个名额并显示地球图标；时间按系统时区显示。删除目标会自动停用计时器并保留历史。
+
 Widget 支持会话级或应用级生命周期，也可作为无界面后台服务。通过 `umeko_desktop` 查询各插件文档、公开方法和消息回执。参见 [Widget SDK](plugin-runtime/README.md) 与 [通信说明](runtime/umeko-docs/widget-plugins.md)。

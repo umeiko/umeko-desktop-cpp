@@ -8,6 +8,8 @@ class WidgetHost : public QObject {
 public:
   explicit WidgetHost(DesktopPlugins *manager);
   QVariantMap capabilities() const;
+  QVariantMap timerMetadata(std::shared_ptr<struct Session> record = {}) const;
+  QVariantMap captureTimerSession(QVariantMap source);
   QVariantMap pendingApproval() const { return approval; }
   QString requestFor(QString id, QVariantMap value, bool page = false);
   void stop(QString id);
@@ -40,6 +42,16 @@ private:
   QHash<QString, Task> requests, jobs;
   QHash<QString, QPair<Task, QString>> catalogRequests;
   QHash<QString, QPair<Task, QString>> promptRequests;
+  void scheduledTasks(Task request);
+  std::shared_ptr<struct Session> timerRecord(QVariantMap source);
+  void timerObserve(QString key, QVariantMap event);
+  struct TimerJob {
+    std::weak_ptr<struct Session> record, targetRecord;
+    QString owner, target, text, bus, state="queued", detail, sessionId;
+    std::chrono::steady_clock::time_point created=std::chrono::steady_clock::now();
+  };
+  QHash<QString,TimerJob> timerJobs;
+  QStringList timerJobOrder;
   void systemPrompt(Task request);
   QStringList jobOrder;
   struct Activity {
