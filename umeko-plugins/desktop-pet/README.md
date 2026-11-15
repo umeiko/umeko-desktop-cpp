@@ -23,8 +23,10 @@
 
 内置八奈见杏菜、小鞠知花、马剃天爱星和鲸鱼娘，可在动画形象下拉框或桌宠右键菜单切换，内置形象不可删除。选择独立于聊天主角色，升级和重启保留偏好。
 
-八奈见资源是 AI 绘制的原始姿势、眨眼关键帧与周期性二维变形组合；小鞠和天爱星资源是 AI 绘制的六状态动画关键帧，统一基线后编码为透明循环 WebP。提示词分别记录在 `assets/yanami/generation.json`、`assets/komari/generation.json` 与 `assets/tiara/generation.json`。
+八奈见资源是 AI 绘制的原始姿势、眨眼关键帧与周期性二维变形组合；小鞠资源是 AI 绘制的六状态动画关键帧，统一基线后编码为透明循环 WebP。提示词分别记录在 `assets/yanami/generation.json` 与 `assets/komari/generation.json`。
 
 鲸鱼娘的六种透明动画复用社区 [dsh-whale-girl-pet](https://github.com/yanzwzz/dsh-whale-girl-pet)，保留 MIT 许可与贡献者署名。原始动画转为 360×360、10 fps 的循环 WebP，无需网络或额外视频组件；只有当前动作参与播放，隐藏后释放解码器。来源版本、校验与动作映射见 `assets/whale-girl/source.json`，许可见 `assets/whale-girl/LICENSE.txt`。开发者可用 `scripts/prepare-whale-pet.py --ffmpeg <ffmpeg路径>` 重新制作资源，应用和常规构建不会自动下载。
 
 待机动画每完整播放一轮，有 0.5% 概率出现与普通待机画风和比例一致的全身彩蛋动画与用户指定台词；隐藏、暂停、忙碌和互动时不会抽取。稀有图只在显示时加载，不消耗模型 Token。桌宠动画提示词与生成记录见 art/desktop-pets/rare-idle-v1；主页半身插画独立打包。
+
+马剃天爱星的六种任务状态与稀有待机使用用户交付的 512×512 透明循环 GIF，保留原始帧、时长和文件内容；来源说明与 SHA-256 见 `assets/tiara/delivery.provenance.json`。保留 `tiara` 形象 ID、原有互动台词和稀有待机规则。

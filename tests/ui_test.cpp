@@ -3808,11 +3808,23 @@ Item {
     }
     QVERIFY(found); QVERIFY(!pet->ui("removeAppearance", {{"id", "tiara"}})["ok"].toBool());
     const auto folder = root + "/umeko-plugins/desktop-pet/assets/tiara/";
-    for (const auto &state : QStringList{"idle", "thinking", "working", "waiting", "done", "error"}) {
-      QImageReader reader(folder + state + ".webp");
-      QCOMPARE(reader.imageCount(), 6); auto image = reader.read();
-      QVERIFY(!image.isNull()); QCOMPARE(image.size(), QSize(384, 576));
-      QVERIFY(image.hasAlphaChannel()); QCOMPARE(image.pixelColor(0,0).alpha(), 0);
+    const QMap<QString, QPair<int, int>> clips{
+        {"idle", {39, 1800}}, {"thinking", {56, 2400}},
+        {"working", {56, 2000}}, {"waiting", {56, 2600}},
+        {"done", {56, 2000}}, {"error", {56, 2500}},
+        {"idle-rare", {107, 4200}}};
+    for (auto it = clips.cbegin(); it != clips.cend(); ++it) {
+      QImageReader reader(folder + it.key() + ".gif");
+      QCOMPARE(reader.imageCount(), it.value().first);
+      QCOMPARE(reader.size(), QSize(512, 512));
+      int duration = 0;
+      for (int frame = 0; frame < reader.imageCount(); ++frame) {
+        const auto image = reader.read();
+        QVERIFY(!image.isNull());
+        QCOMPARE(image.pixelColor(0, 0).alpha(), 0);
+        duration += reader.nextImageDelay();
+      }
+      QCOMPARE(duration, it.value().second);
     }
     QVERIFY(pet->ui("configure", {{"appearance", "tiara"}, {"visible", true}, {"paused", false}})["ok"].toBool());
     QTRY_VERIFY_WITH_TIMEOUT(window->findChild<QObject*>("desktopPetWindow"), 5000);
@@ -4054,13 +4066,13 @@ Item {
     pet->action = pet->target = "idle"; pet->interaction.clear();
     pet->drawIdleScene(.004999);
     QVERIFY(pet->state()["rareIdle"].toBool()); QVERIFY(pet->state()["animated"].toBool());
-    QVERIFY(pet->state()["source"].toString().endsWith("/idle-rare.webp"));
+    QVERIFY(pet->state()["source"].toString().endsWith("/idle-rare.gif"));
     QTRY_VERIFY(window->findChild<QQuickWindow*>("desktopPetWindow"));
     QPointer<QQuickWindow> petWindow = window->findChild<QQuickWindow*>("desktopPetWindow");
     QTRY_VERIFY(petWindow->findChild<QObject*>("desktopPetAnimation"));
     auto animation = petWindow->findChild<QObject*>("desktopPetAnimation");
     QTRY_VERIFY(animation->property("ready").toBool());
-    QTRY_VERIFY(animation->property("source").toUrl().toString().endsWith("/idle-rare.webp"));
+    QTRY_VERIFY(animation->property("source").toUrl().toString().endsWith("/idle-rare.gif"));
     auto frame = animation->property("currentFrame").toInt();
     QTRY_VERIFY(animation->property("currentFrame").toInt() != frame);
     QVERIFY(petWindow->grabWindow().save(root + "/build/screenshots/tiara-rare-pet.png"));
@@ -5588,6 +5600,66 @@ def create_provider(context): return Interactive(context)
     QDir().mkpath(root+"/build/screenshots");QVERIFY(petWindow->grabWindow().save(root+"/build/screenshots/whale-desktop-pet.png"));
     QVERIFY(pet->ui("hide",{})["ok"].toBool());
     QTRY_VERIFY(!window->findChild<QObject*>("desktopPetWindowLoader")->property("item").value<QObject*>());
+  }
+  void desktopPetMenusFollowThemeOutsideSmallWindow() {
+    auto pet = qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());
+    QVERIFY(pet);
+    const auto original = pet->config();
+    const auto theme = backend->store.data.value("theme", "light").toString();
+    const auto restore = qScopeGuard([&] {
+      pet->ui("configure", original);
+      backend->setTheme(theme);
+    });
+    QVERIFY(pet->ui("configure", {{"appearance", "tiara"}, {"visible", true}, {"size", 96}, {"paused", false}})["ok"].toBool());
+    QTRY_VERIFY(window->findChild<QQuickWindow*>("desktopPetWindow"));
+    auto petWindow = window->findChild<QQuickWindow*>("desktopPetWindow");
+    auto menu = petWindow->findChild<QObject*>("desktopPetContextMenu");
+    QVERIFY(menu);
+    auto evaluate = [&](QObject *object, QString source) {
+      QQmlExpression expression(QQmlEngine::contextForObject(object), object, source);
+      auto result = expression.evaluate();
+      if (expression.hasError()) qWarning() << expression.error();
+      return result;
+    };
+    QDir().mkpath(root + "/build/screenshots");
+    for (const auto &palette : QStringList{"white", "dark", "yanami"}) {
+      backend->setTheme(palette);
+      QVERIFY(QMetaObject::invokeMethod(menu, "open"));
+      QTRY_VERIFY(menu->property("opened").toBool());
+      QTRY_VERIFY(menu->property("opacity").toDouble() > .98);
+      QVERIFY(menu->property("width").toDouble() > petWindow->width());
+      QVERIFY(menu->property("height").toDouble() > petWindow->height());
+      QVERIFY(evaluate(menu, "contentItem.Window.window !== parent.Window.window").toBool());
+      QVERIFY(evaluate(menu, "contentItem.Window.window.flags & Qt.WindowStaysOnTopHint").toInt());
+      auto popup = qobject_cast<QQuickWindow*>(evaluate(menu, "contentItem.Window.window").value<QObject*>());
+      QVERIFY(popup);
+      QTest::qWait(180);
+      QVERIFY(popup->grabWindow().save(root + "/build/screenshots/tiara-menu-" + palette + ".png"));
+      evaluate(menu, "itemAt(4).click()");
+      auto appearances = petWindow->findChild<QObject*>("desktopPetAppearanceMenu");
+      QTRY_VERIFY(appearances->property("opened").toBool());
+      QTRY_VERIFY(appearances->property("opacity").toDouble() > .98);
+      auto selected = evaluate(appearances, "(function(){for(let i=0;i<count;++i){const row=itemAt(i);if(row.objectName==='desktopPetAppearance_tiara')return row;}return null;})()").value<QObject*>();
+      QVERIFY(selected && selected->property("checked").toBool());
+      auto indicator = selected->findChild<QQuickItem*>("desktopPetAppearance_tiaraIndicator");
+      QVERIFY(indicator && indicator->isVisible() && indicator->opacity() > .9);
+      auto submenuWindow = qobject_cast<QQuickWindow*>(evaluate(appearances, "contentItem.Window.window").value<QObject*>());
+      QVERIFY(submenuWindow);
+      QVERIFY(submenuWindow->grabWindow().save(root + "/build/screenshots/tiara-appearances-" + palette + ".png"));
+      QVERIFY(QMetaObject::invokeMethod(appearances, "close"));
+      QVERIFY(QMetaObject::invokeMethod(menu, "close"));
+      QTRY_VERIFY(!menu->property("visible").toBool());
+    }
+    QVERIFY(QMetaObject::invokeMethod(menu, "open"));
+    QTRY_VERIFY(menu->property("opened").toBool());
+    evaluate(menu, "itemAt(5).click()");
+    QTRY_VERIFY(pet->config()["paused"].toBool());
+    QVERIFY(QMetaObject::invokeMethod(menu, "open"));
+    QTRY_VERIFY(menu->property("opened").toBool());
+    auto pause = evaluate(menu, "itemAt(5)").value<QObject*>();
+    QVERIFY(pause->property("checked").toBool());
+    evaluate(menu, "itemAt(5).click()");
+    QTRY_VERIFY(!pet->config()["paused"].toBool());
   }
   void nativePetReminderWidgetAndBubble() {
     auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);
