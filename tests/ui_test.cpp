@@ -5550,7 +5550,7 @@ def create_provider(context): return Interactive(context)
     QTest::keyClick(window,Qt::Key_Escape);QTest::qWait(200);
     click("agentBusRequestsTabButton");click("globalSubagentsHelpButton");QTRY_VERIFY(find("globalSubagentsHelpText"));
     QCOMPARE(find("globalSubagentsHelpTitle")->property("text").toString(),QString("请求"));
-    QVERIFY(find("globalSubagentsHelpText")->property("text").toString().contains("返回结果"));
+    QVERIFY(find("globalSubagentsHelpText")->property("text").toString().contains("仅显示尚未结束"));
     QVERIFY(find("globalSubagentsHelpText")->property("text").toString().contains("不会撤销"));
     window->grabWindow().save(root+"/build/global-agents-ui/native-requests-help.png");
     QTest::keyClick(window,Qt::Key_Escape);
@@ -5677,6 +5677,65 @@ def create_provider(context): return Interactive(context)
     QVERIFY(pause->property("checked").toBool());
     evaluate(menu, "itemAt(5).click()");
     QTRY_VERIFY(!pet->config()["paused"].toBool());
+  }
+  void globalAgentSkillsAndActiveRequests() {
+    configureAPI();backend->newSession();window->setProperty("page","chat");window->resize(1640,1040);
+    auto manager=backend->desktopExtensions;auto g=manager->globalAgents();manager->setEnabled("global-agents",true);
+    const auto created=g->ui("create",{{"name","技能设置验收"}});QVERIFY(created["ok"].toBool());const auto id=created["result"].toMap()["id"].toString();
+    const auto cleanup=qScopeGuard([&]{g->ui("delete",{{"id",id}});manager->closePage();window->setProperty("page","chat");});
+    auto record=g->ensure(id);QVERIFY(g->runtimeConfig(record)["coordinatorSkills"].toList().isEmpty());
+    QVERIFY(manager->openPage("global-agents"));QTRY_VERIFY(find("globalAgentsPage"));auto page=find("globalAgentsPage");
+    QTRY_VERIFY(!page->property("state").toMap()["agents"].toList().isEmpty());
+    QVERIFY(QMetaObject::invokeMethod(page,"form",Q_ARG(QVariant,id)));QTRY_VERIFY(find("globalAgentSkillsButton")->isVisible());click("globalAgentSkillsButton");
+    auto dialog=page->findChild<QObject*>("globalAgentSkillsDialog");QVERIFY(dialog);QTRY_VERIFY(dialog->property("opened").toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("skillWorking").toBool(),20000);
+    QVERIFY2(page->property("skillError").toString().isEmpty(),qPrintable(page->property("skillError").toString()));
+    QTRY_VERIFY(find("globalAgentSkillsList")->property("count").toInt()>=9);
+    QCOMPARE(page->property("chosenSkills").value<QJSValue>().property("length").toInt(),0);
+    find("globalAgentSkillSearch")->setProperty("text","humanizer");QTRY_COMPARE(find("globalAgentSkillsList")->property("count").toInt(),1);
+    QTRY_VERIFY(find("globalSkill_builtin:humanizer"));click("globalSkill_builtin:humanizer");
+    QCOMPARE(page->property("chosenSkills").value<QJSValue>().property("length").toInt(),1);click("doneGlobalAgentSkills");
+    click("confirmCreateGlobalAgent");QTRY_COMPARE(g->agents[id].toMap()["skills"].toList(),QVariantList{"builtin:humanizer"});
+    QVERIFY(g->runtimeConfig(g->ensure(id))["coordinatorSkills"].toList().contains("builtin:humanizer"));
+    const auto second=g->ui("create",{{"name","保持默认关闭"}})["result"].toMap()["id"].toString();
+    QVERIFY(g->agents[second].toMap()["skills"].toList().isEmpty());g->ui("delete",{{"id",second}});
+    QVERIFY(!g->ui("update",{{"id",id},{"skills",QVariantList{"builtin:../private"}}})["ok"].toBool());
+    QVERIFY(!g->ui("listSkills",{},true)["ok"].toBool());
+    const auto zip=directory.filePath("personal-skill.zip");const QByteArray markdown="---\nname: personal-guide\ndescription: A private imported Skill for acceptance.\n---\nKeep this coordinator concise.\n";
+    mz_zip_archive archive{};QVERIFY(mz_zip_writer_init_file(&archive,zip.toUtf8().constData(),0));
+    QVERIFY(mz_zip_writer_add_mem(&archive,"personal-guide/SKILL.md",markdown.constData(),markdown.size(),MZ_BEST_SPEED));
+    QVERIFY(mz_zip_writer_finalize_archive(&archive));QVERIFY(mz_zip_writer_end(&archive));
+    auto job=g->ui("importSkills",{{"source",QUrl::fromLocalFile(zip).toString()}})["result"].toMap()["jobId"].toString();QVERIFY(!job.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(g->skillJobs[job].toMap()["status"]!="running",20000);
+    auto result=g->skillJobs[job].toMap()["result"].toMap();QVERIFY2(result["ok"].toBool(),qPrintable(result["error"].toString()));
+    QVERIFY(QFileInfo::exists(g->root+"/agent/skills/personal-guide/SKILL.md"));QCOMPARE(g->agents[id].toMap()["skills"].toList(),QVariantList{"builtin:humanizer"});
+    const auto folder=directory.filePath("folder-guide");QDir().mkpath(folder);QFile file(folder+"/SKILL.md");QVERIFY(file.open(QIODevice::WriteOnly));file.write("---\nname: folder-guide\ndescription: Folder import acceptance fixture.\n---\nUse this guide.\n");file.close();
+    job=g->ui("importSkills",{{"source",folder}})["result"].toMap()["jobId"].toString();QVERIFY(!job.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(g->skillJobs[job].toMap()["status"]!="running",20000);result=g->skillJobs[job].toMap()["result"].toMap();QVERIFY2(result["ok"].toBool(),qPrintable(result["error"].toString()));
+    QVERIFY(QMetaObject::invokeMethod(page,"form",Q_ARG(QVariant,id)));click("globalAgentSkillsButton");
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("skillWorking").toBool(),20000);find("globalAgentSkillSearch")->setProperty("text","personal-guide");
+    QTRY_VERIFY(find("globalSkill_imported:personal-guide"));QVERIFY(!find("globalSkill_imported:personal-guide")->property("checked").toBool());click("globalSkill_imported:personal-guide");
+    click("doneGlobalAgentSkills");click("confirmCreateGlobalAgent");QTRY_COMPARE(g->agents[id].toMap()["skills"].toList().size(),2);
+    g->save();{GlobalAgents loaded(manager);QCOMPARE(loaded.agents[id].toMap()["skills"].toList(),g->agents[id].toMap()["skills"].toList());loaded.close();}
+    // Real Pi session: the prompt and reader contain exactly the chosen Skills.
+    QVERIFY(g->ui("send",{{"id",id},{"text","你好"}})["ok"].toBool());record=g->ensure(id);
+    QTRY_VERIFY_WITH_TIMEOUT(!record->busy(),20000);QVERIFY(!record->failed);
+    QFile transcript(record->file);QVERIFY(transcript.open(QIODevice::ReadOnly));QString system;
+    while(!transcript.atEnd()){auto message=QJsonDocument::fromJson(transcript.readLine()).object().toVariantMap()["message"].toMap();if(message["role"]=="system")system+=message["sections"].toMap()["skills"].toString();}
+    QVERIFY(system.contains("personal-guide"));QVERIFY(system.contains("humanizer"));QVERIFY(!system.contains("folder-guide"));
+    const auto request="active-only-fixture";
+    g->requests<<QVariantMap{{"id",request},{"source","agent:"+id},{"target","session:fixture"},{"status","running"},{"text","等待执行"},{"created",0},{"deadline",QDateTime::currentSecsSinceEpoch()+1800}};
+    QVERIFY(g->snapshot("")["requests"].toList().size()>0);
+    g->finish(request,"completed","已完成");for(auto value:g->snapshot("")["requests"].toList())QVERIFY(value.toMap()["id"]!=request);
+    const auto review=qEnvironmentVariable("UMEKO_GLOBAL_SKILLS_REVIEW_DIR");
+    if(!review.isEmpty()) {
+      QDir().mkpath(review);auto pet=qobject_cast<DesktopPet*>(manager->pet());manager->setEnabled("desktop-pet",true);pet->ui("configure",{{"visible",true}});
+      QVERIFY(QMetaObject::invokeMethod(page,"form",Q_ARG(QVariant,id)));click("globalAgentSkillsButton");find("globalAgentSkillSearch")->setProperty("text","");
+      QTRY_VERIFY_WITH_TIMEOUT(!page->property("skillWorking").toBool(),20000);
+      QVERIFY(window->grabWindow().save(review+"/global-agent-skills.png"));
+      QVERIFY(U::writeJson(review+"/ready.json",QVariantMap{{"profile",directory.path()},{"sourceRoot",root},{"pid",QCoreApplication::applicationPid()},{"agentId",id},{"upstreamPort",upstream.serverPort()}}));
+      QEventLoop loop;QTimer stop;stop.setInterval(500);connect(&stop,&QTimer::timeout,&loop,[&]{if(QFileInfo::exists(review+"/stop"))loop.quit();});stop.start();loop.exec();
+    }
   }
   void petAssistantBindingBriefingsAndSpeech() {
     configureAPI();backend->newSession();window->setProperty("page","chat");
