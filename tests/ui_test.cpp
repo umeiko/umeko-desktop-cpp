@@ -3951,9 +3951,9 @@ Item {
     QVERIFY(!pet->ui("removeAppearance", {{"id", "doubao"}})["ok"].toBool());
     const auto folder = root + "/umeko-plugins/desktop-pet/assets/doubao/";
     for (const auto &state : QStringList{"idle", "thinking", "working", "waiting", "done", "error", "idle-rare"}) {
-      QImageReader reader(folder + state + ".webp");
+      QImageReader reader(folder + state + ".gif");
       QVERIFY2(reader.imageCount() > 1, qPrintable(state));
-      QCOMPARE(reader.size(), QSize(360, 360));
+      QCOMPARE(reader.size(), QSize(512, 512));
       for (int index = 0; index < reader.imageCount(); ++index) {
         const auto image = reader.read();
         QVERIFY(!image.isNull());
@@ -3974,7 +3974,7 @@ Item {
     pet->interaction.clear();
     pet->drawIdleScene(0);
     QVERIFY(pet->state()["rareIdle"].toBool());
-    QTRY_VERIFY(animation->property("source").toUrl().toString().endsWith("/idle-rare.webp"));
+    QTRY_VERIFY(animation->property("source").toUrl().toString().endsWith("/idle-rare.gif"));
     QTRY_VERIFY(animation->property("ready").toBool());
     QVERIFY(petWindow->grabWindow().save(root + "/build/screenshots/doubao-rare-pet.png"));
     pet->ui("hide", {});
@@ -5847,9 +5847,24 @@ def create_provider(context): return Interactive(context)
     QCOMPARE(pet->state()["appearance"].toString(),"komari");
     QVERIFY(pet->state()["source"].toString().contains("/assets/komari/"));
     QVERIFY(!pet->ui("removeAppearance",{{"id","komari"}})["ok"].toBool());
-    for (const auto &state : QStringList{"idle","thinking","working","waiting","done","error"}) {
-      QImageReader reader(root + "/umeko-plugins/desktop-pet/assets/komari/" + state + ".webp");
-      QVERIFY(reader.canRead());QVERIFY(reader.imageCount()>1);QCOMPARE(reader.size(),QSize(384,576));QVERIFY(!reader.read().isNull());
+    const QMap<QString, QPair<int, int>> clips{
+        {"idle", {39, 1800}}, {"thinking", {56, 2400}},
+        {"working", {56, 2000}}, {"waiting", {56, 2600}},
+        {"done", {56, 2000}}, {"error", {56, 2500}},
+        {"idle-rare", {107, 4200}}};
+    for (auto it = clips.cbegin(); it != clips.cend(); ++it) {
+      QImageReader reader(root + "/umeko-plugins/desktop-pet/assets/komari/" + it.key() + ".gif");
+      QVERIFY(reader.canRead());
+      QCOMPARE(reader.imageCount(), it.value().first);
+      QCOMPARE(reader.size(), QSize(512, 512));
+      int duration = 0;
+      for (int frame = 0; frame < reader.imageCount(); ++frame) {
+        const auto image = reader.read();
+        QVERIFY(!image.isNull());
+        QCOMPARE(image.pixelColor(0, 0).alpha(), 0);
+        duration += reader.nextImageDelay();
+      }
+      QCOMPARE(duration, it.value().second);
     }
     QTemporaryDir temp;QImage image(64,64,QImage::Format_ARGB32);image.fill(QColor("#4488ff"));auto source=temp.filePath("sample.png");QVERIFY(image.save(source));
     QSignalSpy imported(pet,&DesktopPet::imported);auto result=pet->ui("importAppearance",{{"path",source}});QVERIFY(result["ok"].toBool());QTRY_VERIFY_WITH_TIMEOUT(!imported.isEmpty(),10000);
@@ -5860,6 +5875,47 @@ def create_provider(context): return Interactive(context)
     imported.clear();QVERIFY(pet->ui("importAppearance",{{"path",shadow+"/pet.json"}})["ok"].toBool());QTRY_VERIFY_WITH_TIMEOUT(!imported.isEmpty(),10000);QVERIFY(!imported.last()[1].toMap()["ok"].toBool());
     auto zipPath=temp.filePath("unsafe.zip");mz_zip_archive zip{};QVERIFY(mz_zip_writer_init_file(&zip,zipPath.toUtf8().constData(),0));QVERIFY(mz_zip_writer_add_mem(&zip,"../escape.png","invalid",7,MZ_DEFAULT_COMPRESSION));QVERIFY(mz_zip_writer_finalize_archive(&zip));mz_zip_writer_end(&zip);
     imported.clear();QVERIFY(pet->ui("importAppearance",{{"path",zipPath}})["ok"].toBool());QTRY_VERIFY_WITH_TIMEOUT(!imported.isEmpty(),10000);QVERIFY(!imported.last()[1].toMap()["ok"].toBool());QVERIFY(!QFileInfo::exists(temp.filePath("escape.png")));
+  }
+  void komariGifPlaybackAcrossStates() {
+    auto pet = qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());
+    QVERIFY(pet);
+    const auto original = pet->config();
+    const bool sampling = pet->timer.isActive();
+    const auto restore = qScopeGuard([&] {
+      pet->rareIdleActive = false;
+      pet->action = pet->target = "idle";
+      pet->interaction.clear();
+      pet->ui("configure", original);
+      if (sampling) pet->timer.start();
+    });
+    pet->timer.stop();
+    QVERIFY(pet->ui("configure", {{"appearance", "komari"}, {"visible", true}, {"paused", false}, {"size", 256}})["ok"].toBool());
+    QTRY_VERIFY(window->findChild<QQuickWindow*>("desktopPetWindow"));
+    auto petWindow = window->findChild<QQuickWindow*>("desktopPetWindow");
+    QTRY_VERIFY(petWindow->findChild<QObject*>("desktopPetAnimation"));
+    auto animation = petWindow->findChild<QObject*>("desktopPetAnimation");
+    QDir().mkpath(root + "/build/screenshots");
+    for (const auto &state : QStringList{"idle", "thinking", "working", "waiting", "done", "error", "idle-rare"}) {
+      pet->rareIdleActive = state == "idle-rare";
+      pet->action = pet->target = pet->rareIdleActive ? "idle" : state;
+      pet->interaction.clear();
+      emit pet->changed();
+      QTRY_VERIFY(animation->property("ready").toBool() &&
+          animation->property("source").toUrl().toString().endsWith("/komari/" + state + ".gif"));
+      QCOMPARE(animation->property("frameCount").toInt(), state == "idle" ? 39 : state == "idle-rare" ? 107 : 56);
+      const auto frame = animation->property("currentFrame").toInt();
+      QTRY_VERIFY(animation->property("currentFrame").toInt() != frame);
+      QVERIFY(petWindow->grabWindow().save(root + "/build/screenshots/komari-" + state + ".png"));
+    }
+    pet->ui("configure", {{"paused", true}});
+    QTRY_VERIFY(!animation->property("playing").toBool());
+    const auto pausedFrame = animation->property("currentFrame").toInt();
+    QTest::qWait(150);
+    QCOMPARE(animation->property("currentFrame").toInt(), pausedFrame);
+    pet->ui("configure", {{"paused", false}});
+    QTRY_VERIFY(animation->property("playing").toBool());
+    pet->ui("hide", {});
+    QTRY_VERIFY(!window->findChild<QObject*>("desktopPetWindowLoader")->property("item").value<QObject*>());
   }
   void whalePetDialogueUsesActualTaskOutcomes() {
     auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);
