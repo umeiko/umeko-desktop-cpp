@@ -641,6 +641,7 @@ private:
   QVariantMap umekoRequestImpl(QVariantMap request, QString callerKey, bool queue, QString jobId, bool widgetInstall);
   friend class WidgetChannel;
   friend class DesktopPet;
+  friend class PetAssistant;
   friend class GlobalAgents;
   quint64 selectionEpoch = 0;
   bool selectionPreparing = false;

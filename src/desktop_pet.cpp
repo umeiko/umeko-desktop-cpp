@@ -1,5 +1,6 @@
 #include "desktop_pet.hpp"
 #include "pet_reminders.hpp"
+#include "pet_assistant.hpp"
 #include "backend.hpp"
 #include "desktop_plugins.hpp"
 #include "miniz.h"
@@ -12,7 +13,7 @@ namespace {
 const QStringList states{"idle",    "thinking", "working",
                          "waiting", "done",     "error"};
 const QStringList builtinAppearances{"yanami", "komari", "tiara", "whale-girl", "doubao"};
-const QVariantMap defaults{{"reminderNotificationsEnabled", true}, {"visible", false},      {"appearance", "yanami"},
+const QVariantMap defaults{{"personas", QVariantMap{}}, {"reminderNotificationsEnabled", true}, {"visible", false},      {"appearance", "yanami"},
                            {"size", 192},           {"alwaysOnTop", true},
                            {"paused", false},       {"sampleIntervalMs", 1500},
                            {"minimumStateMs", 3000}};
@@ -85,6 +86,8 @@ QVariantMap readPack(QString folder, bool check = false) {
            value["name"].toString().size() <= 48,
        "形象名称需要 1–48 个字符");
   auto map = value["states"].toMap();
+  need(!value.contains("persona") || (value["persona"].typeId() == QMetaType::QString && value["persona"].toString().size() <= 1000),
+       "可选 persona 人物设定必须是最多 1000 字符的文本");
   need(map.contains("idle"), "states 必须包含 idle");
   for (auto it = map.cbegin(); it != map.cend(); ++it)
     need(states.contains(it.key()) && it.value().typeId() == QMetaType::QString,
@@ -314,6 +317,7 @@ DesktopPet::DesktopPet(DesktopPlugins *manager) : QObject(manager), m(manager) {
   connect(qGuiApp,&QGuiApplication::applicationStateChanged,this,[this](Qt::ApplicationState state){if(running && state==Qt::ApplicationActive)reminders->check();});
 
 }
+void DesktopPet::attachAssistant() { if (!assistant) assistant = new PetAssistant(this, m); }
 void DesktopPet::loadPacks() {
   packs.clear();
   QStringList folders;
@@ -397,6 +401,8 @@ void DesktopPet::completeReminder(QString id,int revision) {
 }
 QVariantMap DesktopPet::status() const {
   return {{"config", options},
+          {"persona", options["personas"].toMap().value(options["appearance"].toString(), packs[options["appearance"].toString()].toMap().value("persona", ""))},
+          {"assistant", assistant ? assistant->status() : QVariantMap{}},
           {"state", state()},
           {"appearances", appearances()},
           {"visible", visible()},{"reminders",reminders ? reminders->summary() : QVariantMap{}},{"reminderSelection",selection},
@@ -423,6 +429,12 @@ QVariantMap DesktopPet::configure(QVariantMap patch, bool persist) {
          key + " 数值超出允许范围");
   need(packs.contains(value["appearance"].toString()),
        "形象不存在，请先导入并通过 appearances 查询可用 id");
+  need(value["personas"].typeId() == QMetaType::QVariantMap && value["personas"].toMap().size() <= 128,
+       "人物设定格式无效");
+  const auto personas = value["personas"].toMap();
+  for (auto it = personas.cbegin(); it != personas.cend(); ++it)
+    need(it.key().size() <= 48 && it.value().typeId() == QMetaType::QString && it.value().toString().size() <= 1000,
+         "人物设定最多 1000 字符，每个形象单独保存");
   if (persist) {
     auto old = m->settings;
     auto config = m->settings["config"].toMap();
@@ -442,12 +454,14 @@ QVariantMap DesktopPet::configure(QVariantMap patch, bool persist) {
   timer.setInterval(value["sampleIntervalMs"].toInt());
   emit changed();
   emit m->changed();
+  if (assistant) assistant->reconcile();
   return status();
 }
 void DesktopPet::start() {
   if (running || closed)
     return;
   running = true;
+  if (assistant) assistant->reconcile();
   reminders->start();
   timer.start(options["sampleIntervalMs"].toInt());
   sample();
@@ -455,6 +469,7 @@ void DesktopPet::start() {
 }
 void DesktopPet::stop() {
   running = false;
+  if (assistant) assistant->reconcile();
   reminders->stop();dismissReminders();
   rareIdleActive = false;
   emit reaction("");
@@ -464,6 +479,7 @@ void DesktopPet::stop() {
 void DesktopPet::close() {
   closed = true;
   stop();
+  if (assistant) assistant->close();
 }
 bool DesktopPet::step() {
   auto now = clock.elapsed();
@@ -608,6 +624,13 @@ QVariantMap DesktopPet::handle(QString method, QVariantMap args) {
     return {{"appearances", appearances()}};
   if (method == "configure")
     return configure(args);
+  if (method == "setPersona") {
+    const auto id = args["id"].toString(); need(packs.contains(id), "形象不存在");
+    need(!args.contains("reset") || args["reset"].typeId() == QMetaType::Bool, "reset 必须是布尔值");
+    auto personas = options["personas"].toMap();
+    if (args["reset"].toBool()) personas.remove(id); else personas[id] = args.value("persona", "").toString().trimmed();
+    return configure({{"personas", personas}});
+  }
   if (method == "show" || method == "hide")
     return configure({{"visible", method == "show"}});
   if (method == "interact") {
@@ -626,8 +649,10 @@ QVariantMap DesktopPet::handle(QString method, QVariantMap args) {
     need(!importing && packs.contains(id) &&
              !packs[id].toMap()["builtin"].toBool(),
          "不能删除内置形象，或形象正在导入");
-    if (options["appearance"] == id)
-      configure({{"appearance", "yanami"}});
+    QVariantMap patch; auto personas = options["personas"].toMap();
+    if (personas.remove(id)) patch["personas"] = personas;
+    if (options["appearance"] == id) patch["appearance"] = "yanami";
+    if (!patch.isEmpty()) configure(patch);
     auto folder = packs[id].toMap()["directory"].toString();
     need(folder.startsWith(packDirectory + "/") &&
              QDir(folder).removeRecursively(),

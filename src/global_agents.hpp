@@ -21,9 +21,13 @@ public:
   QVariantMap execute(QString operation, QVariantMap args, QString callerKey);
   void observe(QString key, QVariantMap event);
   QVariantMap runtimeConfig(std::shared_ptr<Session> record);
+  QString ensurePetAssistant();
+  bool deliverPetBriefing(QVariantList briefs, int additional = 0);
 private:
   friend class NativeUiTests;
   friend class WidgetHost;
+  friend class PetAssistant;
+  QString petAssistantId;
   DesktopPlugins *m;
   Backend *b;
   QString root, registry, error;
