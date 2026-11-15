@@ -6,6 +6,7 @@
 #include <QQmlComponent>
 #include <QQuickView>
 #include "desktop_pet.hpp"
+#include "pet_assistant.hpp"
 #include "global_agents.hpp"
 #include "backend.hpp"
 #include "miniz.h"
@@ -61,6 +62,7 @@ class NativeUiTests : public QObject {
   bool nativeTool = false, slow = false;
   bool globalBridge = false;
   bool desktopTool = false;
+  bool petTool = false;
   int desktopCalls = 0;
   bool holdReplies = false;
   bool upstreamError = false;
@@ -365,6 +367,13 @@ private slots:
               auto args=QString::fromUtf8(QJsonDocument::fromVariant(call).toJson(QJsonDocument::Compact));
               message={{"role","assistant"},{"content",QVariant()},{"tool_calls",QVariantList{QVariantMap{{"id","bridge-"+U::uuid()},{"type","function"},{"function",QVariantMap{{"name","umeko_desktop"},{"arguments",args}}}}}}};finish="tool_calls";
             } else {message={{"role","assistant"},{"content",content.contains("Agent Bus result [completed]")?"GLOBAL_BRIDGE_SUMMARY_COMPLETE\n\n```python\nprint(1)\n```":"Waiting for the bridge result"},{"reasoning_content","Check the correlated request and host-assigned identity."}};finish="stop";}
+          }
+          if (petTool) {
+            const auto msgs=body["messages"].toList();const auto last=msgs.isEmpty()?QVariantMap{}:msgs.last().toMap();
+            bool available=false;for(auto tool:body["tools"].toList())available|=tool.toMap()["function"].toMap()["name"]=="send_to_user";
+            if(available && last["role"]!="tool") {
+              message={{"role","assistant"},{"content",QVariant()},{"tool_calls",QVariantList{QVariantMap{{"id","pet-speech-"+U::uuid()},{"type","function"},{"function",QVariantMap{{"name","send_to_user"},{"arguments","{\"text\":\"后台长任务完成啦。\"}"}}}}}}};finish="tool_calls";
+            }else {message={{"role","assistant"},{"content","已简短通知用户。"}};finish="stop";}
           }
           QJsonObject response{
               {"choices", QJsonArray{QJsonObject{
@@ -5291,10 +5300,16 @@ def create_provider(context): return Interactive(context)
     auto manager = backend->desktopExtensions;
     auto g = manager->globalAgents();
     QVERIFY(g);
+    // Showing a pet earlier in the suite now intentionally leaves its managed
+    // assistant. Isolate the empty-state UI fixture from that application data.
+    auto pet=qobject_cast<DesktopPet*>(manager->pet());const auto petConfig=pet->config();
+    const auto previousAgents=g->agents;const auto previousPetId=g->petAssistantId;
+    pet->ui("configure",{{"visible",false}});g->agents.clear();g->changed();
     QVERIFY(g->agents.isEmpty());
     QString id;
     auto cleanup = qScopeGuard([&] {
       if (!id.isEmpty()) g->ui("delete", {{"id", id}});
+      g->agents=previousAgents;g->petAssistantId=previousPetId;g->changed();g->save();pet->ui("configure",petConfig);
       manager->closePage();
     });
     QVERIFY(manager->openPage("global-agents"));
@@ -5483,7 +5498,9 @@ def create_provider(context): return Interactive(context)
     auto requestId=g->requests.last().toMap()["id"].toString();
     QVERIFY(!backend->umekoRequest({{"operation","agent_bus.reply"},{"arguments",QVariantMap{{"requestId",requestId},{"result","forged"}}}},coordinator->key)["ok"].toBool());
     QVERIFY(!backend->umekoRequest({{"operation","sessions.list"}},coordinator->key)["ok"].toBool());
-    g->save();auto saved=U::readJson(g->registry).toMap()["agents"].toList();QVERIFY(!saved.isEmpty());QCOMPARE(saved.first().toMap()["sessionFile"].toString(),coordinator->file);
+    g->save();auto saved=U::readJson(g->registry).toMap()["agents"].toList();
+    const auto savedCoordinator=std::find_if(saved.cbegin(),saved.cend(),[&](QVariant value){return value.toMap()["id"]==id;});
+    QVERIFY(savedCoordinator!=saved.cend());QCOMPARE(savedCoordinator->toMap()["sessionFile"].toString(),coordinator->file);
     // Backend reply text can precede both turn completion and the Widget's
     // next 650ms snapshot. A fixed sleep is not a rendering readiness signal.
     QTRY_VERIFY_WITH_TIMEOUT(!backend->view->busy()&&!coordinator->busy(),10000);
@@ -5533,7 +5550,7 @@ def create_provider(context): return Interactive(context)
     QTest::keyClick(window,Qt::Key_Escape);QTest::qWait(200);
     click("agentBusRequestsTabButton");click("globalSubagentsHelpButton");QTRY_VERIFY(find("globalSubagentsHelpText"));
     QCOMPARE(find("globalSubagentsHelpTitle")->property("text").toString(),QString("请求"));
-    QVERIFY(find("globalSubagentsHelpText")->property("text").toString().contains("返回结果"));
+    QVERIFY(find("globalSubagentsHelpText")->property("text").toString().contains("仅显示尚未结束"));
     QVERIFY(find("globalSubagentsHelpText")->property("text").toString().contains("不会撤销"));
     window->grabWindow().save(root+"/build/global-agents-ui/native-requests-help.png");
     QTest::keyClick(window,Qt::Key_Escape);
@@ -5660,6 +5677,144 @@ def create_provider(context): return Interactive(context)
     QVERIFY(pause->property("checked").toBool());
     evaluate(menu, "itemAt(5).click()");
     QTRY_VERIFY(!pet->config()["paused"].toBool());
+  }
+  void globalAgentSkillsAndActiveRequests() {
+    configureAPI();backend->newSession();window->setProperty("page","chat");window->resize(1640,1040);
+    auto manager=backend->desktopExtensions;auto g=manager->globalAgents();manager->setEnabled("global-agents",true);
+    const auto created=g->ui("create",{{"name","技能设置验收"}});QVERIFY(created["ok"].toBool());const auto id=created["result"].toMap()["id"].toString();
+    const auto cleanup=qScopeGuard([&]{g->ui("delete",{{"id",id}});manager->closePage();window->setProperty("page","chat");});
+    auto record=g->ensure(id);QVERIFY(g->runtimeConfig(record)["coordinatorSkills"].toList().isEmpty());
+    QVERIFY(manager->openPage("global-agents"));QTRY_VERIFY(find("globalAgentsPage"));auto page=find("globalAgentsPage");
+    QTRY_VERIFY(!page->property("state").toMap()["agents"].toList().isEmpty());
+    QVERIFY(QMetaObject::invokeMethod(page,"form",Q_ARG(QVariant,id)));QTRY_VERIFY(find("globalAgentSkillsButton")->isVisible());click("globalAgentSkillsButton");
+    auto dialog=page->findChild<QObject*>("globalAgentSkillsDialog");QVERIFY(dialog);QTRY_VERIFY(dialog->property("opened").toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("skillWorking").toBool(),20000);
+    QVERIFY2(page->property("skillError").toString().isEmpty(),qPrintable(page->property("skillError").toString()));
+    QTRY_VERIFY(find("globalAgentSkillsList")->property("count").toInt()>=9);
+    QCOMPARE(page->property("chosenSkills").value<QJSValue>().property("length").toInt(),0);
+    find("globalAgentSkillSearch")->setProperty("text","humanizer");QTRY_COMPARE(find("globalAgentSkillsList")->property("count").toInt(),1);
+    QTRY_VERIFY(find("globalSkill_builtin:humanizer"));click("globalSkill_builtin:humanizer");
+    QCOMPARE(page->property("chosenSkills").value<QJSValue>().property("length").toInt(),1);click("doneGlobalAgentSkills");
+    click("confirmCreateGlobalAgent");QTRY_COMPARE(g->agents[id].toMap()["skills"].toList(),QVariantList{"builtin:humanizer"});
+    QVERIFY(g->runtimeConfig(g->ensure(id))["coordinatorSkills"].toList().contains("builtin:humanizer"));
+    const auto second=g->ui("create",{{"name","保持默认关闭"}})["result"].toMap()["id"].toString();
+    QVERIFY(g->agents[second].toMap()["skills"].toList().isEmpty());g->ui("delete",{{"id",second}});
+    QVERIFY(!g->ui("update",{{"id",id},{"skills",QVariantList{"builtin:../private"}}})["ok"].toBool());
+    QVERIFY(!g->ui("listSkills",{},true)["ok"].toBool());
+    const auto zip=directory.filePath("personal-skill.zip");const QByteArray markdown="---\nname: personal-guide\ndescription: A private imported Skill for acceptance.\n---\nKeep this coordinator concise.\n";
+    mz_zip_archive archive{};QVERIFY(mz_zip_writer_init_file(&archive,zip.toUtf8().constData(),0));
+    QVERIFY(mz_zip_writer_add_mem(&archive,"personal-guide/SKILL.md",markdown.constData(),markdown.size(),MZ_BEST_SPEED));
+    QVERIFY(mz_zip_writer_finalize_archive(&archive));QVERIFY(mz_zip_writer_end(&archive));
+    auto job=g->ui("importSkills",{{"source",QUrl::fromLocalFile(zip).toString()}})["result"].toMap()["jobId"].toString();QVERIFY(!job.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(g->skillJobs[job].toMap()["status"]!="running",20000);
+    auto result=g->skillJobs[job].toMap()["result"].toMap();QVERIFY2(result["ok"].toBool(),qPrintable(result["error"].toString()));
+    QVERIFY(QFileInfo::exists(g->root+"/agent/skills/personal-guide/SKILL.md"));QCOMPARE(g->agents[id].toMap()["skills"].toList(),QVariantList{"builtin:humanizer"});
+    const auto folder=directory.filePath("folder-guide");QDir().mkpath(folder);QFile file(folder+"/SKILL.md");QVERIFY(file.open(QIODevice::WriteOnly));file.write("---\nname: folder-guide\ndescription: Folder import acceptance fixture.\n---\nUse this guide.\n");file.close();
+    job=g->ui("importSkills",{{"source",folder}})["result"].toMap()["jobId"].toString();QVERIFY(!job.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(g->skillJobs[job].toMap()["status"]!="running",20000);result=g->skillJobs[job].toMap()["result"].toMap();QVERIFY2(result["ok"].toBool(),qPrintable(result["error"].toString()));
+    QVERIFY(QMetaObject::invokeMethod(page,"form",Q_ARG(QVariant,id)));click("globalAgentSkillsButton");
+    QTRY_VERIFY_WITH_TIMEOUT(!page->property("skillWorking").toBool(),20000);find("globalAgentSkillSearch")->setProperty("text","personal-guide");
+    QTRY_VERIFY(find("globalSkill_imported:personal-guide"));QVERIFY(!find("globalSkill_imported:personal-guide")->property("checked").toBool());click("globalSkill_imported:personal-guide");
+    click("doneGlobalAgentSkills");click("confirmCreateGlobalAgent");QTRY_COMPARE(g->agents[id].toMap()["skills"].toList().size(),2);
+    g->save();{GlobalAgents loaded(manager);QCOMPARE(loaded.agents[id].toMap()["skills"].toList(),g->agents[id].toMap()["skills"].toList());loaded.close();}
+    // Real Pi session: the prompt and reader contain exactly the chosen Skills.
+    QVERIFY(g->ui("send",{{"id",id},{"text","你好"}})["ok"].toBool());record=g->ensure(id);
+    QTRY_VERIFY_WITH_TIMEOUT(!record->busy(),20000);QVERIFY(!record->failed);
+    QFile transcript(record->file);QVERIFY(transcript.open(QIODevice::ReadOnly));QString system;
+    while(!transcript.atEnd()){auto message=QJsonDocument::fromJson(transcript.readLine()).object().toVariantMap()["message"].toMap();if(message["role"]=="system")system+=message["sections"].toMap()["skills"].toString();}
+    QVERIFY(system.contains("personal-guide"));QVERIFY(system.contains("humanizer"));QVERIFY(!system.contains("folder-guide"));
+    const auto request="active-only-fixture";
+    g->requests<<QVariantMap{{"id",request},{"source","agent:"+id},{"target","session:fixture"},{"status","running"},{"text","等待执行"},{"created",0},{"deadline",QDateTime::currentSecsSinceEpoch()+1800}};
+    QVERIFY(g->snapshot("")["requests"].toList().size()>0);
+    g->finish(request,"completed","已完成");for(auto value:g->snapshot("")["requests"].toList())QVERIFY(value.toMap()["id"]!=request);
+    const auto review=qEnvironmentVariable("UMEKO_GLOBAL_SKILLS_REVIEW_DIR");
+    if(!review.isEmpty()) {
+      QDir().mkpath(review);auto pet=qobject_cast<DesktopPet*>(manager->pet());manager->setEnabled("desktop-pet",true);pet->ui("configure",{{"visible",true}});
+      QVERIFY(QMetaObject::invokeMethod(page,"form",Q_ARG(QVariant,id)));click("globalAgentSkillsButton");find("globalAgentSkillSearch")->setProperty("text","");
+      QTRY_VERIFY_WITH_TIMEOUT(!page->property("skillWorking").toBool(),20000);
+      QVERIFY(window->grabWindow().save(review+"/global-agent-skills.png"));
+      QVERIFY(U::writeJson(review+"/ready.json",QVariantMap{{"profile",directory.path()},{"sourceRoot",root},{"pid",QCoreApplication::applicationPid()},{"agentId",id},{"upstreamPort",upstream.serverPort()}}));
+      QEventLoop loop;QTimer stop;stop.setInterval(500);connect(&stop,&QTimer::timeout,&loop,[&]{if(QFileInfo::exists(review+"/stop"))loop.quit();});stop.start();loop.exec();
+    }
+  }
+  void petAssistantBindingBriefingsAndSpeech() {
+    configureAPI();backend->newSession();window->setProperty("page","chat");
+    auto manager=backend->desktopExtensions;auto bus=manager->globalAgents();
+    auto pet=qobject_cast<DesktopPet*>(manager->pet());auto helper=pet->helper();QVERIFY(helper);
+    const auto config=pet->config();const auto oldAgents=bus->agents;const auto oldId=bus->petAssistantId;
+    auto foreground=backend->view;foreground->draft="前台草稿保持";const auto attachments=foreground->attachments;
+    std::shared_ptr<Session> source;
+    const auto restore=qScopeGuard([&]{petTool=false;pet->ui("configure",{{"visible",false}});for(auto id:bus->agents.keys())if(!oldAgents.contains(id))bus->ui("delete",{{"id",id}});bus->petAssistantId=oldId;bus->save();pet->ui("configure",config);if(source)backend->records.remove(source->key);});
+    manager->setEnabled("global-agents",true);manager->setEnabled("desktop-pet",true);
+    QVERIFY(pet->ui("configure",{{"visible",true},{"appearance","yanami"}})["ok"].toBool());helper->reconcile();
+    const auto id=helper->identifier;QVERIFY(!id.isEmpty());
+    QCOMPARE(bus->agents[id].toMap()["name"].toString(),QString("悬浮小助手"));
+    for(int i=0;i<20;++i)helper->reconcile();QCOMPARE(helper->identifier,id);
+    QCOMPARE(bus->ensurePetAssistant(),id);auto assistant=bus->ensure(id);
+    QVERIFY(bus->bridges.isEmpty() || !bus->allowed(foreground,"agent:"+id));
+    const auto binding=helper->binding;
+    QVERIFY(bus->runtimeConfig(assistant)["agent"].toMap()["instructions"].toString().contains("八奈见"));
+    QVERIFY(pet->ui("setPersona",{{"id","yanami"},{"persona","安静，用一句话报告。"}})["ok"].toBool());
+    QVERIFY(helper->binding!=binding);QVERIFY(assistant->stale);
+    QCOMPARE(helper->send(assistant,{{"text","旧绑定"},{"binding",binding}})["status"].toString(),QString("binding_changed"));
+    const auto prompt=bus->runtimeConfig(assistant)["agent"].toMap()["instructions"].toString();QVERIFY(prompt.contains("安静，用一句话报告。"));QVERIFY(!prompt.contains("开朗俏皮"));
+    QCOMPARE(helper->send(foreground,{{"text","不能冒用"},{"binding",helper->binding}})["status"].toString(),QString("unavailable"));
+    QCOMPARE(helper->send(assistant,{{"text",QString(81,QChar(0x5b57))},{"binding",helper->binding}})["status"].toString(),QString("invalid_text"));
+    QSignalSpy speech(pet,&DesktopPet::assistantSpeech);petTool=true;
+    source=backend->fresh(directory.filePath("pet-background"));source->id="pet-completed-background";source->title="后台任务";source->action="prompt";
+    source->messages=QVariantList{QVariantMap{{"role","assistant"},{"text","真实结果：后台任务已完成。"}}};
+    source->promptStarted=std::chrono::steady_clock::now();helper->completed(source,90,"finished");QVERIFY(helper->pending.isEmpty());
+    source->promptStarted=std::chrono::steady_clock::now()-std::chrono::seconds(91);
+    backend->finishTurn(source);backend->finishTurn(source);QCOMPARE(helper->pending.size(),1);
+    QCOMPARE(helper->pending.first().toMap()["sessionId"].toString(),source->id);
+    helper->flush();QTRY_VERIFY_WITH_TIMEOUT(!assistant->busy(),20000);
+    QTRY_VERIFY_WITH_TIMEOUT(!speech.isEmpty() && !speech.last()[0].toString().isEmpty(),20000);
+    QCOMPARE(speech.last()[0].toString(),QString("后台长任务完成啦。"));
+    QTRY_VERIFY(window->findChild<QQuickWindow*>("desktopPetWindow"));auto petWindow=window->findChild<QQuickWindow*>("desktopPetWindow");
+    QTRY_COMPARE(petWindow->property("caption").toString(),QString("后台长任务完成啦。"));
+    const int shown=speech.size();
+    for(int i=0;i<100;++i)QCOMPARE(helper->send(assistant,{{"text","重复"},{"binding",helper->binding}})["status"].toString(),QString("rate_limited"));
+    QCOMPARE(speech.size(),shown);QVERIFY(helper->pending.isEmpty());
+    pet->settingsRequested();QTRY_VERIFY_WITH_TIMEOUT(find("desktopPetPersona"),10000);
+    QTRY_COMPARE_WITH_TIMEOUT(find("desktopPetPersona")->property("text").toString(),QString("安静，用一句话报告。"),10000);
+    auto field=find("desktopPetPersona");
+    for(auto parent=field->parentItem();parent;parent=parent->parentItem())if(parent->property("contentY").isValid()&&parent->height()>200){
+      const auto y=parent->property("contentY").toDouble()+field->mapToItem(parent,QPointF()).y()-parent->height()/4;
+      parent->setProperty("contentY",qBound(0.,y,qMax(0.,parent->property("contentHeight").toDouble()-parent->height())));
+    }
+    field->forceActiveFocus();field->setProperty("text","轻声而简洁地报告结果。");
+    QTRY_VERIFY(find("desktopPetPersonaSave")->property("enabled").toBool());click("desktopPetPersonaSave");
+    QTRY_COMPARE(helper->persona(),QString("轻声而简洁地报告结果。"));
+    QCOMPARE(backend->view,foreground);QCOMPARE(foreground->draft,QString("前台草稿保持"));QCOMPARE(foreground->attachments,attachments);
+    const auto budgetNow=helper->clock.elapsed();
+    helper->spoken={budgetNow-59000,budgetNow-30000};
+    QCOMPARE(helper->send(assistant,{{"text","窗口限额"},{"binding",helper->binding}})["status"].toString(),QString("rate_limited"));
+    helper->spoken={budgetNow-61000,budgetNow-31000};
+    QVERIFY(helper->send(assistant,{{"text","窗口边界"},{"binding",helper->binding}})["ok"].toBool());
+    for(int i=0;i<200;++i){source->promptStarted=std::chrono::steady_clock::now()+std::chrono::nanoseconds(i);helper->completed(source,100,"finished");}
+    QCOMPARE(helper->pending.size(),8);QCOMPARE(helper->seen.size(),128);QCOMPARE(helper->overflow,192);
+    const auto remaining=helper->timer.remainingTime();QTest::qWait(100);helper->reconcile();
+    QVERIFY(helper->timer.remainingTime()<remaining-50);
+    helper->pending.clear();helper->overflow=0;helper->timer.stop();
+    const auto token=helper->binding;pet->ui("configure",{{"visible",false}});
+    QCOMPARE(helper->send(assistant,{{"text","隐藏不能说话"},{"binding",token}})["status"].toString(),QString("unavailable"));
+    pet->ui("configure",{{"visible",true}});QCOMPARE(helper->identifier,id);QVERIFY(helper->binding!=token);
+    QCOMPARE(helper->send(assistant,{{"text","不能靠开关绕过冷却"},{"binding",helper->binding}})["status"].toString(),QString("rate_limited"));
+    pet->ui("configure",{{"visible",false}});manager->setEnabled("global-agents",false);QVERIFY(!helper->enabled());manager->setEnabled("global-agents",true);
+    const auto review=qEnvironmentVariable("UMEKO_PET_REVIEW_DIR");
+    if(!review.isEmpty()) {
+      QVERIFY(QDir().mkpath(review));
+      pet->ui("configure",{{"visible",true}});helper->reconcile();helper->spoken.clear();helper->nextBrief=0;
+      source->promptStarted=std::chrono::steady_clock::now()-std::chrono::seconds(120);backend->finishTurn(source);helper->flush();
+      QTRY_VERIFY_WITH_TIMEOUT(!assistant->busy(),20000);
+      QTRY_VERIFY_WITH_TIMEOUT(window->findChild<QQuickWindow*>("desktopPetWindow"),5000);petWindow=window->findChild<QQuickWindow*>("desktopPetWindow");
+      QTRY_VERIFY_WITH_TIMEOUT(petWindow->property("caption").toString().contains("后台长任务"),10000);
+      QVERIFY(petWindow->grabWindow().save(review+"/pet-bubble.png"));
+      QVERIFY(window->grabWindow().save(review+"/persona-settings.png"));
+      QVERIFY(U::writeJson(review+"/ready.json",QVariantMap{{"profile",directory.path()},{"sourceRoot",root},{"pid",QCoreApplication::applicationPid()},{"helperId",id},{"upstreamPort",upstream.serverPort()}}));
+      QEventLoop loop;QTimer stop;stop.setInterval(500);connect(&stop,&QTimer::timeout,&loop,[&]{if(QFileInfo::exists(review+"/stop"))loop.quit();});stop.start();loop.exec();
+    }
+    window->setProperty("page","chat");
   }
   void nativePetReminderWidgetAndBubble() {
     auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);

@@ -2,6 +2,8 @@
 #include "common.hpp"
 class DesktopPlugins;
 class PetReminders;
+class PetAssistant;
+struct Session;
 class DesktopPet : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantMap config READ config NOTIFY changed)
@@ -12,6 +14,8 @@ class DesktopPet : public QObject {
   Q_PROPERTY(QVariantList reminderCard READ reminderCard NOTIFY reminderCardChanged)
 public:
   explicit DesktopPet(DesktopPlugins *manager);
+  void attachAssistant();
+  PetAssistant *helper() const { return assistant; }
   QVariantMap config() const { return options; }
   bool visible() const {
     return running && options["visible"].toBool() && !closed;
@@ -38,6 +42,7 @@ signals:
   void reminderCardChanged();
   void reminderPresented(QVariantList items);
   void reaction(QString text);
+  void assistantSpeech(QString text);
   void restoreRequested();
   void settingsRequested();
   void resetPositionRequested();
@@ -45,6 +50,8 @@ signals:
 
 private:
   friend class NativeUiTests;
+  friend class PetAssistant;
+  PetAssistant *assistant = nullptr;
   void drawIdleScene(double draw);
   bool rareIdleActive = false;
   DesktopPlugins *m;

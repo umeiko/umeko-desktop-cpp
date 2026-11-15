@@ -76,6 +76,7 @@ signals:
 private:
   friend class WidgetChannel;
   friend class DesktopPet;
+  friend class PetAssistant;
   friend class GlobalAgents;
   friend class NativeUiTests;
   friend class WidgetHost;

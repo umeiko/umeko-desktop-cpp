@@ -1,6 +1,8 @@
 #include "backend.hpp"
 #include "pi_capabilities.hpp"
 #include "global_agents.hpp"
+#include "desktop_pet.hpp"
+#include "pet_assistant.hpp"
 #include <QtConcurrent>
 
 QVariantMap Backend::sessionTurnStatus(std::shared_ptr<Session> s) const {
@@ -15,6 +17,8 @@ QVariantMap Backend::sessionTurnStatus(std::shared_ptr<Session> s) const {
 void Backend::finishTurn(std::shared_ptr<Session> s,bool failed) {
   if(!s->promptStarted || (s->action!="prompt" && s->action!="widget-notify"))return;
   const double elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-*s->promptStarted).count();
+  if (desktopExtensions) if (auto pet = qobject_cast<DesktopPet*>(desktopExtensions->pet()))
+    if (pet->helper()) pet->helper()->completed(s, elapsed, s->cancelled?"stopped":failed||s->failed?"failed":"finished");
   if(!s->id.isEmpty())setMetadata(s->id,{{"lastTurn",QVariantMap{{"state",s->cancelled?"stopped":failed||s->failed?"failed":"finished"},{"elapsed",elapsed}}}});
 }
 std::shared_ptr<Session> Backend::fresh(QString workspace) {

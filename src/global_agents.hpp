@@ -21,9 +21,13 @@ public:
   QVariantMap execute(QString operation, QVariantMap args, QString callerKey);
   void observe(QString key, QVariantMap event);
   QVariantMap runtimeConfig(std::shared_ptr<Session> record);
+  QString ensurePetAssistant();
+  bool deliverPetBriefing(QVariantList briefs, int additional = 0);
 private:
   friend class NativeUiTests;
   friend class WidgetHost;
+  friend class PetAssistant;
+  QString petAssistantId;
   DesktopPlugins *m;
   Backend *b;
   QString root, registry, error;
@@ -31,6 +35,8 @@ private:
   QVariantList requests, creationRequests;
   QHash<QString, std::shared_ptr<Session>> records;
   QVariantMap outbox;
+  QVariantMap skillJobs;
+  QSet<QString> skillJobIds;
   mutable QHash<QString,qint64> busySince;
   bool active = false;
   bool allowAutomaticCreation = false;
@@ -64,4 +70,6 @@ private:
   void finish(QString id, QString status, QString result);
   void enqueue(QString target, QVariantMap request, QString message, bool wake);
   int requestIndex(QString id) const;
+  QVariantMap startSkillJob(QString method, QVariantMap args);
+  QVariantList selectedSkills(QVariant value) const;
 };

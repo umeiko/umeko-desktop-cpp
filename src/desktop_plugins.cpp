@@ -64,6 +64,7 @@ DesktopPlugins::DesktopPlugins(Backend *backend)
   host = new WidgetHost(this);
   companion = new DesktopPet(this);
   coordinators = new GlobalAgents(this);
+  companion->attachAssistant();
   connect(this, &DesktopPlugins::response, this, [this](QString request, QVariantMap) {
     if (!reviewRequests.contains(request)) return;
     auto target = reviewRequests.take(request);
