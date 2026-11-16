@@ -5,6 +5,8 @@
 #include <QDirIterator>
 #include <QQmlComponent>
 #include <QQuickView>
+#include <QQuickTextDocument>
+#include <QTextDocument>
 #include "desktop_pet.hpp"
 #include "pet_assistant.hpp"
 #include "global_agents.hpp"
@@ -2958,6 +2960,63 @@ Item {
     QVERIFY(find("downloadAppUpdateButton")->isEnabled());
     QCOMPARE(find("downloadAppUpdateButton")->property("text").toString(),QString("继续下载"));
     QVERIFY(!find("cancelAppDownloadButton")->isVisible());
+  }
+  void updateNotesStayStableDuringDownload() {
+    auto about = qobject_cast<AppAbout *>(backend->appAbout());
+    const auto oldRelease = about->m_release, oldDownload = about->m_download;
+    const auto oldInstallation = about->m_installation;
+    const auto oldPage = window->property("page"), oldTab = window->property("settingsTab");
+    const auto oldBusy = about->m_busy;
+    auto restore = qScopeGuard([&] {
+      about->m_release = oldRelease; about->m_download = oldDownload;
+      about->m_installation = oldInstallation; about->m_busy = oldBusy; emit about->changed();
+      window->setProperty("page", oldPage); window->setProperty("settingsTab", oldTab);
+    });
+    window->setProperty("page", "settings"); window->setProperty("settingsTab", 6);
+    QString notes = "# Release overview\n\n**Stable selection** with [release details](https://example.invalid/release).\n\n"
+                    "| Feature | Result |\n| --- | --- |\n| Download | Stable<br>progress |\n\n"
+                    "```python\nprint('release notes')\n```\n\n";
+    for (int i = 0; i < 30; ++i) notes += QString("## Change %1\n\nReading paragraph %1.\n\n").arg(i);
+    about->m_release = {{"state", "available"}, {"version", "v99.0.0"}, {"notes", notes}};
+    about->m_busy = false; emit about->changed(); QTest::qWait(200);
+    auto editor = find("appReleaseNotes"); QVERIFY(editor);
+    auto wrapper = editor->property("textDocument").value<QQuickTextDocument *>(); QVERIFY(wrapper);
+    auto document = wrapper->textDocument(); QVERIFY(document);
+    const auto plain = document->toPlainText();
+    QVERIFY(plain.contains("Stable selection")); QVERIFY(plain.contains("print('release notes')"));
+    auto flick = editor->parentItem();
+    while (flick && flick->metaObject()->indexOfProperty("contentY") < 0) flick = flick->parentItem();
+    QVERIFY(flick); QVERIFY(flick->property("contentHeight").toDouble() > flick->height());
+    const int start = plain.indexOf("Stable selection");
+    QVERIFY(QMetaObject::invokeMethod(editor, "select", Q_ARG(int, start), Q_ARG(int, start + 16)));
+    flick->setProperty("contentY", 120); QTest::qWait(50);
+    const auto selected = editor->property("selectedText").toString();
+    const auto y = flick->property("contentY").toDouble();
+    QCOMPARE(selected, QString("Stable selection")); QVERIFY(y > 0);
+    QSignalSpy changes(document, &QTextDocument::contentsChanged);
+    for (int i = 0; i < 60; ++i) {
+      about->m_download = {{"state", "downloading"}, {"progress", i}, {"message", "Downloading"},
+                           {"received", i * 1024}, {"total", 100 * 1024}, {"speed", 2048}, {"eta", 50 - i / 2.0}};
+      emit about->changed(); QTest::qWait(5);
+    }
+    QVERIFY(find("appDownloadStatus")->property("text").toString().contains("59%"));
+    for (auto state : {"paused", "downloading", "verifying", "ready", "error"}) {
+      about->m_download["state"] = state; emit about->changed(); QTest::qWait(10);
+    }
+    about->m_installation = {{"state", "preparing"}, {"message", "Preparing"}};
+    about->m_busy = true; emit about->changed(); QTest::qWait(10);
+    about->m_busy = false; emit about->changed(); QTest::qWait(50);
+    qInfo() << "RELEASE_DOCUMENT_REBUILDS:" << changes.count()
+            << "selection:" << editor->property("selectedText") << "scroll:" << flick->property("contentY");
+    QCOMPARE(changes.count(), 0);
+    QCOMPARE(editor->property("selectedText").toString(), selected);
+    QVERIFY(qAbs(flick->property("contentY").toDouble() - y) < 0.5);
+    QCOMPARE(document->toPlainText(), plain);
+    about->m_release["notes"] = "# New release\n\nUpdated **overview**."; emit about->changed();
+    QTRY_VERIFY(document->toPlainText().contains("New release"));
+    QVERIFY(!document->toPlainText().contains("Change 29")); QVERIFY(changes.count() > 0);
+    about->m_release["notes"] = ""; emit about->changed(); QTest::qWait(30);
+    QVERIFY(!editor->isVisible());
   }
   void taskCompletionEventsAreNotDuplicatedOrSentForCancellation() {
     const auto metadata = backend->store.data["sessionMeta"];

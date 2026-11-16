@@ -7,6 +7,15 @@ def release(tag, identifier=1, **changes):
 
 
 class ReleaseRetentionTests(unittest.TestCase):
+    def test_retains_071_milestone_but_retires_other_old_07_releases(self):
+        rows = [release("v0.7.0", 1), release("v0.7.1", 2), release("v0.7.1-minimal", 3),
+                release("v0.7.2", 4), release("v0.7.3", 5), release("v0.6.5", 6),
+                {**release("v0.7.0", 7), "draft": True}]
+        calls = []
+        self.assertEqual(prune_releases("umeiko/umeko-desktop-cpp", "v0.7.2", lambda _: rows,
+                                       lambda *args: calls.append(args)), ["v0.7.0"])
+        self.assertEqual(calls, [("api", "--method", "DELETE", "repos/umeiko/umeko-desktop-cpp/releases/1")])
+
     def test_windows_plan_requires_the_exact_verified_asset_set(self):
         names = ['windows.zip', 'windows.zip.sha256', 'windows.json',
                  'provider-sdk.zip', 'develop-provider.zip', 'SHA256SUMS.txt']
