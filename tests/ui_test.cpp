@@ -3155,6 +3155,188 @@ Item {
     QTest::qWait(150);
     QVERIFY(!find("outputLimitNotice_3")->isVisible());
   }
+  void questionNavigatorRailNavigation() {
+    configureAPI();
+    window->showNormal();
+    window->resize(1240, 700);
+    window->setPosition(12, 32);
+    window->raise();
+    window->requestActivate();
+    QTest::qWait(150);
+    const auto moveNavigationPointer = [&](QPoint position) {
+      // XCB hover also observes the real cursor when another native window exists.
+      if (QGuiApplication::platformName() == "xcb") {
+        QCursor::setPos(window->mapToGlobal(position));
+        QTest::qWait(20);
+      }
+      movePointer(position);
+    };
+    window->setProperty("page", "chat");
+    backend->newSession();
+    backend->send("navigation rail fixture");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+    const int count = 3000;
+    QVariantList messages;
+    for (int i = 0; i < count; ++i) {
+      messages << QVariantMap{{"role", "user"}, {"text", QString("第 %1 个问题 · 摘要定位验收").arg(i + 1)}}
+               << QVariantMap{{"role", "assistant"}, {"text", QString("第 %1 次回复。点击右侧平行线直接跳转正文，蓝色指示条和摘要标签同步高亮。\n\n这段对话用于检查长历史中的快速定位。").arg(i + 1)}};
+    }
+    auto model = qobject_cast<ChatModel *>(backend->messageModel());
+    QVERIFY(model);
+    model->update(messages);
+    auto nav = find("questionNavigator"), view = find("conversation");
+    auto rail = find("questionNavigatorRail");
+    QVERIFY(nav && view && rail);
+    QTRY_COMPARE(model->questions().size(), count);
+    QTest::qWait(300);
+    QMetaObject::invokeMethod(view, "jumpToMessage", Q_ARG(QVariant, 2 * (count - 1)));
+    QTRY_VERIFY_WITH_TIMEOUT(!view->property("restoring").toBool(), 3000);
+    QTest::qWait(200);
+    const auto chatY = view->property("contentY").toReal();
+    const auto followTail = view->property("followTail");
+    moveNavigationPointer(point(nav));
+    QTRY_VERIFY_WITH_TIMEOUT(nav->property("expanded").toBool(), 1000);
+    QCOMPARE(view->property("contentY").toReal(), chatY);
+    QCOMPARE(view->property("followTail"), followTail);
+    moveNavigationPointer(point(view, 40, 40));
+    QTRY_VERIFY_WITH_TIMEOUT(!nav->property("expanded").toBool(), 1000);
+    QTest::qWait(120);
+    const auto atIndex = [&](int index) {
+      auto list = find("questionNavigationList");
+      auto item = find("questionNavigationItem_" + QString::number(index));
+      return list && item && list->boundingRect().contains(item->mapToItem(list, item->boundingRect().center()));
+    };
+    const auto atMessage = [&](int index) {
+      if (view->property("restoring").toBool() || view->property("restoreIndex").toInt() != index * 2) return false;
+      auto item = find("messageBubble_" + QString::number(index * 2));
+      if (!item) return false;
+      const auto y = item->mapToItem(view, QPointF()).y();
+      // Preserve jumpToMessage's viewport anchoring while requiring the exact
+      // requested question (including its full bubble) to be visible.
+      return y >= -4 && y + qMin(item->height(), view->height()) <= view->height() + 4;
+    };
+    const auto destinationState = [&](int index) {
+      auto item = find("messageBubble_" + QString::number(index * 2));
+      return QString("target=%1 active=%2 restoring=%3 restoreIndex=%4 attempts=%5 contentY=%6 bubbleY=%7 viewport=%8x%9 preview=%10")
+          .arg(index).arg(nav->property("activeQuestion").toInt()).arg(view->property("restoring").toBool())
+          .arg(view->property("restoreIndex").toInt()).arg(view->property("restoreAttempts").toInt())
+          .arg(view->property("contentY").toReal()).arg(item ? item->mapToItem(view,QPointF()).y() : -999999)
+          .arg(view->width()).arg(view->height()).arg(atIndex(index));
+    };
+    const auto checkSelection = [&](int index) {
+      QCOMPARE(nav->property("activeQuestion").toInt(), index);
+      auto item = find("questionNavigationItem_" + QString::number(index));
+      QVERIFY(item && item->property("highlighted").toBool());
+      auto indicator = find("questionNavigatorIndicator");
+      QVERIFY(indicator);
+      const auto expected = index * (rail->height() - indicator->height()) / (count - 1);
+      QVERIFY(qAbs(indicator->y() - expected) < 0.1);
+    };
+    const auto tapRail = [&](qreal ratio) {
+      auto pos = point(rail, rail->width() / 2, 1 + ratio * (rail->height() - 2));
+      moveNavigationPointer(pos);
+      // Deliberately click before the 90 ms hover-open timer fires.
+      QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, pos);
+      const auto localY = rail->mapFromScene(pos).y();
+      return qRound(qBound(0.0, (localY - 1) / (rail->height() - 2), 1.0) * (count - 1));
+    };
+    QElapsedTimer elapsed;
+    elapsed.start();
+    tapRail(0);
+    QTRY_VERIFY_WITH_TIMEOUT(atIndex(0) && atMessage(0), 3000);
+    const auto cold = elapsed.elapsed();
+    QTest::qWait(150);
+    checkSelection(0);
+    QVERIFY(view->property("contentY").toReal() != chatY);
+    QList<qint64> timings;
+    for (qreal ratio : {0.5, 1.0, 0.25, 0.75, 0.0}) {
+      elapsed.restart();
+      const auto index = tapRail(ratio);
+      QTRY_VERIFY2_WITH_TIMEOUT(atIndex(index) && atMessage(index), qPrintable(destinationState(index)), 3000);
+      timings << elapsed.elapsed();
+      QTest::qWait(120); // Active-position updates must retain the chosen label.
+      checkSelection(index);
+      QVERIFY(!view->property("followTail").toBool());
+    }
+    // Wheel scrolling inside the preview remains passive.
+    auto listing = find("questionNavigationList");
+    const auto previewY = listing->property("contentY").toReal();
+    const auto beforeWheel = view->property("contentY").toReal();
+    const auto wheelPoint = point(listing);
+    moveNavigationPointer(wheelPoint);
+    QWheelEvent wheel(wheelPoint, window->mapToGlobal(wheelPoint), QPoint(), QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(window, &wheel);
+    QTRY_VERIFY_WITH_TIMEOUT(listing->property("contentY").toReal() > previewY, 2000);
+    QCOMPARE(view->property("contentY").toReal(), beforeWheel);
+    QCOMPARE(nav->property("activeQuestion").toInt(), 0);
+    // The final rapid click controls both the preview and actual destination.
+    tapRail(0.2); tapRail(0.9); const auto target = tapRail(0.4);
+    QTRY_VERIFY_WITH_TIMEOUT(atIndex(target) && atMessage(target), 3000);
+    QTest::qWait(150);
+    checkSelection(target);
+    auto label = find("questionNavigationItem_" + QString::number(target + 1));
+    QVERIFY(label);
+    moveNavigationPointer(point(label));
+    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, point(label));
+    QTRY_VERIFY_WITH_TIMEOUT(atMessage(target + 1), 3000);
+    QTest::qWait(150);
+    checkSelection(target + 1);
+    // A real chat wheel event releases explicit selection for viewport tracking.
+    const auto chatPoint = point(view, 40, 40);
+    moveNavigationPointer(chatPoint);
+    QWheelEvent chatWheel(chatPoint, window->mapToGlobal(chatPoint), QPoint(), QPoint(0, -1200), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(window, &chatWheel);
+    QTRY_COMPARE_WITH_TIMEOUT(nav->property("selectedQuestion").toInt(), -1, 2000);
+    moveNavigationPointer(point(nav));
+    QTRY_VERIFY_WITH_TIMEOUT(nav->property("activeQuestion").toInt() != target + 1, 2000);
+    qInfo() << "Rail navigation over 3000 questions; cold/repeated (ms):" << cold << timings
+            << "platform:" << QGuiApplication::platformName();
+    // Single-question and empty histories do not produce invalid indices.
+    QMetaObject::invokeMethod(listing, "positionViewAtBeginning");
+    QTest::qWait(100);
+    model->update(QVariantList{messages.first(), messages.at(1)});
+    QTest::qWait(150); tapRail(1);
+    QTRY_VERIFY_WITH_TIMEOUT(atIndex(0), 2000);
+    backend->newSession();
+    QTRY_VERIFY_WITH_TIMEOUT(!nav->isVisible() && !nav->property("expanded").toBool(), 2000);
+    const auto review = qEnvironmentVariable("UMEKO_QUESTION_REVIEW_DIR");
+    if (!review.isEmpty()) {
+      QDir().mkpath(review);
+      window->resize(1240, 720);
+      window->setPosition(12, 32);
+      window->setTitle("Umeko · 摘要快速定位验收（隔离数据）");
+      backend->view->messages = messages;
+      emit backend->chatChanged();
+      // Verify a real right-sidebar Widget with this source/runtime as well.
+      auto manager = backend->desktopExtensions;
+      manager->setEnabled("terminal", true);
+      QVERIFY(manager->openPage("terminal"));
+      QTRY_VERIFY_WITH_TIMEOUT(manager->workers.value("terminal") && manager->workers.value("terminal")->ready, 10000);
+      QTest::qWait(300);
+      QVERIFY(window->grabWindow().save(review + "/terminal-widget.png"));
+      manager->closePage();
+      manager->setEnabled("skill-manager", true);
+      QVERIFY(manager->openPage("skill-manager"));
+      QTRY_VERIFY_WITH_TIMEOUT(manager->workers.value("skill-manager") && manager->workers.value("skill-manager")->ready, 10000);
+      QTest::qWait(500);
+      QVERIFY(window->grabWindow().save(review + "/skills-widget.png"));
+      manager->closePage();
+      QTest::qWait(200);
+      QMetaObject::invokeMethod(view, "jumpToMessage", Q_ARG(QVariant, 2 * (count - 1)));
+      QTRY_VERIFY_WITH_TIMEOUT(!view->property("restoring").toBool(), 3000);
+      QTest::qWait(150);
+      const auto previewTarget = tapRail(0.5);
+      QTRY_VERIFY_WITH_TIMEOUT(atMessage(previewTarget) && atIndex(previewTarget), 3000);
+      QTest::qWait(150);
+      checkSelection(previewTarget);
+      QVERIFY(window->grabWindow().save(review + "/preview.png"));
+      QVERIFY(U::writeJson(review + "/ready.json", QVariantMap{{"profile", directory.path()}, {"sourceRoot", root}, {"pid", QCoreApplication::applicationPid()}, {"questions", count}, {"runtime", "Pi 1.3.0 prepared from current source"}, {"terminalWidget", true}, {"skillsWidget", true}}));
+      QEventLoop loop;
+      QTimer stop; stop.setInterval(500);
+      connect(&stop, &QTimer::timeout, &loop, [&] { if (QFileInfo::exists(review + "/stop")) loop.quit(); });
+      stop.start(); loop.exec();
+    }
+  }
   void questionNavigator() {
     if (backend->config()["selectedModel"] != "native-fixture")
       configureAPI();
