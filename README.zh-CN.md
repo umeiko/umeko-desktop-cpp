@@ -16,9 +16,9 @@
 
 <!-- umeko-downloads:standard:start -->
 
-**Download v0.7.1 · 点击下载**
+**Download v0.7.2 · 点击下载**
 
-[![Windows x64 ZIP](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/windows.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.7.1/UmekoCpp-v0.7.1-windows-x64.zip)
+[![Windows x64 ZIP](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/windows.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.7.2/UmekoCpp-v0.7.2-windows-x64.zip)
 
 <!-- umeko-downloads:standard:end -->
 
