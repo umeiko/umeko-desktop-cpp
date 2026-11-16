@@ -6,7 +6,7 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SessionManager } from '../runtime/releases/coding-1.3.0/node_modules/@earendil-works/pi-coding-agent/dist/index.js';
+import { SessionManager } from '../runtime/releases/coding-1.5.2/node_modules/@earendil-works/pi-coding-agent/dist/index.js';
 
 test('native desktop receives the entire history beyond the Python paging threshold', { timeout: 60000 }, async () => {
   const temp = mkdtempSync(join(tmpdir(), 'umeko-native-history-'));
@@ -20,7 +20,7 @@ test('native desktop receives the entire history beyond the Python paging thresh
       api: 'openai-completions', provider: 'umeko', model: 'fixture', stopReason: 'stop', timestamp: Date.now(),
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost } });
   }
-  const bridge = fileURLToPath(new URL('../runtime/releases/coding-1.3.0/bridge.mjs', import.meta.url));
+  const bridge = fileURLToPath(new URL('../runtime/releases/coding-1.5.2/bridge.mjs', import.meta.url));
   const child = spawn(process.execPath, [bridge], { cwd: workspace, stdio: ['pipe', 'pipe', 'pipe'] });
   const events = []; let stderr = '', buffer = '';
   child.stderr.on('data', data => stderr += data);

@@ -13,7 +13,7 @@ SHARED = [['node', '--test', '--test-concurrency=2', 'tests/request-headers.test
  ['node', '--test', '--test-concurrency=2', 'tests/session-capabilities.test.mjs',
   'tests/session-capabilities-integration.test.mjs', 'tests/skills.test.mjs',
   'tests/recent-images.test.mjs', 'tests/markdown-preview.test.mjs',
-  'tests/native-skill-policy.test.mjs', 'tests/prepare-runtime.test.mjs'],
+  'tests/native-skill-policy.test.mjs', 'tests/prepare-runtime.test.mjs', 'tests/pi-upgrade.test.mjs'],
  ['node', '--test', '--test-concurrency=2', 'tests/tool-visibility.test.mjs',
   'tests/package-install.test.mjs', 'tests/pi-widget-command.test.mjs',
   'tests/extension-metadata.test.mjs', 'tests/update-engine.test.mjs',

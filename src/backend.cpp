@@ -25,7 +25,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
   reasoningQueue.setInterval(500);
   connect(&reasoningQueue,&QTimer::timeout,this,&Backend::drainReasoningDetection);
   initCharacters();
-  release = root + "/runtime/releases/coding-1.3.0";
+  release = root + "/runtime/releases/coding-1.5.2";
   auto active =
       U::readJson(store.directory + "/kernels/active.json", QVariantMap{})
           .toMap();
@@ -206,7 +206,7 @@ QString Backend::agentDir() const {
 QString Backend::kernelVersion() const {
   return U::readJson(release + "/manifest.json", QVariantMap{})
       .toMap()
-      .value("version", "1.3.0")
+      .value("version", "1.5.2")
       .toString();
 }
 void Backend::notify() {

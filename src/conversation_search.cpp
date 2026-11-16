@@ -108,7 +108,7 @@ void ConversationSearch::search(QString text,QVariantMap options){
     sources<<session;
   }
   // An unsubmitted draft is deliberately not part of the searchable corpus.
-  auto rg=b->root+"/runtime/releases/coding-1.3.0/bin/rg";
+  auto rg=b->root+"/runtime/releases/coding-1.5.2/bin/rg";
 #ifdef Q_OS_WIN
   rg+=".exe";
 #endif

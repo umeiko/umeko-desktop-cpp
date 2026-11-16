@@ -800,7 +800,7 @@ void PiManagement::restoreFactory() {
            {b->store.directory + "/kernels/active.json", "active.json"}})
     if (QFileInfo(pair.first).isFile())
       QFile::copy(pair.first, backup + "/" + pair.second);
-  auto source = b->root + "/runtime/releases/coding-1.3.0";
+  auto source = b->root + "/runtime/releases/coding-1.5.2";
   auto watcher = new QFutureWatcher<QString>(this);
   connect(watcher, &QFutureWatcher<QString>::finished, this, [=, this] {
     auto error = watcher->result();
@@ -828,7 +828,7 @@ void PiManagement::restoreFactory() {
             U::writeJson(
                 b->store.directory + "/kernels/active.json",
                 QVariantMap{{"directory", QFileInfo(target).fileName()},
-                            {"version", "1.3.0"}});
+                            {"version", "1.5.2"}});
             b->release = target;
             b->invalidate();
             m_backup = backup;

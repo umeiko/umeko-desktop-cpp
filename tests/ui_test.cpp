@@ -4882,7 +4882,7 @@ def create_provider(context): return Interactive(context)
           else {
             ++metadataCalls;
             body =
-                R"({"name":"@earendil-works/pi-coding-agent","dist-tags":{"latest":"1.3.0"},"versions":{"1.3.0":{"name":"@earendil-works/pi-coding-agent","version":"1.3.0"}}})";
+                R"({"name":"@earendil-works/pi-coding-agent","dist-tags":{"latest":"1.5.2"},"versions":{"1.5.2":{"name":"@earendil-works/pi-coding-agent","version":"1.5.2"}}})";
           }
           socket->write(
               "HTTP/1.1 200 OK\r\nContent-Type: "

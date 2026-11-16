@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const argument = name => { const index = process.argv.indexOf(name); return index < 0 ? undefined : process.argv[index + 1]; };
 const source = resolve(argument('--source') || join(root, 'runtime'));
-const output = resolve(argument('--output') || join(root, 'runtime/releases/coding-1.3.0'));
+const output = resolve(argument('--output') || join(root, 'runtime/releases/coding-1.5.2'));
 const manifest = JSON.parse(await readFile(join(source, 'node_modules/@earendil-works/pi-coding-agent/package.json'), 'utf8'));
 await mkdir(output, { recursive: true });
 let exists = false; try { await access(join(output, 'manifest.json')); exists = true; } catch { /* Initial projection. */ }
@@ -35,8 +35,8 @@ if (!retrySource.includes(adaptedRetry)) {
 }
 for (const name of ['system-prompt.mjs', 'dsh-acp-bridge.mjs', 'dsh-permissions.mjs', 'auxiliary-vision.mjs', 'generation.mjs', 'widget-market.mjs', 'coordinator-skills.mjs','skills.mjs', 'recent-images.mjs', 'background-jobs.mjs', 'process-guard.mjs', 'tool-permissions.mjs', 'provider-errors.mjs', 'session-capabilities.mjs', 'markdown-preview.mjs', 'tool-visibility.mjs', 'bridge.mjs', 'package-install.mjs', 'update-engine.mjs', 'resources.mjs', 'provider-policy.mjs', 'chatbox.mjs', 'network-retry.mjs', 'pi-commands.mjs', 'umeko-control.mjs', 'umeko-documents.mjs', 'subagents.mjs', 'subagent-sdk.mjs', 'subagent-settings.mjs', 'input-queue.mjs', 'widget-messages.mjs', 'rpc-ui.mjs', 'umeko-operations.json', 'webview-component.mjs', 'webview-component.json']) await cp(join(root, 'runtime', name), join(output, name));
 await cp(join(root, 'runtime/umeko-docs'), join(output, 'umeko-docs'), {recursive:true});
-const factoryBin=join(root,'runtime/releases/coding-1.3.0/bin');
-if(resolve(output)!==resolve(join(root,'runtime/releases/coding-1.3.0'))) {
+const factoryBin=join(root,'runtime/releases/coding-1.5.2/bin');
+if(resolve(output)!==resolve(join(root,'runtime/releases/coding-1.5.2'))) {
   try { await access(factoryBin); await cp(factoryBin,join(output,'bin'),{recursive:true,dereference:true}); }
   catch(error) { if(error.code!=='ENOENT')throw error; }
 }

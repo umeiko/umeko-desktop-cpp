@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {chatboxExtension, chatboxItems} from '../runtime/releases/coding-1.3.0/chatbox.mjs';
-import {componentSpec} from '../runtime/releases/coding-1.3.0/webview-component.mjs';
+import {chatboxExtension, chatboxItems} from '../runtime/releases/coding-1.5.2/chatbox.mjs';
+import {componentSpec} from '../runtime/releases/coding-1.5.2/webview-component.mjs';
 
 test('URL submissions reuse the delivery protocol and guidance appears only when the component is missing', async () => {
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'umeko-webview-'));

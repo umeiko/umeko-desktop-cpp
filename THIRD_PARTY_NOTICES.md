@@ -20,11 +20,11 @@ Lossless WebP assets are decoded by Qt's image format plugin. libwebp (https://g
 
 ## Bundled search tools
 
-Release bundles include fd 10.3.0 (MIT or Apache-2.0, https://github.com/sharkdp/fd/tree/v10.3.0) and ripgrep 14.1.1 (MIT or Unlicense, https://github.com/BurntSushi/ripgrep/tree/14.1.1). Their upstream license files accompany the binaries under `runtime/releases/coding-1.3.0/bin`. Archive SHA-256 values are pinned in `scripts/search-tools.json`.
+Release bundles include fd 10.3.0 (MIT or Apache-2.0, https://github.com/sharkdp/fd/tree/v10.3.0) and ripgrep 14.1.1 (MIT or Unlicense, https://github.com/BurntSushi/ripgrep/tree/14.1.1). Their upstream license files accompany the binaries under `runtime/releases/coding-1.5.2/bin`. Archive SHA-256 values are pinned in `scripts/search-tools.json`.
 
 ## Pi Coding Agent
 
-Pi Coding Agent and its dependencies are from https://github.com/earendil-works/pi (version 1.3.0). The complete upstream coding agent, tools, resource loader and session implementation are retained unmodified. The Pi AI built-in provider catalog and generated model list are replaced with empty catalogs; the application registers its explicit loopback gateway. Upstream protocol SDKs and their individual licenses remain in the runtime node_modules directory.
+Pi Coding Agent and its dependencies are from https://github.com/earendil-works/pi (version 1.5.2). The complete upstream coding agent, tools, resource loader and session implementation are retained unmodified. The Pi AI built-in provider catalog and generated model list are replaced with empty catalogs; the application registers its explicit loopback gateway. Upstream protocol SDKs and their individual licenses remain in the runtime node_modules directory.
 
 Copyright (c) 2025 Mario Zechner
 

@@ -6,7 +6,7 @@ import { randomUUID, X509Certificate } from 'node:crypto';
 import tls from 'node:tls';
 import {formatHttpError} from './provider-errors.mjs';
 
-const require = createRequire(new URL('./releases/coding-1.3.0/package.json', import.meta.url));
+const require = createRequire(new URL('./releases/coding-1.5.2/package.json', import.meta.url));
 const { Agent, ProxyAgent, EnvHttpProxyAgent, fetch: providerFetch } = require('undici');
 export { providerFetch };
 function trustedCertificates(provider) {

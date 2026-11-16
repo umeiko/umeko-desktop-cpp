@@ -11,7 +11,7 @@ import {fileURLToPath} from 'node:url';
 import {Gateway} from '../runtime/gateway.mjs';
 import {fetchProvider} from '../runtime/transport.mjs';
 import {certificateFailure, transientFailure, upstreamFailure} from '../runtime/network-retry.mjs';
-import {retryAssistantCall, completeSimple} from '../runtime/releases/coding-1.3.0/node_modules/@earendil-works/pi-ai/dist/compat.js';
+import {retryAssistantCall, completeSimple} from '../runtime/releases/coding-1.5.2/node_modules/@earendil-works/pi-ai/dist/compat.js';
 
 const fixture = name => new URL(`fixtures/update-tls/${name}.pem`, import.meta.url);
 const ca = readFileSync(fixture('ca'), 'utf8');

@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-RELEASE_NAME = 'coding-1.3.0'
+RELEASE_NAME = 'coding-1.5.2'
 
 
 def main():

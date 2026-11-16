@@ -16,7 +16,7 @@ class NativeSkills(unittest.TestCase):
         self.base = Path(self.temporary.name)
         self.agent = self.base / 'agent'; self.project = self.base / 'project'
         self.agent.mkdir(); self.project.mkdir()
-        self.context = dict(node=shutil.which('node'), release=str(ROOT/'runtime/releases/coding-1.3.0'),
+        self.context = dict(node=shutil.which('node'), release=str(ROOT/'runtime/releases/coding-1.5.2'),
             cwd=str(self.project), agentDir=str(self.agent), includeProject=True, agent={}, skillsEnabled=True)
         self.worker = subprocess.Popen([os.sys.executable,'-B',str(ROOT/'skill-runtime/worker.py')],
             stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8')

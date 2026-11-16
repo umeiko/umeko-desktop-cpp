@@ -76,7 +76,7 @@ def main():
         candidates=sorted((Path(installation)/'VC/Redist/MSVC').glob('*/x64/Microsoft.VC143.CRT'))
         if not candidates: raise RuntimeError('App-local MSVC redistributable was not found')
         for dll in candidates[-1].glob('*.dll'):copy(dll,prefix/dll.name)
-    for relative in ['model-runtime','umeko_provider_sdk','bundled-skills','skill-runtime','runtime/session-files.mjs','scripts/global_agent_skills.py','runtime/coordinator-skills.mjs','runtime/skills.mjs','runtime/recent-images.mjs','runtime/background-jobs.mjs','runtime/process-guard.mjs','runtime/tool-permissions.mjs','runtime/provider-errors.mjs','runtime/session-capabilities.mjs','runtime/markdown-preview.mjs','runtime/tool-visibility.mjs','runtime/gateway.mjs','runtime/transport.mjs','runtime/openai-responses.mjs','runtime/bridge.mjs','runtime/subagents.mjs','runtime/subagent-sdk.mjs','runtime/subagent-settings.mjs','runtime/input-queue.mjs','runtime/widget-messages.mjs','runtime/rpc-ui.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/chatbox.mjs','runtime/update-engine.mjs','runtime/package-install.mjs','runtime/network-retry.mjs','runtime/pi-commands.mjs','runtime/umeko-control.mjs','runtime/umeko-documents.mjs','runtime/umeko-operations.json','runtime/umeko-docs','runtime/webview-component.mjs','runtime/webview-component.json','runtime/releases/coding-1.3.0','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime','plugin-runtime','umeko-plugins']:
+    for relative in ['model-runtime','umeko_provider_sdk','bundled-skills','skill-runtime','runtime/session-files.mjs','scripts/global_agent_skills.py','runtime/coordinator-skills.mjs','runtime/skills.mjs','runtime/recent-images.mjs','runtime/background-jobs.mjs','runtime/process-guard.mjs','runtime/tool-permissions.mjs','runtime/provider-errors.mjs','runtime/session-capabilities.mjs','runtime/markdown-preview.mjs','runtime/tool-visibility.mjs','runtime/gateway.mjs','runtime/transport.mjs','runtime/openai-responses.mjs','runtime/bridge.mjs','runtime/subagents.mjs','runtime/subagent-sdk.mjs','runtime/subagent-settings.mjs','runtime/input-queue.mjs','runtime/widget-messages.mjs','runtime/rpc-ui.mjs','runtime/resources.mjs','runtime/provider-policy.mjs','runtime/chatbox.mjs','runtime/update-engine.mjs','runtime/package-install.mjs','runtime/network-retry.mjs','runtime/pi-commands.mjs','runtime/umeko-control.mjs','runtime/umeko-documents.mjs','runtime/umeko-operations.json','runtime/umeko-docs','runtime/webview-component.mjs','runtime/webview-component.json','runtime/releases/coding-1.5.2','scripts/prepare-runtime.mjs','scripts/search-tools.json','provider-runtime','plugin-runtime','umeko-plugins']:
         copy(ROOT/relative,resources/relative)
     # Include every first-party helper, including new tool modules imported by
     # bridge.mjs; keep the dependency projection separately pinned above.
@@ -85,7 +85,7 @@ def main():
     copy(ROOT/'build/provider-resources',resources/'provider-resources')
     copy(ROOT/'build/desktop-plugin-resources',resources/'desktop-plugin-resources')
     for document in (ROOT/'runtime/umeko-docs').glob('*.md'):
-        if (resources/'runtime/releases/coding-1.3.0/umeko-docs'/document.name).read_bytes() != document.read_bytes():
+        if (resources/'runtime/releases/coding-1.5.2/umeko-docs'/document.name).read_bytes() != document.read_bytes():
             raise RuntimeError('Packaged Umeko document differs: ' + document.name)
     python_distribution=install_python(target,resources/'runtime/python') if bundle_python else None
     node_distribution=install_node(target,resources/'runtime/node')
@@ -100,7 +100,7 @@ def main():
     info={**build_config,'platform':target,'commit':os.environ.get('GITHUB_SHA','local'),
           'system':platform.system(),'architecture':platform.machine(),
           'builtAt':__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
-          'pi':'1.3.0','qt':'6.10.2','providerApi':1,
+          'pi':'1.5.2','qt':'6.10.2','providerApi':1,
           'edition':'standard' if bundle_python else 'minimal',
           'python':'bundled, CPython '+python_distribution['version'] if bundle_python else 'external, >=3.10',
           'pythonDistribution':python_distribution,
@@ -144,11 +144,11 @@ def main():
     if any(text in diagnostics for text in ['qrc:/','file:///','SNAPSHOT_FAILED','QML_FAILED']):
         raise RuntimeError('Packaged QML warnings: '+diagnostics)
     # Probe bundled Pi and offline search binaries from their installed paths.
-    run(node,resources/'runtime/releases/coding-1.3.0/bridge.mjs','--self-test',env=env)
+    run(node,resources/'runtime/releases/coding-1.5.2/bridge.mjs','--self-test',env=env)
     npm=resources/'runtime/node'/('node_modules/npm/bin/npm-cli.js' if os.name=='nt' else 'lib/node_modules/npm/bin/npm-cli.js')
     run(node,npm,'--version',env=env)
     for binary in ['fd','rg']:
-        run(resources/'runtime/releases/coding-1.3.0/bin'/(binary+('.exe' if os.name=='nt' else '')),'--version')
+        run(resources/'runtime/releases/coding-1.5.2/bin'/(binary+('.exe' if os.name=='nt' else '')),'--version')
     if bundle_python:
         python=resources/'runtime/python'/('python.exe' if os.name=='nt' else 'bin/python3')
         selected=next((line.removeprefix('PYTHON_EXECUTABLE:') for line in diagnostics.splitlines() if line.startswith('PYTHON_EXECUTABLE:')), '')
