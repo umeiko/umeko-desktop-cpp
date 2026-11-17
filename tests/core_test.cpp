@@ -43,6 +43,8 @@ private slots:
   void selectedPassageFiles() {
     QTemporaryDir project;
     QVERIFY(project.isValid());
+    // macOS exposes its temporary directory through the /var -> /private/var alias.
+    const auto attachmentDirectory = QDir(project.path()).canonicalPath() + "/.umeko";
     const QString text = "中文𠮷 selected words\n\n```python\nprint(\"preserved\")\n```\n";
     const auto first = U::writeSelectionAttachment(project.path(), text);
     const auto second = U::writeSelectionAttachment(project.path(), text + "second");
@@ -51,10 +53,10 @@ private slots:
     QCOMPARE(second["name"].toString(), QString("中文𠮷 selected words ` (2).md"));
     QFile file(first["path"].toString()); QVERIFY(file.open(QIODevice::ReadOnly));
     QCOMPARE(QString::fromUtf8(file.readAll()), text);
-    QCOMPARE(QFileInfo(file).absolutePath(), project.path() + "/.umeko");
+    QCOMPARE(QFileInfo(file).absolutePath(), attachmentDirectory);
     for (const auto &value : QStringList{"../../danger:<name>?*|\"", "CON", "nul.txt", "..."}) {
       const auto item = U::writeSelectionAttachment(project.path(), value);
-      QCOMPARE(QFileInfo(item["path"].toString()).absolutePath(), project.path() + "/.umeko");
+      QCOMPARE(QFileInfo(item["path"].toString()).absolutePath(), attachmentDirectory);
       QVERIFY(!item["name"].toString().contains(QRegularExpression("[<>:\"/\\\\|?*]")));
     }
     QVERIFY(U::writeSelectionAttachment(project.path(), " \n\t").isEmpty());
