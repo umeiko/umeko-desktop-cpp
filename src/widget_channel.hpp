@@ -13,6 +13,7 @@ public:
 
 private:
   friend class DesktopPlugins;
+  friend class PetAssistant;
   struct State {
     QString token, key;
     QVariantMap snapshot;

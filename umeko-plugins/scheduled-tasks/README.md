@@ -109,3 +109,8 @@ Operations use the real calling conversation, not a model-supplied owner/session
 C++ 标准版使用内置 Python 标准库运行隔离调度器，不依赖 PySide6。最小版沿用应用设置的外部 Python。IANA 时区数据已离线附带；进程退出或崩溃会释放独占调度租约，避免同一配置被重复调度。
 
 The C++ standard edition runs the isolated scheduler using its bundled Python standard library, without PySide6. The minimal edition uses the configured external Python. IANA data is included offline. An operating-system-backed exclusive lease prevents duplicate schedulers and is released on exit or crash.
+
+
+## Bound desktop pet assistant
+
+The host-bound floating assistant may use this Widget to schedule its own global wake-ups without a workspace bridge. Its target defaults to itself; list, history and changes are restricted to timers targeting that same assistant. Delivery wakes its own persistent Pi conversation directly, retaining the normal shared five-timer quota. This exception does not grant other global coordinators Widget access or permit the pet to manage another Agent’s timers.

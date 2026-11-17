@@ -25,3 +25,7 @@ Implementation and verification checkpoints are tracked in the source tests and 
 Factory reset keeps original settings and backs up its pointer before selecting a fresh verified factory runtime. Kernel updates are staged and self-tested before their active pointer changes; the factory's search binaries are carried forward. Imported provider code executes only for login, discovery or inference. The worker is a process boundary, not a security sandbox.
 
 Desktop-specific IME composition, system dialogs, keychain permission prompts, extension packages from arbitrary third parties and every hardware graphics driver remain manual acceptance areas. CI uses the real OS credential service with synthetic accounts and never authenticates to an enterprise deployment. It cannot certify every third-party plugin or model's declared context/vision capability.
+
+## Interactive acceptance previews
+
+Run a built `UmekoCpp` with an isolated profile for ordinary acceptance. A live Pi fixture preview held by `UmekoUiTests` must use `waitForAcceptance()` so it starts the same `TrayController` as the application: closing hides to a registered tray, the tray restores the window, and its Quit action ends the preview and shuts down its workers. If the desktop has no tray, keep the window reachable in the taskbar. A stop-file-only event loop leaves a hidden test process that the user cannot quit and must not be used for acceptance.

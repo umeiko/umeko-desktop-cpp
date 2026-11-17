@@ -186,10 +186,12 @@ QVariantMap Backend::umekoRequestImpl(QVariantMap request, QString callerKey, bo
     auto args = request["arguments"].toMap();
     require(json(args).size() <= 2 * 1024 * 1024, "Desktop arguments exceed 2 MiB");
     const auto caller = records.value(callerKey);
+    if (operation == "desktop_pet.reminder")
+      return finish(qobject_cast<DesktopPet*>(desktopExtensions->pet())->helper()->reminder(caller,args));
     if (operation == "desktop_pet.send_to_user")
       return finish(qobject_cast<DesktopPet*>(desktopExtensions->pet())->helper()->send(caller, args));
     if(operation.startsWith("agent_bus."))return finish(desktopExtensions->globalAgents()->execute(operation,args,callerKey));
-    require(!caller || caller->globalAgent.isEmpty() || operation == "help" || operation == "models.list", "全局协调子智能体只能使用 agent_bus.* 和 models.list；其他任务请委派给已开启桥的工作区代理");
+    require(!caller || caller->globalAgent.isEmpty() || operation == "help" || operation == "models.list" || qobject_cast<DesktopPet*>(desktopExtensions->pet())->helper()->allowsTimer(caller, operation, args), "全局协调子智能体只能使用 agent_bus.* 和 models.list；其他任务请委派给已开启桥的工作区代理");
     if(operation.startsWith("widgets."))return finish(desktopExtensions->execute(operation,args,callerKey));
     if (operation == "help") {
       const auto directory = QFileInfo::exists(store.directory + "/agent-docs/README.md") ? store.directory + "/agent-docs" : release + "/umeko-docs";

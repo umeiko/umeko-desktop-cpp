@@ -1,4 +1,5 @@
 #include "terminal_view.hpp"
+#include "tray.hpp"
 #include "widget_channel.hpp"
 #include "widget_host.hpp"
 #include "input_method.hpp"
@@ -9,6 +10,7 @@
 #include <QTextDocument>
 #include "desktop_pet.hpp"
 #include "pet_assistant.hpp"
+#include "pet_reminders.hpp"
 #include "global_agents.hpp"
 #include "backend.hpp"
 #include "miniz.h"
@@ -17,6 +19,7 @@
 #include "update_network_fixture.hpp"
 #include <QDesktopServices>
 #include <QImageReader>
+#include <QPainter>
 #include <QAbstractItemModel>
 #include <QAbstractItemModelTester>
 #include <QJSValue>
@@ -27,6 +30,7 @@
 #include <QDropEvent>
 #include <QQuickStyle>
 #include <QWheelEvent>
+#include <QTimeZone>
 #include <QtTest>
 
 class EditorSdk : public QObject {
@@ -65,6 +69,7 @@ class NativeUiTests : public QObject {
   bool globalBridge = false;
   bool desktopTool = false;
   bool petTool = false;
+  bool reminderTool = false;
   int desktopCalls = 0;
   bool holdReplies = false;
   bool upstreamError = false;
@@ -214,6 +219,24 @@ class NativeUiTests : public QObject {
         id = v.toMap()["id"].toString();
     backend->selectModel(id, "native-fixture");
   }
+  void waitForAcceptance(const QString &stopPath) {
+    // Manual previews must have the same close/restore/quit route as main.cpp.
+    // Automated cases never enter this helper and do not create a tray icon.
+    const auto priorQuitOnClose=QGuiApplication::quitOnLastWindowClosed();
+    const auto restore=qScopeGuard([&]{QGuiApplication::setQuitOnLastWindowClosed(priorQuitOnClose);});
+    const QIcon icon(root+"/app/icons/yanami-pixel.webp");
+    window->setIcon(icon);
+    TrayController tray(window,icon,window);
+    tray.setLanguage(backend->language());tray.systemTray()->setToolTip("Umeko · 本地预览");
+    connect(&tray,&TrayController::notificationRequested,backend.get(),&Backend::toast);
+    connect(backend.get(),&Backend::appearanceChanged,&tray,[&]{tray.setLanguage(backend->language());});
+    QEventLoop loop;
+    connect(&tray,&TrayController::quitRequested,&loop,&QEventLoop::quit);
+    connect(qApp,&QCoreApplication::aboutToQuit,&loop,&QEventLoop::quit);
+    QTimer stop;stop.setInterval(250);
+    connect(&stop,&QTimer::timeout,&loop,[&]{if(QFileInfo::exists(stopPath))loop.quit();});
+    stop.start();loop.exec();
+  }
 private slots:
   void initTestCase() {
 #ifdef Q_OS_WIN
@@ -224,7 +247,8 @@ private slots:
 #endif
     root = qEnvironmentVariable("UMEKO_TEST_ROOT", QDir::currentPath());
     QVERIFY(directory.isValid());
-    QQuickStyle::setStyle("Basic");
+    QQuickStyle::setStyle("UmekoStyle");
+    QQuickStyle::setFallbackStyle("Basic");
     qmlRegisterType<TerminalView>("Umeko.Terminal",1,0,"TerminalView");
   qmlRegisterType<SyntaxHighlighter>("Umeko.Text", 1, 0, "SyntaxHighlighter");
   qmlRegisterType<TextSpacing>("Umeko.Text",1,0,"TextSpacing");
@@ -237,6 +261,7 @@ private slots:
     QVERIFY(seed.save());
     backend = std::make_unique<Backend>(root, directory.path());
     engine = std::make_unique<QQmlApplicationEngine>();
+    engine->addImportPath(root+"/app/qml");
     engine->rootContext()->setContextProperty("backend", backend.get());
     connect(engine.get(), &QQmlEngine::warnings, this,
             [this](const QList<QQmlError> &errors) {
@@ -373,9 +398,21 @@ private slots:
           if (petTool) {
             const auto msgs=body["messages"].toList();const auto last=msgs.isEmpty()?QVariantMap{}:msgs.last().toMap();
             bool available=false;for(auto tool:body["tools"].toList())available|=tool.toMap()["function"].toMap()["name"]=="send_to_user";
-            if(available && last["role"]!="tool") {
-              message={{"role","assistant"},{"content",QVariant()},{"tool_calls",QVariantList{QVariantMap{{"id","pet-speech-"+U::uuid()},{"type","function"},{"function",QVariantMap{{"name","send_to_user"},{"arguments","{\"text\":\"后台长任务完成啦。\"}"}}}}}}};finish="tool_calls";
-            }else {message={{"role","assistant"},{"content","已简短通知用户。"}};finish="stop";}
+            QString content=last["content"].toString();for(auto block:last["content"].toList())content+=block.toMap()["text"].toString();
+            const bool petInput=content.startsWith("(input from pet)"),notification=content.contains("taskBriefings")||content.contains("scheduled-tasks");
+            if(available && last["role"]!="tool" && (petInput||notification)) {
+              const auto speech=petInput?QString("收到，从桌宠发来的任务已交给我。"):QString("后台长任务完成啦。");
+              const auto args=QString::fromUtf8(QJsonDocument(QJsonObject{{"text",speech}}).toJson(QJsonDocument::Compact));
+              message={{"role","assistant"},{"content",QVariant()},{"tool_calls",QVariantList{QVariantMap{{"id","pet-speech-"+U::uuid()},{"type","function"},{"function",QVariantMap{{"name","send_to_user"},{"arguments",args}}}}}}};finish="tool_calls";
+            }else {message={{"role","assistant"},{"content",last["role"]=="tool"?QString():QString("直接在聊天框提问时，我会在这里正常回答。")}};finish="stop";}
+          }
+          if(reminderTool) {
+            const auto msgs=body["messages"].toList();const auto last=msgs.isEmpty()?QVariantMap{}:msgs.last().toMap();
+            QString content=last["content"].toString();for(const auto &value:last["content"].toList())content+=value.toMap()["text"].toString();
+            if(last["role"]=="user"&&content.contains("创建每日提醒测试")) {
+              const auto params=QVariantMap{{"action","create"},{"title","每日喝水"},{"notes","原生 reminder 工具创建"},{"repeat","daily"},{"timeZone","UTC"},{"dueAt",QDateTime::currentDateTimeUtc().addSecs(3600).toString(Qt::ISODate)}};
+              message={{"role","assistant"},{"content",QVariant()},{"tool_calls",QVariantList{QVariantMap{{"id","reminder-"+U::uuid()},{"type","function"},{"function",QVariantMap{{"name","reminder"},{"arguments",QString::fromUtf8(QJsonDocument::fromVariant(params).toJson(QJsonDocument::Compact))}}}}}}};finish="tool_calls";
+            }else {message={{"role","assistant"},{"content","提醒已收到。"}};finish="stop";}
           }
           QJsonObject response{
               {"choices", QJsonArray{QJsonObject{
@@ -1202,6 +1239,7 @@ private slots:
   void piManagerColdToolInventory() {
     const auto restoreFocus=qScopeGuard([&] {window->requestActivate();QTest::qWait(100);});
     QQmlEngine fixtureEngine;
+    fixtureEngine.addImportPath(root+"/app/qml");
     QQmlComponent component(&fixtureEngine, QUrl::fromLocalFile(root+"/tests/fixtures/PiManagerColdStart.qml"));
     QVERIFY2(component.isReady(), qPrintable(component.errorString()));
     for (bool failed : {false, true}) {
@@ -1816,6 +1854,7 @@ Item {
     QVERIFY(seed.saveSessions(QVariantList{QVariantMap{{"id", "moved-chat"}, {"file", history}, {"workspace", workspace}, {"title", "Preserved migrated question"}}}));
     Backend restored(root, temporary.path());
     QQmlApplicationEngine restoredEngine;
+    restoredEngine.addImportPath(root+"/app/qml");
     restoredEngine.rootContext()->setContextProperty("backend", &restored);
     restoredEngine.load(QUrl::fromLocalFile(root + "/app/qml/Main.qml"));
     QVERIFY(!restoredEngine.rootObjects().isEmpty());
@@ -3214,6 +3253,192 @@ Item {
     QTest::qWait(150);
     QVERIFY(!find("outputLimitNotice_3")->isVisible());
   }
+  void questionNavigatorRailNavigation() {
+    const auto originalSize=window->size();const auto originalPosition=window->position();
+    const auto restoreGeometry=qScopeGuard([&] {
+      window->resize(originalSize);window->setPosition(originalPosition);window->requestActivate();QTest::qWait(150);
+    });
+    configureAPI();
+    window->showNormal();
+    window->resize(1240, 700);
+    window->setPosition(12, 32);
+    window->raise();
+    window->requestActivate();
+    QTest::qWait(150);
+    const auto moveNavigationPointer = [&](QPoint position) {
+      // XCB hover also observes the real cursor when another native window exists.
+      if (QGuiApplication::platformName() == "xcb") {
+        QCursor::setPos(window->mapToGlobal(position));
+        QTest::qWait(20);
+      }
+      movePointer(position);
+    };
+    window->setProperty("page", "chat");
+    backend->newSession();
+    backend->send("navigation rail fixture");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+    const int count = 3000;
+    QVariantList messages;
+    for (int i = 0; i < count; ++i) {
+      messages << QVariantMap{{"role", "user"}, {"text", QString("第 %1 个问题 · 摘要定位验收").arg(i + 1)}}
+               << QVariantMap{{"role", "assistant"}, {"text", QString("第 %1 次回复。点击右侧平行线直接跳转正文，蓝色指示条和摘要标签同步高亮。\n\n这段对话用于检查长历史中的快速定位。").arg(i + 1)}};
+    }
+    auto model = qobject_cast<ChatModel *>(backend->messageModel());
+    QVERIFY(model);
+    model->update(messages);
+    auto nav = find("questionNavigator"), view = find("conversation");
+    auto rail = find("questionNavigatorRail");
+    QVERIFY(nav && view && rail);
+    QTRY_COMPARE(model->questions().size(), count);
+    QTest::qWait(300);
+    QMetaObject::invokeMethod(view, "jumpToMessage", Q_ARG(QVariant, 2 * (count - 1)));
+    QTRY_VERIFY_WITH_TIMEOUT(!view->property("restoring").toBool(), 3000);
+    QTest::qWait(200);
+    const auto chatY = view->property("contentY").toReal();
+    const auto followTail = view->property("followTail");
+    moveNavigationPointer(point(nav));
+    QTRY_VERIFY_WITH_TIMEOUT(nav->property("expanded").toBool(), 1000);
+    QCOMPARE(view->property("contentY").toReal(), chatY);
+    QCOMPARE(view->property("followTail"), followTail);
+    moveNavigationPointer(point(view, 40, 40));
+    QTRY_VERIFY_WITH_TIMEOUT(!nav->property("expanded").toBool(), 1000);
+    QTest::qWait(120);
+    const auto atIndex = [&](int index) {
+      auto list = find("questionNavigationList");
+      auto item = find("questionNavigationItem_" + QString::number(index));
+      return list && item && list->boundingRect().contains(item->mapToItem(list, item->boundingRect().center()));
+    };
+    const auto atMessage = [&](int index) {
+      if (view->property("restoring").toBool() || view->property("restoreIndex").toInt() != index * 2) return false;
+      auto item = find("messageBubble_" + QString::number(index * 2));
+      if (!item) return false;
+      const auto y = item->mapToItem(view, QPointF()).y();
+      // Preserve jumpToMessage's viewport anchoring while requiring the exact
+      // requested question (including its full bubble) to be visible.
+      return y >= -4 && y + qMin(item->height(), view->height()) <= view->height() + 4;
+    };
+    const auto destinationState = [&](int index) {
+      auto item = find("messageBubble_" + QString::number(index * 2));
+      return QString("target=%1 active=%2 restoring=%3 restoreIndex=%4 attempts=%5 contentY=%6 bubbleY=%7 viewport=%8x%9 preview=%10")
+          .arg(index).arg(nav->property("activeQuestion").toInt()).arg(view->property("restoring").toBool())
+          .arg(view->property("restoreIndex").toInt()).arg(view->property("restoreAttempts").toInt())
+          .arg(view->property("contentY").toReal()).arg(item ? item->mapToItem(view,QPointF()).y() : -999999)
+          .arg(view->width()).arg(view->height()).arg(atIndex(index));
+    };
+    const auto checkSelection = [&](int index) {
+      QCOMPARE(nav->property("activeQuestion").toInt(), index);
+      auto item = find("questionNavigationItem_" + QString::number(index));
+      QVERIFY(item && item->property("highlighted").toBool());
+      auto indicator = find("questionNavigatorIndicator");
+      QVERIFY(indicator);
+      const auto expected = index * (rail->height() - indicator->height()) / (count - 1);
+      QVERIFY(qAbs(indicator->y() - expected) < 0.1);
+    };
+    const auto tapRail = [&](qreal ratio) {
+      auto pos = point(rail, rail->width() / 2, 1 + ratio * (rail->height() - 2));
+      moveNavigationPointer(pos);
+      // Deliberately click before the 90 ms hover-open timer fires.
+      QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, pos);
+      const auto localY = rail->mapFromScene(pos).y();
+      return qRound(qBound(0.0, (localY - 1) / (rail->height() - 2), 1.0) * (count - 1));
+    };
+    QElapsedTimer elapsed;
+    elapsed.start();
+    tapRail(0);
+    QTRY_VERIFY_WITH_TIMEOUT(atIndex(0) && atMessage(0), 3000);
+    const auto cold = elapsed.elapsed();
+    QTest::qWait(150);
+    checkSelection(0);
+    QVERIFY(view->property("contentY").toReal() != chatY);
+    QList<qint64> timings;
+    for (qreal ratio : {0.5, 1.0, 0.25, 0.75, 0.0}) {
+      elapsed.restart();
+      const auto index = tapRail(ratio);
+      QTRY_VERIFY2_WITH_TIMEOUT(atIndex(index) && atMessage(index), qPrintable(destinationState(index)), 3000);
+      timings << elapsed.elapsed();
+      QTest::qWait(120); // Active-position updates must retain the chosen label.
+      checkSelection(index);
+      QVERIFY(!view->property("followTail").toBool());
+    }
+    // Wheel scrolling inside the preview remains passive.
+    auto listing = find("questionNavigationList");
+    const auto previewY = listing->property("contentY").toReal();
+    const auto beforeWheel = view->property("contentY").toReal();
+    const auto wheelPoint = point(listing);
+    moveNavigationPointer(wheelPoint);
+    QWheelEvent wheel(wheelPoint, window->mapToGlobal(wheelPoint), QPoint(), QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(window, &wheel);
+    QTRY_VERIFY_WITH_TIMEOUT(listing->property("contentY").toReal() > previewY, 2000);
+    QCOMPARE(view->property("contentY").toReal(), beforeWheel);
+    QCOMPARE(nav->property("activeQuestion").toInt(), 0);
+    // The final rapid click controls both the preview and actual destination.
+    tapRail(0.2); tapRail(0.9); const auto target = tapRail(0.4);
+    QTRY_VERIFY_WITH_TIMEOUT(atIndex(target) && atMessage(target), 3000);
+    QTest::qWait(150);
+    checkSelection(target);
+    auto label = find("questionNavigationItem_" + QString::number(target + 1));
+    QVERIFY(label);
+    moveNavigationPointer(point(label));
+    QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, point(label));
+    QTRY_VERIFY_WITH_TIMEOUT(atMessage(target + 1), 3000);
+    QTest::qWait(150);
+    checkSelection(target + 1);
+    // A real chat wheel event releases explicit selection for viewport tracking.
+    const auto chatPoint = point(view, 40, 40);
+    moveNavigationPointer(chatPoint);
+    QWheelEvent chatWheel(chatPoint, window->mapToGlobal(chatPoint), QPoint(), QPoint(0, -1200), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(window, &chatWheel);
+    QTRY_COMPARE_WITH_TIMEOUT(nav->property("selectedQuestion").toInt(), -1, 2000);
+    moveNavigationPointer(point(nav));
+    QTRY_VERIFY_WITH_TIMEOUT(nav->property("activeQuestion").toInt() != target + 1, 2000);
+    qInfo() << "Rail navigation over 3000 questions; cold/repeated (ms):" << cold << timings
+            << "platform:" << QGuiApplication::platformName();
+    // Single-question and empty histories do not produce invalid indices.
+    QMetaObject::invokeMethod(listing, "positionViewAtBeginning");
+    QTest::qWait(100);
+    model->update(QVariantList{messages.first(), messages.at(1)});
+    QTest::qWait(150); tapRail(1);
+    QTRY_VERIFY_WITH_TIMEOUT(atIndex(0), 2000);
+    backend->newSession();
+    QTRY_VERIFY_WITH_TIMEOUT(!nav->isVisible() && !nav->property("expanded").toBool(), 2000);
+    const auto review = qEnvironmentVariable("UMEKO_QUESTION_REVIEW_DIR");
+    if (!review.isEmpty()) {
+      QDir().mkpath(review);
+      window->resize(1240, 720);
+      window->setPosition(12, 32);
+      window->setTitle("Umeko · 摘要快速定位验收（隔离数据）");
+      backend->view->messages = messages;
+      emit backend->chatChanged();
+      // Verify a real right-sidebar Widget with this source/runtime as well.
+      auto manager = backend->desktopExtensions;
+      manager->setEnabled("terminal", true);
+      QVERIFY(manager->openPage("terminal"));
+      QTRY_VERIFY_WITH_TIMEOUT(manager->workers.value("terminal") && manager->workers.value("terminal")->ready, 10000);
+      QTest::qWait(300);
+      QVERIFY(window->grabWindow().save(review + "/terminal-widget.png"));
+      manager->closePage();
+      manager->setEnabled("skill-manager", true);
+      QVERIFY(manager->openPage("skill-manager"));
+      QTRY_VERIFY_WITH_TIMEOUT(manager->workers.value("skill-manager") && manager->workers.value("skill-manager")->ready, 10000);
+      QTest::qWait(500);
+      QVERIFY(window->grabWindow().save(review + "/skills-widget.png"));
+      manager->closePage();
+      QTest::qWait(200);
+      QMetaObject::invokeMethod(view, "jumpToMessage", Q_ARG(QVariant, 2 * (count - 1)));
+      QTRY_VERIFY_WITH_TIMEOUT(!view->property("restoring").toBool(), 3000);
+      QTest::qWait(150);
+      const auto previewTarget = tapRail(0.5);
+      QTRY_VERIFY_WITH_TIMEOUT(atMessage(previewTarget) && atIndex(previewTarget), 3000);
+      QTest::qWait(150);
+      checkSelection(previewTarget);
+      QVERIFY(window->grabWindow().save(review + "/preview.png"));
+      QVERIFY(U::writeJson(review + "/ready.json", QVariantMap{{"profile", directory.path()}, {"sourceRoot", root}, {"pid", QCoreApplication::applicationPid()}, {"questions", count}, {"runtime", "Pi 1.5.2 prepared from current source"}, {"terminalWidget", true}, {"skillsWidget", true}}));
+      QEventLoop loop;
+      QTimer stop; stop.setInterval(500);
+      connect(&stop, &QTimer::timeout, &loop, [&] { if (QFileInfo::exists(review + "/stop")) loop.quit(); });
+      stop.start(); loop.exec();
+    }
+  }
   void questionNavigator() {
     if (backend->config()["selectedModel"] != "native-fixture")
       configureAPI();
@@ -4375,6 +4600,7 @@ Item {
   void inputMethodCaretUpdates() {
     InputMethodUpdates updates(qApp);
     QQuickView composer;
+    composer.engine()->addImportPath(root+"/app/qml");
     composer.engine()->rootContext()->setContextProperty("backend", backend.get());
     composer.setResizeMode(QQuickView::SizeRootObjectToView);
     QQmlComponent component(composer.engine());
@@ -4474,6 +4700,7 @@ Item {
 
     EditorSdk sdk;
     QQuickView widget;
+    widget.engine()->addImportPath(root+"/app/qml");
     widget.engine()->rootContext()->setContextProperty("backend", backend.get());
     widget.setResizeMode(QQuickView::SizeRootObjectToView);
     widget.setInitialProperties({{"sdk", QVariant::fromValue<QObject *>(&sdk)}});
@@ -5104,8 +5331,7 @@ def create_provider(context): return Interactive(context)
       QVERIFY(result["ok"].toBool());tasks<<result["result"].toMap()["task_id"].toString();
       QTest::qWait(2200);window->grabWindow().save(output+"/preview.png");
       U::writeJson(output+"/ready.json",QVariantMap{{"pid",QCoreApplication::applicationPid()},{"profile",directory.path()},{"source",root}});
-      window->raise();window->requestActivate();QEventLoop review;QTimer stop;stop.setInterval(250);
-      connect(&stop,&QTimer::timeout,&review,[&]{if(QFileInfo::exists(output+"/stop"))review.quit();});stop.start();review.exec();
+      window->raise();window->requestActivate();waitForAcceptance(output+"/stop");
     }
   }
   void desktopPluginPagesAndSessionBoundary() {
@@ -5737,6 +5963,99 @@ def create_provider(context): return Interactive(context)
     evaluate(menu, "itemAt(5).click()");
     QTRY_VERIFY(!pet->config()["paused"].toBool());
   }
+  void globalAgentNativeToolsSettings() {
+    const auto originalSize=window->size();const auto originalPaneWidth=window->property("webPreferredWidth");
+    const auto restoreGeometry=qScopeGuard([&]{window->resize(originalSize);window->setProperty("webPreferredWidth",originalPaneWidth);});
+    const auto evaluate=[](QObject *object,const QString &script) {
+      QQmlExpression expression(qmlContext(object),object,script);
+      const auto result=expression.evaluate();
+      if(expression.hasError())qWarning()<<expression.error();
+      return result;
+    };
+    configureAPI();backend->newSession();window->setProperty("page","chat");window->resize(1640,1040);window->setProperty("webPreferredWidth",500);
+    auto manager=backend->desktopExtensions;auto g=manager->globalAgents();manager->setEnabled("global-agents",true);
+    auto created=g->ui("create",{{"name","工具设置验收"}});QVERIFY(created["ok"].toBool());const auto id=created["result"].toMap()["id"].toString();
+    auto cleanup=qScopeGuard([&]{g->ui("delete",{{"id",id}});manager->closePage();window->setProperty("page","chat");});
+    QVERIFY(g->runtimeConfig(g->ensure(id))["coordinatorTools"].toList().isEmpty());
+    QVERIFY(manager->openPage("global-agents"));QTRY_VERIFY(find("globalAgentsPage"));auto page=find("globalAgentsPage");
+    QTRY_VERIFY(!page->property("state").toMap()["agents"].toList().isEmpty());
+    QVERIFY(QMetaObject::invokeMethod(page,"form",Q_ARG(QVariant,id)));
+    auto form=page->findChild<QObject*>("globalAgentFormScroll");QVERIFY(form);
+    // The tools row shares the existing scrollable settings form.
+    evaluate(form,"contentItem.contentY = Math.max(0, contentItem.contentHeight - contentItem.height)");
+    QTRY_VERIFY(find("globalAgentToolsButton")->isVisible());click("globalAgentToolsButton");
+    auto dialog=page->findChild<QObject*>("globalAgentToolsDialog");QVERIFY(dialog);QTRY_VERIFY(dialog->property("opened").toBool());
+    QTRY_VERIFY(find("globalTool_read"));click("globalTool_read");
+    QTRY_VERIFY(find("globalTool_write"));click("globalTool_write");
+    QCOMPARE(page->property("chosenTools").value<QJSValue>().property("length").toInt(),2);
+    click("doneGlobalAgentTools");click("confirmCreateGlobalAgent");
+    const QVariantList selected{"read","write"};QTRY_COMPARE(g->agents[id].toMap()["tools"].toList(),selected);
+    QCOMPARE(g->runtimeConfig(g->ensure(id))["coordinatorTools"].toList(),selected);
+    QVERIFY(!g->ui("update",{{"id",id},{"tools",QVariantList{"subagent"}}})["ok"].toBool());
+    QCOMPARE(g->agents[id].toMap()["tools"].toList(),selected);
+    QVERIFY(!g->ui("update",{{"id",id},{"tools",QVariantList{"bash"}}},true)["ok"].toBool());
+    const auto other=g->ui("create",{{"name","默认工具"}})["result"].toMap()["id"].toString();
+    QVERIFY(g->runtimeConfig(g->ensure(other))["coordinatorTools"].toList().isEmpty());g->ui("delete",{{"id",other}});
+    g->save();{GlobalAgents loaded(manager);QCOMPARE(loaded.agents[id].toMap()["tools"].toList(),selected);loaded.close();}
+    const auto shownTools=[&] {for(auto row:page->property("state").toMap()["agents"].toList())if(row.toMap()["id"]==id)return row.toMap()["tools"].toList();return QVariantList{};};
+    QTRY_COMPARE(shownTools(),selected);
+    QVERIFY(QMetaObject::invokeMethod(page,"form",Q_ARG(QVariant,id)));
+    QCOMPARE(page->property("chosenTools").value<QJSValue>().property("length").toInt(),2);
+    evaluate(form,"contentItem.contentY = Math.max(0, contentItem.contentHeight - contentItem.height)");
+    click("globalAgentToolsButton");QTRY_VERIFY(dialog->property("opened").toBool());
+    click("selectAllGlobalAgentTools");
+    const QVariantList allTools{"read","bash","powershell","edit","write","grep","find","ls"};
+    QVERIFY(!find("selectAllGlobalAgentTools")->isEnabled());
+    click("doneGlobalAgentTools");click("confirmCreateGlobalAgent");QTRY_COMPARE(g->agents[id].toMap()["tools"].toList(),allTools);
+    QCOMPARE(g->runtimeConfig(g->ensure(id))["coordinatorTools"].toList(),allTools);QTRY_COMPARE(shownTools(),allTools);
+    QVERIFY(QMetaObject::invokeMethod(page,"form",Q_ARG(QVariant,id)));
+    QCOMPARE(page->property("chosenTools").value<QJSValue>().property("length").toInt(),8);
+    evaluate(form,"contentItem.contentY = Math.max(0, contentItem.contentHeight - contentItem.height)");
+    click("globalAgentToolsButton");QTRY_VERIFY(dialog->property("opened").toBool());click("resetGlobalAgentTools");
+    click("doneGlobalAgentTools");click("confirmCreateGlobalAgent");QTRY_VERIFY(g->agents[id].toMap()["tools"].toList().isEmpty());
+    QVERIFY(g->runtimeConfig(g->ensure(id))["coordinatorTools"].toList().isEmpty());
+    const auto review=qEnvironmentVariable("UMEKO_GLOBAL_TOOLS_REVIEW_DIR");
+    if(!review.isEmpty()) {
+      QDir().mkpath(review);manager->closePage();window->resize(1440,940);
+      backend->send("Feature parity preview history");QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(),15000);
+      window->setTitle("Umeko · 功能补齐与全局工具设置（隔离验收）");
+      QVariantList history;
+      for(int i=0;i<3000;++i)history<<QVariantMap{{"role","user"},{"text",QString("第 %1 个问题 · 点击右侧短横线跳转").arg(i+1)}}
+        <<QVariantMap{{"role","assistant"},{"text",QString("第 %1 次回复。待办事项、短横线跳转与全局智能体工具设置已在此整合。").arg(i+1)}};
+      backend->view->messages=history;
+      auto model=qobject_cast<ChatModel*>(backend->messageModel());QVERIFY(model);model->update(history);
+      emit backend->chatChanged();QTest::qWait(300);
+      const auto visibleNavigator=[&]() -> QQuickItem* {
+        QList<QQuickItem*> pending{window->contentItem()};
+        while(!pending.isEmpty()){auto item=pending.takeLast();if(item->objectName()=="questionNavigator"&&item->isVisible())return item;pending.append(item->childItems());}
+        return nullptr;
+      };
+      QQuickItem *nav=nullptr;QTRY_VERIFY(nav=visibleNavigator());
+      QCOMPARE(model->questions().size(),3000);
+      QVERIFY(QMetaObject::invokeMethod(nav,"navigateAt",Q_ARG(QVariant,nav->height()/2)));QTest::qWait(600);
+      QVERIFY(window->grabWindow().save(review+"/question-rail.png"));QMetaObject::invokeMethod(nav,"dismiss");
+      auto pet=qobject_cast<DesktopPet*>(manager->pet());manager->setEnabled("desktop-pet",true);
+      QVERIFY(pet->ui("configure",{{"visible",true}})["ok"].toBool());
+      petTool=true;
+      for(const auto &title:QStringList{"每天整理工作笔记","试用新的工具设置","点击短横线快速跳转"})
+        QVERIFY(pet->ui("createItem",{{"title",title}})["ok"].toBool());
+      pet->openReminders("",false);QTRY_VERIFY(window->findChild<QQuickWindow*>("desktopPetReminderWindow"));
+      auto reminders=window->findChild<QQuickWindow*>("desktopPetReminderWindow");QTRY_VERIFY(reminders->isVisible());QTest::qWait(200);
+      QVERIFY(reminders->grabWindow().save(review+"/reminders.png"));reminders->close();
+      QVERIFY(manager->openPage("skill-manager"));QTRY_VERIFY_WITH_TIMEOUT(manager->workers.value("skill-manager")&&manager->workers.value("skill-manager")->ready,10000);
+      QTRY_VERIFY_WITH_TIMEOUT(find("skillManagerWidget")&&!find("skillManagerWidget")->property("working").toBool()&&find("skillManagerWidget")->property("roots").toMap().contains("global"),10000);
+      QTest::qWait(100);manager->closePage();
+      manager->setEnabled("terminal",true);QVERIFY(manager->openPage("terminal"));QTRY_VERIFY_WITH_TIMEOUT(manager->workers.value("terminal")&&manager->workers.value("terminal")->ready,10000);manager->closePage();
+      QVERIFY(manager->openPage("global-agents"));QTRY_VERIFY(find("globalAgentsPage"));page=find("globalAgentsPage");
+      QTRY_VERIFY(!page->property("state").toMap()["agents"].toList().isEmpty());QVERIFY(QMetaObject::invokeMethod(page,"form",Q_ARG(QVariant,id)));
+      form=page->findChild<QObject*>("globalAgentFormScroll");evaluate(form,"contentItem.contentY = Math.max(0, contentItem.contentHeight - contentItem.height)");
+      click("globalAgentToolsButton");QTRY_VERIFY(page->findChild<QObject*>("globalAgentToolsDialog")->property("opened").toBool());
+      window->raise();window->requestActivate();
+      QTest::qWait(200);QVERIFY(window->grabWindow().save(review+"/global-tools.png"));
+      QVERIFY(U::writeJson(review+"/ready.json",QVariantMap{{"pid",QCoreApplication::applicationPid()},{"profile",directory.path()},{"sourceRoot",root},{"questions",3000},{"agentId",id},{"pi","1.5.2"},{"runtimeMatchesSource",true},{"terminalWidget",true},{"skillsWidget",true},{"upstreamPort",upstream.serverPort()}}));
+      waitForAcceptance(review+"/stop");
+    }
+  }
   void globalAgentSkillsAndActiveRequests() {
     configureAPI();backend->newSession();window->setProperty("page","chat");window->resize(1640,1040);
     auto manager=backend->desktopExtensions;auto g=manager->globalAgents();manager->setEnabled("global-agents",true);
@@ -5793,7 +6112,7 @@ def create_provider(context): return Interactive(context)
       QTRY_VERIFY_WITH_TIMEOUT(!page->property("skillWorking").toBool(),20000);
       QVERIFY(window->grabWindow().save(review+"/global-agent-skills.png"));
       QVERIFY(U::writeJson(review+"/ready.json",QVariantMap{{"profile",directory.path()},{"sourceRoot",root},{"pid",QCoreApplication::applicationPid()},{"agentId",id},{"upstreamPort",upstream.serverPort()}}));
-      QEventLoop loop;QTimer stop;stop.setInterval(500);connect(&stop,&QTimer::timeout,&loop,[&]{if(QFileInfo::exists(review+"/stop"))loop.quit();});stop.start();loop.exec();
+      waitForAcceptance(review+"/stop");
     }
   }
   void petAssistantBindingBriefingsAndSpeech() {
@@ -5826,14 +6145,16 @@ def create_provider(context): return Interactive(context)
     source->promptStarted=std::chrono::steady_clock::now()-std::chrono::seconds(91);
     backend->finishTurn(source);backend->finishTurn(source);QCOMPARE(helper->pending.size(),1);
     QCOMPARE(helper->pending.first().toMap()["sessionId"].toString(),source->id);
-    helper->flush();QTRY_VERIFY_WITH_TIMEOUT(!assistant->busy(),20000);
+    helper->flush();
     QTRY_VERIFY_WITH_TIMEOUT(!speech.isEmpty() && !speech.last()[0].toString().isEmpty(),20000);
     QCOMPARE(speech.last()[0].toString(),QString("后台长任务完成啦。"));
     QTRY_VERIFY(window->findChild<QQuickWindow*>("desktopPetWindow"));auto petWindow=window->findChild<QQuickWindow*>("desktopPetWindow");
     QTRY_COMPARE(petWindow->property("caption").toString(),QString("后台长任务完成啦。"));
+    QTRY_VERIFY_WITH_TIMEOUT(!assistant->busy(),20000);
+    QVERIFY(helper->send(assistant,{{"text","第二条"},{"binding",helper->binding}})["ok"].toBool());
     const int shown=speech.size();
-    for(int i=0;i<100;++i)QCOMPARE(helper->send(assistant,{{"text","重复"},{"binding",helper->binding}})["status"].toString(),QString("rate_limited"));
-    QCOMPARE(speech.size(),shown);QVERIFY(helper->pending.isEmpty());
+    for(int i=0;i<100;++i)QVERIFY(helper->send(assistant,{{"text","分段"},{"binding",helper->binding}})["ok"].toBool());
+    QCOMPARE(speech.size(),shown+100);QVERIFY(helper->pending.isEmpty());
     pet->settingsRequested();QTRY_VERIFY_WITH_TIMEOUT(find("desktopPetPersona"),10000);
     QTRY_COMPARE_WITH_TIMEOUT(find("desktopPetPersona")->property("text").toString(),QString("安静，用一句话报告。"),10000);
     auto field=find("desktopPetPersona");
@@ -5845,11 +6166,11 @@ def create_provider(context): return Interactive(context)
     QTRY_VERIFY(find("desktopPetPersonaSave")->property("enabled").toBool());click("desktopPetPersonaSave");
     QTRY_COMPARE(helper->persona(),QString("轻声而简洁地报告结果。"));
     QCOMPARE(backend->view,foreground);QCOMPARE(foreground->draft,QString("前台草稿保持"));QCOMPARE(foreground->attachments,attachments);
-    const auto budgetNow=helper->clock.elapsed();
-    helper->spoken={budgetNow-59000,budgetNow-30000};
-    QCOMPARE(helper->send(assistant,{{"text","窗口限额"},{"binding",helper->binding}})["status"].toString(),QString("rate_limited"));
-    helper->spoken={budgetNow-61000,budgetNow-31000};
-    QVERIFY(helper->send(assistant,{{"text","窗口边界"},{"binding",helper->binding}})["ok"].toBool());
+    QCOMPARE(pet->speechDuration("Done."),1800);QCOMPARE(pet->speechDuration("One two three."),1978);
+    QCOMPARE(pet->speechDuration(QString(30,QChar(0x5b57))),5200);
+    QCOMPARE(pet->speechDuration(QString(80,QChar(0x5b57))),12200);QCOMPARE(pet->speechDuration(QString::fromUtf8("👩‍💻").repeated(80)),12200);
+    const auto readable=helper->send(assistant,{{"text",QString(80,QChar(0x5b57))},{"binding",helper->binding}});QCOMPARE(readable["reading_ms"].toInt(),12200);
+    QTRY_COMPARE(petWindow->findChild<QObject*>("desktopPetSpeechTimer")->property("interval").toInt(),12200);
     for(int i=0;i<200;++i){source->promptStarted=std::chrono::steady_clock::now()+std::chrono::nanoseconds(i);helper->completed(source,100,"finished");}
     QCOMPARE(helper->pending.size(),8);QCOMPARE(helper->seen.size(),128);QCOMPARE(helper->overflow,192);
     const auto remaining=helper->timer.remainingTime();QTest::qWait(100);helper->reconcile();
@@ -5858,12 +6179,12 @@ def create_provider(context): return Interactive(context)
     const auto token=helper->binding;pet->ui("configure",{{"visible",false}});
     QCOMPARE(helper->send(assistant,{{"text","隐藏不能说话"},{"binding",token}})["status"].toString(),QString("unavailable"));
     pet->ui("configure",{{"visible",true}});QCOMPARE(helper->identifier,id);QVERIFY(helper->binding!=token);
-    QCOMPARE(helper->send(assistant,{{"text","不能靠开关绕过冷却"},{"binding",helper->binding}})["status"].toString(),QString("rate_limited"));
+    QVERIFY(helper->send(assistant,{{"text","新的绑定可以继续发言"},{"binding",helper->binding}})["ok"].toBool());
     pet->ui("configure",{{"visible",false}});manager->setEnabled("global-agents",false);QVERIFY(!helper->enabled());manager->setEnabled("global-agents",true);
     const auto review=qEnvironmentVariable("UMEKO_PET_REVIEW_DIR");
     if(!review.isEmpty()) {
       QVERIFY(QDir().mkpath(review));
-      pet->ui("configure",{{"visible",true}});helper->reconcile();helper->spoken.clear();helper->nextBrief=0;
+      pet->ui("configure",{{"visible",true}});helper->reconcile();helper->nextBrief=0;
       source->promptStarted=std::chrono::steady_clock::now()-std::chrono::seconds(120);backend->finishTurn(source);helper->flush();
       QTRY_VERIFY_WITH_TIMEOUT(!assistant->busy(),20000);
       QTRY_VERIFY_WITH_TIMEOUT(window->findChild<QQuickWindow*>("desktopPetWindow"),5000);petWindow=window->findChild<QQuickWindow*>("desktopPetWindow");
@@ -5871,9 +6192,330 @@ def create_provider(context): return Interactive(context)
       QVERIFY(petWindow->grabWindow().save(review+"/pet-bubble.png"));
       QVERIFY(window->grabWindow().save(review+"/persona-settings.png"));
       QVERIFY(U::writeJson(review+"/ready.json",QVariantMap{{"profile",directory.path()},{"sourceRoot",root},{"pid",QCoreApplication::applicationPid()},{"helperId",id},{"upstreamPort",upstream.serverPort()}}));
-      QEventLoop loop;QTimer stop;stop.setInterval(500);connect(&stop,&QTimer::timeout,&loop,[&]{if(QFileInfo::exists(review+"/stop"))loop.quit();});stop.start();loop.exec();
+      waitForAcceptance(review+"/stop");
     }
     window->setProperty("page","chat");
+  }
+  void softSwitchUsesSharedStyleAndNativeInput() {
+    window->requestActivate();QTest::qWait(80);
+    for(bool wrapper:{false,true}) {
+      QQmlComponent component(engine.get());
+      if(wrapper)component.loadUrl(QUrl::fromLocalFile(root+"/app/qml/Toggle.qml"));
+      else component.setData("import QtQuick; import QtQuick.Controls; Switch {}",QUrl::fromLocalFile(root+"/app/qml/SwitchFixture.qml"));
+      QScopedPointer<QObject> object(component.create());QVERIFY2(object,qPrintable(component.errorString()));
+      auto control=qobject_cast<QQuickItem*>(object.data());QVERIFY(control);control->setParentItem(window->contentItem());
+      control->setPosition(QPointF(600,200));control->setSize(QSizeF(control->implicitWidth(),control->implicitHeight()));
+      auto indicator=control->findChild<QQuickItem*>("umekoSoftSwitchIndicator");QVERIFY(indicator);
+      auto thumb=control->findChild<QQuickItem*>("umekoSoftSwitchThumb");QVERIFY(thumb);
+      QSignalSpy toggled(control,SIGNAL(toggled()));
+      const auto left=thumb->x();
+      QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,control->mapToScene(QPointF(control->width()/2,control->height()/2)).toPoint());
+      QTRY_VERIFY(control->property("checked").toBool());QCOMPARE(toggled.size(),1);QTRY_VERIFY(thumb->x()>left);
+      control->forceActiveFocus();QTest::keyClick(window,Qt::Key_Space);
+      QTRY_VERIFY(!control->property("checked").toBool());QCOMPARE(toggled.size(),2);
+      control->setEnabled(false);
+      QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,control->mapToScene(QPointF(control->width()/2,control->height()/2)).toPoint());
+      QCOMPARE(toggled.size(),2);QVERIFY(!control->property("checked").toBool());
+    }
+  }
+  void softSelectionsAndTntWindowControls() {
+    window->showNormal();window->requestActivate();QTest::qWait(80);
+    QQmlComponent component(engine.get());
+    component.setData(R"(import QtQuick
+import QtQuick.Controls
+Item {width:360;height:160
+    Column {
+        CheckBox {objectName:"selectionCheck";text:"复选框"}
+        RadioButton {objectName:"selectionRadioA";text:"单选 A"}
+        RadioButton {objectName:"selectionRadioB";text:"单选 B"}
+    }
+})",QUrl::fromLocalFile(root+"/app/qml/SelectionFixture.qml"));
+    QScopedPointer<QObject> fixture(component.create());QVERIFY2(fixture,qPrintable(component.errorString()));
+    auto item=qobject_cast<QQuickItem*>(fixture.data());item->setParentItem(window->contentItem());item->setPosition(QPointF(560,250));
+    const auto click=[&](QQuickItem *control){QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,control->mapToScene(QPointF(control->width()/2,control->height()/2)).toPoint());};
+    auto check=fixture->findChild<QQuickItem*>("selectionCheck");QVERIFY(check);QVERIFY(check->findChild<QObject*>("umekoCheckIndicator"));
+    QSignalSpy toggled(check,SIGNAL(toggled()));click(check);QCOMPARE(toggled.size(),1);QVERIFY(check->property("checked").toBool());
+    check->setProperty("tristate",true);check->setProperty("checkState",Qt::PartiallyChecked);
+    QCOMPARE(check->findChild<QObject*>("umekoCheckIndicator")->property("checkState").toInt(),int(Qt::PartiallyChecked));
+    check->setEnabled(false);click(check);QCOMPARE(toggled.size(),1);
+    auto a=fixture->findChild<QQuickItem*>("selectionRadioA"),b=fixture->findChild<QQuickItem*>("selectionRadioB");QVERIFY(a&&b);
+    QVERIFY(a->findChild<QObject*>("umekoRadioIndicator"));click(a);QVERIFY(a->property("checked").toBool());
+    b->forceActiveFocus();QTest::keyClick(window,Qt::Key_Space);QVERIFY(b->property("checked").toBool());QVERIFY(!a->property("checked").toBool());
+    auto maximize=find("maximizeWindowButton"),minimize=find("minimizeWindowButton");QVERIFY(maximize&&minimize&&find("closeToTrayButton"));
+    click(maximize);QTRY_COMPARE(window->visibility(),QWindow::Maximized);QVERIFY(maximize->property("maximized").toBool());
+    click(maximize);QTRY_COMPARE(window->visibility(),QWindow::Windowed);
+    click(minimize);QTRY_COMPARE(window->visibility(),QWindow::Minimized);window->showNormal();window->requestActivate();
+  }
+  void petReminderToolNotificationsAndPersistentBadge() {
+    configureAPI();backend->newSession();window->setProperty("page","chat");
+    auto manager=backend->desktopExtensions;auto bus=manager->globalAgents();auto pet=qobject_cast<DesktopPet*>(manager->pet());auto helper=pet->helper();
+    const auto original=pet->config();QString id;
+    const auto restore=qScopeGuard([&]{reminderTool=false;pet->reminders->markViewed();if(!id.isEmpty())pet->ui("deleteItem",{{"id",id}});pet->ui("configure",original);if(auto w=window->findChild<QQuickWindow*>("desktopPetReminderWindow"))w->close();});
+    manager->setEnabled("global-agents",true);pet->ui("configure",{{"visible",true},{"reminderNotificationsEnabled",true}});helper->reconcile();auto assistant=bus->ensure(helper->identifier);
+    reminderTool=true;QVERIFY(bus->ui("send",{{"id",helper->identifier},{"text","创建每日提醒测试"}})["ok"].toBool());
+    QTRY_VERIFY_WITH_TIMEOUT(!assistant->busy(),20000);
+    auto items=pet->reminders->handle("listItems",{})["items"].toList();QCOMPARE(items.size(),1);const auto item=items.first().toMap();id=item["id"].toString();
+    QCOMPARE(item["repeat"].toString(),QString("daily"));QCOMPARE(item["agentId"].toString(),assistant->globalAgent);
+    const auto binding=helper->reminderBindingFor(assistant);QVERIFY(!binding.isEmpty());
+    QVERIFY(!helper->reminder(backend->view,{{"binding",binding},{"action","list"}})["ok"].toBool());
+    auto result=helper->reminder(assistant,{{"binding",binding},{"action","update"},{"id",id},{"dueAt",QDateTime::currentDateTimeUtc().addSecs(-1).toString(Qt::ISODate)}});QVERIFY(result["ok"].toBool());
+    QTRY_VERIFY(window->findChild<QQuickWindow*>("desktopPetWindow"));auto petWindow=window->findChild<QQuickWindow*>("desktopPetWindow");
+    auto card=petWindow->findChild<QQuickItem*>("desktopPetReminderCard");auto dot=petWindow->findChild<QQuickItem*>("desktopPetReminderUnreadDot");QVERIFY(card&&dot);QTRY_VERIFY(card->isVisible()&&dot->isVisible());
+    const auto beforeNotification=requests.size();helper->flushReminders();
+    QTRY_VERIFY_WITH_TIMEOUT(pet->reminders->pendingNotifications().isEmpty(),15000);
+    QTRY_VERIFY_WITH_TIMEOUT(!assistant->busy(),15000);
+    QTest::qWait(8200);QVERIFY(card->isVisible()&&dot->isVisible());
+    QVERIFY(requests.size()>beforeNotification);
+    QVERIFY(QJsonDocument::fromVariant(requests.last().toMap()["messages"]).toJson().contains("每日喝水"));
+    QVERIFY(pet->reminders->handle("getItem",{{"id",id}})["item"].toMap()["dueAt"].toString()>QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+    QMetaObject::invokeMethod(petWindow,"viewReminderCard");QTRY_VERIFY(!card->isVisible()&&!dot->isVisible());QVERIFY(pet->reminders->unreadAlerts().isEmpty());
+    auto dialog=window->findChild<QQuickWindow*>("desktopPetReminderWindow");QTRY_VERIFY(dialog&&dialog->isVisible());QVERIFY(dialog->flags()&Qt::FramelessWindowHint);
+    auto panel=dialog->findChild<QQuickItem*>("desktopPetReminderManagerContent");QVERIFY(panel);QVERIFY(!panel->property("editing").toBool());QVERIFY(!panel->property("completedFilter").toBool());
+    QVERIFY(QMetaObject::invokeMethod(panel,"beginEdit",Q_ARG(QVariant,item)));
+    auto picker=dialog->findChild<QObject*>("reminderDateTimePicker");QVERIFY(picker);
+    auto timeButton=dialog->findChild<QQuickItem*>("desktopPetReminderTimeButton");QVERIFY(timeButton);QMetaObject::invokeMethod(timeButton,"clicked");QTRY_VERIFY(picker->property("opened").toBool());
+    auto hour=dialog->findChild<QObject*>("reminderHourWheel"),minute=dialog->findChild<QObject*>("reminderMinuteWheel");QVERIFY(hour&&minute);hour->setProperty("currentIndex",9);minute->setProperty("currentIndex",15);
+    auto accept=dialog->findChild<QObject*>("reminderPickerAccept");QVERIFY(accept);QMetaObject::invokeMethod(accept,"clicked");
+    QCOMPARE(dialog->findChild<QObject*>("desktopPetReminderTime")->property("text").toString(),QString("09:15"));
+    dialog->close();
+  }
+  void reminderHomeCompletedDeletionAndClear() {
+    auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);const auto original=pet->config();QStringList ids;
+    const auto cleanup=qScopeGuard([&]{for(const auto &id:ids)pet->ui("deleteItem",{{"id",id}});pet->reminders->markViewed();pet->ui("configure",original);if(auto w=window->findChild<QQuickWindow*>("desktopPetReminderWindow"))w->close();});
+    const auto create=[&](QString title,bool due=false){auto args=QVariantMap{{"title",title}};if(due)args["dueAt"]=QDateTime::currentDateTimeUtc().addSecs(-1).toString(Qt::ISODate);auto result=pet->ui("createItem",args);auto id=result["result"].toMap()["item"].toMap()["id"].toString();ids<<id;return id;};
+    const auto due=create("到期未完成",true),open=create("保留未完成"),done1=create("已完成一"),done2=create("已完成二");QVERIFY(!done2.isEmpty());
+    pet->ui("completeItem",{{"id",done1}});pet->ui("completeItem",{{"id",done2}});
+    pet->openReminders(due,false);auto dialog=window->findChild<QQuickWindow*>("desktopPetReminderWindow");QTRY_VERIFY(dialog&&dialog->isVisible());
+    const auto lookup=[dialog](QString name)->QQuickItem*{QList<QQuickItem*> items{dialog->contentItem()};while(!items.isEmpty()){auto item=items.takeLast();if(item->objectName()==name)return item;items.append(item->childItems());}return nullptr;};
+    auto panel=dialog->findChild<QQuickItem*>("desktopPetReminderManagerContent");QVERIFY(panel);QVERIFY(!panel->property("editing").toBool());QVERIFY(!panel->property("completedFilter").toBool());
+    QTRY_VERIFY(lookup("desktopPetReminderTitle_"+due));auto title=lookup("desktopPetReminderTitle_"+due);
+    QQmlExpression danger(QQmlEngine::contextForObject(panel),panel,"Theme.danger");QCOMPARE(title->property("color").value<QColor>(),danger.evaluate().value<QColor>());
+    panel->setProperty("completedFilter",true);QTRY_VERIFY(lookup("desktopPetReminderDelete_"+done1));
+    auto remove=lookup("desktopPetReminderDelete_"+done1);QVERIFY(remove->isVisible());QMetaObject::invokeMethod(remove,"clicked");
+    auto confirmation=dialog->findChild<QObject*>("desktopPetDeleteReminderDialog");QVERIFY(confirmation);QMetaObject::invokeMethod(confirmation,"reject");
+    QCOMPARE(pet->reminders->handle("listItems",{{"status","all"}})["items"].toList().size(),4);
+    QMetaObject::invokeMethod(remove,"clicked");QMetaObject::invokeMethod(confirmation,"accept");
+    QTRY_COMPARE(pet->reminders->handle("listItems",{{"status","completed"}})["items"].toList().size(),1);
+    auto clear=dialog->findChild<QQuickItem*>("desktopPetClearCompleted");QVERIFY(clear&&clear->isVisible());QMetaObject::invokeMethod(clear,"clicked");QMetaObject::invokeMethod(confirmation,"accept");
+    QTRY_VERIFY(pet->reminders->handle("listItems",{{"status","completed"}})["items"].toList().isEmpty());
+    QCOMPARE(pet->reminders->handle("listItems",{})["items"].toList().size(),2);QVERIFY(!pet->reminders->handle("getItem",{{"id",open}}).isEmpty());
+  }
+  void acceptancePreviewTrayClosesRestoresAndExits() {
+    const auto stopPath=directory.filePath("tray-preview-stop");
+    QFile::remove(stopPath);
+    const bool available=QSystemTrayIcon::isSystemTrayAvailable();
+    bool registered=false,closeIntercepted=false,reachable=false,restored=false,exitTriggered=false;
+    int stage=0;
+    QTimer actions;actions.setInterval(50);
+    connect(&actions,&QTimer::timeout,this,[&]{
+      auto icon=window->findChild<QSystemTrayIcon*>("umekoTrayIcon");
+      if(!icon||!icon->contextMenu())return;
+      if(stage==0) {
+        registered=!available||(icon->isVisible()&&!icon->geometry().isEmpty());
+        if(!registered)return;
+        closeIntercepted=!window->close();
+        reachable=available?!window->isVisible():window->visibility()==QWindow::Minimized;
+        stage=1;
+      } else if(stage==1) {
+        auto open=icon->contextMenu()->findChild<QAction*>("trayShowAction");if(!open)return;
+        open->trigger();stage=2;
+      } else if(stage==2) {
+        restored=window->isVisible()&&window->visibility()!=QWindow::Minimized;
+        if(!restored)return;
+        auto quit=icon->contextMenu()->findChild<QAction*>("trayQuitAction");if(!quit)return;
+        exitTriggered=true;stage=3;quit->trigger();
+      }
+    });
+    QTimer deadline;deadline.setSingleShot(true);
+    connect(&deadline,&QTimer::timeout,this,[&]{U::writeJson(stopPath,QVariantMap{});});
+    actions.start();deadline.start(5000);waitForAcceptance(stopPath);actions.stop();deadline.stop();
+    QVERIFY(registered);QVERIFY(closeIntercepted);QVERIFY(reachable);QVERIFY(restored);QVERIFY(exitTriggered);QCOMPARE(stage,3);
+    QVERIFY(!window->findChild<QSystemTrayIcon*>("umekoTrayIcon"));QFile::remove(stopPath);
+  }
+  void reminderCheckboxRestoresOnBothPages() {
+    auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);QStringList ids;
+    const auto cleanup=qScopeGuard([&]{for(const auto &id:ids)pet->ui("deleteItem",{{"id",id}});pet->reminders->markViewed();if(auto w=window->findChild<QQuickWindow*>("desktopPetReminderWindow"))w->close();});
+    for(int i=0;i<2;++i)ids<<pet->ui("createItem",{{"title",i?"未来事项":"逾期事项"},{"dueAt",QDateTime::currentDateTimeUtc().addSecs(i?3600:-60).toString(Qt::ISODate)}})["result"].toMap()["item"].toMap()["id"].toString();
+    pet->openReminders("",false);auto dialog=window->findChild<QQuickWindow*>("desktopPetReminderWindow");QTRY_VERIFY(dialog&&dialog->isVisible());
+    const auto lookup=[dialog](QString name)->QQuickItem*{QList<QQuickItem*> items{dialog->contentItem()};while(!items.isEmpty()){auto item=items.takeLast();if(item->objectName()==name)return item;items.append(item->childItems());}return nullptr;};
+    auto panel=dialog->findChild<QQuickItem*>("desktopPetReminderManagerContent");QVERIFY(panel);
+    const auto rows=[panel]{return panel->property("items").value<QJSValue>().toVariant().toList();};
+    const auto check=[&](QString id){auto button=lookup("desktopPetReminderComplete_"+id);QVERIFY(button&&button->isEnabled());QTest::mouseClick(dialog,Qt::LeftButton,Qt::NoModifier,button->mapToScene(button->boundingRect().center()).toPoint());};
+    const auto get=[&](QString id){return pet->reminders->handle("getItem",{{"id",id}})["item"].toMap();};
+    QTRY_VERIFY(lookup("desktopPetReminderComplete_"+ids[0]));check(ids[0]);QTRY_VERIFY(get(ids[0])["completed"].toBool());QCOMPARE(rows().size(),2);
+    QSignalSpy presented(pet,&DesktopPet::reminderPresented);check(ids[0]);QTRY_VERIFY(!get(ids[0])["completed"].toBool());QCOMPARE(rows().size(),2);QCOMPARE(presented.size(),0);
+    auto title=lookup("desktopPetReminderTitle_"+ids[0]);QVERIFY(title&&!title->property("font").value<QFont>().strikeOut());
+    QQmlExpression danger(QQmlEngine::contextForObject(panel),panel,"Theme.danger");QCOMPARE(title->property("color").value<QColor>(),danger.evaluate().value<QColor>());
+    check(ids[1]);QTRY_VERIFY(get(ids[1])["completed"].toBool());panel->setProperty("completedFilter",true);QTRY_COMPARE(rows().size(),1);
+    QTRY_VERIFY(lookup("desktopPetReminderComplete_"+ids[1]));check(ids[1]);QTRY_VERIFY(!get(ids[1])["completed"].toBool());QTRY_VERIFY(rows().isEmpty());
+    panel->setProperty("completedFilter",false);QTRY_COMPARE(rows().size(),2);QTRY_VERIFY(lookup("desktopPetReminderTitle_"+ids[1]));
+  }
+  void petTaskComposerSlimInputAndBoundRoute() {
+    configureAPI();backend->newSession();auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);const auto original=pet->config();
+    const auto cleanup=qScopeGuard([&]{petTool=false;pet->ui("configure",original);});
+    backend->desktopExtensions->setEnabled("global-agents",true);pet->ui("configure",{{"visible",true},{"alwaysOnTop",true}});pet->helper()->reconcile();
+    auto petWindow=window->findChild<QQuickWindow*>("desktopPetWindow");QTRY_VERIFY(petWindow&&petWindow->isVisible());
+    const auto identifier=pet->assistantStatus()["id"].toString();QVERIFY(!identifier.isEmpty()&&pet->assistantStatus()["bound"].toBool());
+    auto composer=petWindow->findChild<QObject*>("desktopPetTaskComposer");auto taskWindow=petWindow->findChild<QQuickWindow*>("desktopPetTaskWindow");QVERIFY(composer&&taskWindow);
+    auto field=petWindow->findChild<QQuickItem*>("desktopPetTaskInput"),send=petWindow->findChild<QQuickItem*>("desktopPetTaskSend"),desktop=petWindow->findChild<QQuickItem*>("desktopPetTaskDesktop");QVERIFY(field&&send&&desktop);
+    auto art=petWindow->findChild<QQuickItem*>("desktopPetPointer");QVERIFY(art);
+    QTest::mouseDClick(petWindow,Qt::LeftButton,Qt::NoModifier,art->mapToScene(art->boundingRect().center()).toPoint());
+    QTRY_VERIFY(composer->property("opened").toBool()&&field->hasActiveFocus());QVERIFY(taskWindow->width()/double(taskWindow->height())>7);QVERIFY(!send->isEnabled());
+    QCOMPARE(pet->sendTask("test","wrong-id")["status"].toString(),QString("binding_changed"));QVERIFY(!pet->sendTask("  ",identifier)["ok"].toBool());
+    const auto foreground=backend->view;auto bus=backend->desktopExtensions->globalAgents();const auto selected=bus->selectedConversation;auto record=bus->ensure(identifier);
+    QSignalSpy speech(pet,&DesktopPet::assistantSpeech);petTool=true;
+    field->setProperty("text","检查桌宠派发链路");QVERIFY(send->isEnabled());
+    const auto review=qEnvironmentVariable("UMEKO_PET_MANAGER_REVIEW_DIR");
+    if(!review.isEmpty()) {
+      QVERIFY(QDir().mkpath(review));QTRY_VERIFY(!composer->property("animating").toBool());QTest::qWait(80);
+      QVERIFY(taskWindow->grabWindow().save(review+"/pet-composer.png"));
+      const auto left=qMin(petWindow->x(),taskWindow->x()),top=qMin(petWindow->y(),taskWindow->y());
+      const auto right=qMax(petWindow->x()+petWindow->width(),taskWindow->x()+taskWindow->width()),bottom=qMax(petWindow->y()+petWindow->height(),taskWindow->y()+taskWindow->height());
+      QImage pair(right-left+32,bottom-top+32,QImage::Format_ARGB32_Premultiplied);pair.fill(QColor("#f4f6fa"));
+      {QPainter painter(&pair);painter.drawImage(petWindow->x()-left+16,petWindow->y()-top+16,petWindow->grabWindow());painter.drawImage(taskWindow->x()-left+16,taskWindow->y()-top+16,taskWindow->grabWindow());}
+      QVERIFY(pair.save(review+"/pet-composer-with-pet.png"));
+    }
+    QTest::mouseClick(taskWindow,Qt::LeftButton,Qt::NoModifier,send->mapToScene(send->boundingRect().center()).toPoint());
+    QTRY_VERIFY(!composer->property("visible").toBool());QCOMPARE(field->property("text").toString(),QString());
+    QTRY_VERIFY_WITH_TIMEOUT(!speech.isEmpty(),15000);QTRY_VERIFY_WITH_TIMEOUT(!record->busy(),15000);QCOMPARE(backend->view,foreground);QCOMPARE(bus->selectedConversation,selected);
+    bool tagged=false;for(auto value:record->messages){const auto message=value.toMap();if(message["role"]=="user"&&message["text"]=="(input from pet)\n检查桌宠派发链路")tagged=true;}QVERIFY(tagged);
+    QMetaObject::invokeMethod(petWindow,"openTaskComposer");QTRY_VERIFY(composer->property("opened").toBool()&&field->hasActiveFocus());
+    field->setProperty("text","关闭时保留这段草稿");QTest::keyClick(taskWindow,Qt::Key_Escape);QTRY_VERIFY(!composer->property("visible").toBool());
+    QMetaObject::invokeMethod(petWindow,"openTaskComposer");QTRY_VERIFY(composer->property("opened").toBool());QCOMPARE(field->property("text").toString(),QString("关闭时保留这段草稿"));
+    QSignalSpy restored(pet,&DesktopPet::restoreRequested);QTest::mouseClick(taskWindow,Qt::LeftButton,Qt::NoModifier,desktop->mapToScene(desktop->boundingRect().center()).toPoint());
+    QTRY_VERIFY(!composer->property("visible").toBool());QCOMPARE(restored.size(),1);QCOMPARE(field->property("text").toString(),QString("关闭时保留这段草稿"));
+  }
+  void reminderCompletedEditingAndDeferredRemoval() {
+    auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);QStringList ids;
+    QCOMPARE(pet->status()["timeZone"].toString(),QString::fromUtf8(QTimeZone::systemTimeZoneId()));
+    const auto cleanup=qScopeGuard([&]{for(const auto &id:ids)pet->ui("deleteItem",{{"id",id}});if(auto w=window->findChild<QQuickWindow*>("desktopPetReminderWindow"))w->close();});
+    for(int i=0;i<3;++i) {
+      const auto item=pet->ui("createItem",{{"title",QString("待办 %1").arg(i+1)},{"dueAt",QDateTime::currentDateTimeUtc().addDays(i+1).toString(Qt::ISODate)}})["result"].toMap()["item"].toMap();
+      ids<<item["id"].toString();QVERIFY(!ids.last().isEmpty());
+    }
+    pet->openReminders("",false);auto dialog=window->findChild<QQuickWindow*>("desktopPetReminderWindow");QTRY_VERIFY(dialog&&dialog->isVisible());
+    const auto lookup=[dialog](QString name)->QQuickItem*{QList<QQuickItem*> items{dialog->contentItem()};while(!items.isEmpty()){auto item=items.takeLast();if(item->objectName()==name)return item;items.append(item->childItems());}return nullptr;};
+    auto panel=dialog->findChild<QQuickItem*>("desktopPetReminderManagerContent");QVERIFY(panel);
+    const auto rows=[panel]{return panel->property("items").value<QJSValue>().toVariant().toList();};
+    const auto get=[&](QString id){return pet->reminders->handle("getItem",{{"id",id}})["item"].toMap();};
+    const auto rowIds=[&]{QStringList values;for(const auto &row:rows())values<<row.toMap()["id"].toString();return values;};
+    const auto before=rowIds();QCOMPARE(before.size(),3);
+    for(int i=0;i<2;++i) {
+      QTRY_VERIFY(lookup("desktopPetReminderComplete_"+ids[i]));auto check=lookup("desktopPetReminderComplete_"+ids[i]);
+      QTest::mouseClick(dialog,Qt::LeftButton,Qt::NoModifier,check->mapToScene(check->boundingRect().center()).toPoint());
+      QTRY_VERIFY(get(ids[i])["completed"].toBool());QCOMPARE(rowIds(),before);
+    }
+    QMetaObject::invokeMethod(panel,"refresh");QTest::qWait(1200);QCOMPARE(rowIds(),before);
+    for(int i=0;i<2;++i) {
+      auto title=lookup("desktopPetReminderTitle_"+ids[i]);QVERIFY(title);QVERIFY(title->property("font").value<QFont>().strikeOut());
+      QVERIFY(lookup("desktopPetReminderComplete_"+ids[i])->isEnabled());QVERIFY(!lookup("desktopPetReminderDelete_"+ids[i])->isVisible());
+    }
+    const auto review=qEnvironmentVariable("UMEKO_PET_MANAGER_REVIEW_DIR");
+    if(!review.isEmpty()){QVERIFY(QDir().mkpath(review));QVERIFY(dialog->grabWindow().save(review+"/reminder-completed-retained.png"));}
+    auto add=dialog->findChild<QObject*>("desktopPetNewReminder");QVERIFY(add);QMetaObject::invokeMethod(add,"clicked");QVERIFY(panel->property("editing").toBool());
+    auto back=dialog->findChild<QObject*>("desktopPetReminderCancel");QMetaObject::invokeMethod(back,"clicked");QTRY_COMPARE(rows().size(),1);
+    panel->setProperty("completedFilter",true);QTRY_COMPARE(rows().size(),2);
+    auto completed=get(ids[0]);QVERIFY(QMetaObject::invokeMethod(panel,"beginEdit",Q_ARG(QVariant,completed)));
+    auto title=dialog->findChild<QQuickItem*>("desktopPetReminderTitle"),notes=dialog->findChild<QQuickItem*>("desktopPetReminderNotes");
+    auto timed=dialog->findChild<QQuickItem*>("desktopPetReminderTimed"),save=dialog->findChild<QQuickItem*>("desktopPetReminderSave");
+    QVERIFY(title&&notes&&timed&&save);QVERIFY(!title->property("readOnly").toBool()&&!notes->property("readOnly").toBool());QVERIFY(timed->isEnabled()&&save->isVisible());
+    title->setProperty("text","完成后修改标题");notes->setProperty("text","仍保留完成状态");QMetaObject::invokeMethod(save,"clicked");
+    QTRY_COMPARE(get(ids[0])["title"].toString(),QString("完成后修改标题"));QVERIFY(get(ids[0])["completed"].toBool());QVERIFY(panel->property("completedFilter").toBool());
+    completed=get(ids[0]);QVERIFY(QMetaObject::invokeMethod(panel,"beginEdit",Q_ARG(QVariant,completed)));
+    const auto future=QDateTime::currentDateTime().addDays(5);
+    dialog->findChild<QObject*>("desktopPetReminderDate")->setProperty("text",future.toString("yyyy-MM-dd"));
+    dialog->findChild<QObject*>("desktopPetReminderTime")->setProperty("text",future.toString("HH:mm"));
+    panel->setProperty("daily",true);
+    if(!review.isEmpty()){QTest::qWait(100);QVERIFY(dialog->grabWindow().save(review+"/reminder-edit-completed.png"));}
+    QMetaObject::invokeMethod(save,"clicked");QTRY_VERIFY(!get(ids[0])["completed"].toBool());QVERIFY(!panel->property("completedFilter").toBool());
+    QCOMPARE(get(ids[0])["repeat"].toString(),QString("daily"));QVERIFY(QDateTime::fromString(get(ids[0])["dueAt"].toString(),Qt::ISODate)>QDateTime::currentDateTimeUtc());
+    QTRY_VERIFY(lookup("desktopPetReminderComplete_"+ids[0]));auto check=lookup("desktopPetReminderComplete_"+ids[0]);
+    QTest::mouseClick(dialog,Qt::LeftButton,Qt::NoModifier,check->mapToScene(check->boundingRect().center()).toPoint());QTRY_VERIFY(get(ids[0])["completed"].toBool());
+    QTRY_COMPARE(rows().size(),2);dialog->close();pet->openReminders("",false);QTRY_VERIFY(dialog->isVisible());QTRY_COMPARE(rows().size(),1);
+    panel->setProperty("completedFilter",true);QTRY_COMPARE(rows().size(),2);panel->setProperty("completedFilter",false);QTRY_COMPARE(rows().size(),1);
+  }
+  void petAssistantSelfTimersAndManagerAcceptance() {
+    configureAPI();backend->newSession();window->setProperty("page","chat");
+    auto manager=backend->desktopExtensions;auto bus=manager->globalAgents();
+    const auto requestIds=[&] {QSet<QString> result;for(auto row:bus->requests)result.insert(row.toMap()["id"].toString());return result;};
+    const auto previousRequests=requestIds();
+    auto pet=qobject_cast<DesktopPet*>(manager->pet());auto helper=pet->helper();
+    const auto original=pet->config();QString task;
+    const auto restore=qScopeGuard([&]{
+      petTool=false;
+      if(!task.isEmpty())backend->umekoRequest({{"operation","widgets.call"},{"arguments",QVariantMap{{"id","scheduled-tasks"},{"method","delete"},{"arguments",QVariantMap{{"task_id",task}}}}}},bus->records.value(helper->identifier)->key,false);
+      if(auto w=window->findChild<QQuickWindow*>("desktopPetReminderWindow"))w->close();
+      pet->ui("configure",original);
+    });
+    manager->setEnabled("global-agents",true);manager->setEnabled("scheduled-tasks",true);
+    pet->ui("configure",{{"visible",true},{"alwaysOnTop",true}});helper->reconcile();
+    auto assistant=bus->ensure(helper->identifier);const auto foreground=backend->view;
+    const auto call=[&](QString method,QVariantMap args) {
+      const auto accepted=backend->umekoRequest({{"operation","widgets.call"},{"arguments",QVariantMap{{"id","scheduled-tasks"},{"method",method},{"arguments",args}}}},assistant->key,false);
+      if(!accepted["ok"].toBool())return accepted;
+      QVariantMap result;QElapsedTimer elapsed;elapsed.start();
+      while(elapsed.elapsed()<10000) {
+        result=backend->umekoRequest({{"operation","widgets.result"},{"arguments",QVariantMap{{"requestId",accepted["requestId"]}}}},assistant->key,false);
+        if(result["status"]!="running")return result["result"].toMap();
+        QTest::qWait(20);
+      }
+      return QVariantMap{{"ok",false},{"error","Pet timer call timed out"}};
+    };
+    QVERIFY(backend->umekoRequest({{"operation","widgets.docs"},{"arguments",QVariantMap{{"id","scheduled-tasks"}}}},assistant->key,false)["ok"].toBool());
+    QVERIFY(!backend->umekoRequest({{"operation","widgets.call"},{"arguments",QVariantMap{{"id","desktop-pet"},{"method","hide"}}}},assistant->key,false)["ok"].toBool());
+    const QVariantMap schedule{{"frequency","once"},{"delay_value",0.25},{"delay_unit","minutes"}};
+    const auto created=call("create",{{"name","小助手自用计时器"},{"message","计时到期，简短告诉用户。"},{"schedule",schedule}});
+    QVERIFY2(created["ok"].toBool(),qPrintable(created["error"].toString()));
+    task=created["result"].toMap()["task_id"].toString();QVERIFY(!task.isEmpty());
+    const auto listed=call("list",{});QVERIFY(listed["ok"].toBool());
+    const auto tasks=listed["result"].toMap()["tasks"].toList();QCOMPARE(tasks.size(),1);
+    QCOMPARE(tasks.first().toMap()["target"].toString(),"agent:"+helper->identifier);
+    QCOMPARE(tasks.first().toMap()["owner"].toString(),"agent:"+helper->identifier);
+    QVERIFY(!call("create",{{"name","错误目标"},{"message","不要发给前台"},{"target","main"},{"schedule",schedule}})["ok"].toBool());
+    QSignalSpy speech(pet,&DesktopPet::assistantSpeech);petTool=true;
+    QTRY_VERIFY_WITH_TIMEOUT(!speech.isEmpty()&&!speech.last()[0].toString().isEmpty(),25000);
+    QTRY_VERIFY_WITH_TIMEOUT(!assistant->busy(),15000);
+    QCOMPARE(backend->view,foreground);QCOMPARE(requestIds(),previousRequests);
+    const auto history=call("history",{{"task_id",task}});QVERIFY(history["ok"].toBool());
+    const auto runs=history["result"].toMap()["runs"].toList();QCOMPARE(runs.size(),1);
+    QTRY_VERIFY_WITH_TIMEOUT(call("history",{{"task_id",task}})["result"].toMap()["runs"].toList().first().toMap()["state"]=="delivered",10000);
+    QVERIFY(manager->openPage("scheduled-tasks"));QTRY_VERIFY_WITH_TIMEOUT(find("scheduledTasksWidget"),10000);
+    QTRY_VERIFY_WITH_TIMEOUT(find("scheduledTaskGlobal_"+task),10000);
+    manager->closePage();
+    QVERIFY(manager->openPage("global-agents"));QTRY_VERIFY_WITH_TIMEOUT(find("globalAgentsPage"),10000);
+    manager->closePage();
+    pet->openReminders("",false);
+    QTRY_VERIFY(window->findChild<QQuickWindow*>("desktopPetReminderWindow"));
+    auto dialog=window->findChild<QQuickWindow*>("desktopPetReminderWindow");QTRY_VERIFY(dialog->isVisible());
+    QCOMPARE(window->property("page").toString(),QString("chat"));
+    auto panel=dialog->findChild<QQuickItem*>("desktopPetReminderManagerContent");QVERIFY(panel);
+    auto title=dialog->findChild<QQuickItem*>("desktopPetReminderTitle");QVERIFY(title);
+    pet->openReminders("",true);QTRY_VERIFY(panel->property("editing").toBool());
+    title->setProperty("text","喝水与休息");
+    auto notes=dialog->findChild<QQuickItem*>("desktopPetReminderNotes");QVERIFY(notes);notes->setProperty("text","提醒和待办现在在这里管理。");
+    const auto review=qEnvironmentVariable("UMEKO_PET_MANAGER_REVIEW_DIR");
+    if(!review.isEmpty()) {
+      QVERIFY(QDir().mkpath(review));
+      auto sample1=pet->ui("createItem",{{"title","每天整理工作笔记"},{"dueAt",QDateTime::currentDateTimeUtc().addSecs(3600).toString(Qt::ISODate)},{"repeat","daily"},{"timeZone","UTC"}});
+      auto sample2=pet->ui("createItem",{{"title","读完书桌上的那本书"}});
+      auto sample3=pet->ui("createItem",{{"title","周末给家里打个电话"},{"dueAt",QDateTime::currentDateTimeUtc().addDays(2).toString(Qt::ISODate)}});
+      QVERIFY(sample1["ok"].toBool()&&sample2["ok"].toBool()&&sample3["ok"].toBool());
+      auto timed=dialog->findChild<QObject*>("desktopPetReminderTimed");QVERIFY(timed);timed->setProperty("checked",true);
+      panel->setProperty("daily",true);
+      QTest::qWait(150);QVERIFY(dialog->grabWindow().save(review+"/reminder-editor.png"));
+      auto timeButton=dialog->findChild<QObject*>("desktopPetReminderTimeButton");QVERIFY(timeButton);QMetaObject::invokeMethod(timeButton,"clicked");QTest::qWait(150);
+      QVERIFY(dialog->grabWindow().save(review+"/reminder-time-picker.png"));
+      auto picker=dialog->findChild<QObject*>("reminderDateTimePicker");QVERIFY(picker);QMetaObject::invokeMethod(picker,"close");
+      panel->setProperty("editing",false);QTest::qWait(150);
+      auto unread=pet->ui("createItem",{{"title","喝水时间到了"},{"dueAt",QDateTime::currentDateTimeUtc().addSecs(-1).toString(Qt::ISODate)}});QVERIFY(unread["ok"].toBool());
+      QTest::qWait(150);QVERIFY(dialog->grabWindow().save(review+"/reminder-manager.png"));
+      for(const auto &title:QStringList{"已整理桌面","已备份工作笔记"}) {const auto item=pet->ui("createItem",{{"title",title}})["result"].toMap()["item"].toMap();QVERIFY(pet->ui("completeItem",{{"id",item["id"]}})["ok"].toBool());}
+      panel->setProperty("completedFilter",true);QTest::qWait(150);QVERIFY(dialog->grabWindow().save(review+"/reminder-completed.png"));panel->setProperty("completedFilter",false);
+      QTest::qWait(100);QVERIFY(window->grabWindow().save(review+"/main-window.png"));
+      auto petWindow=window->findChild<QQuickWindow*>("desktopPetWindow");QVERIFY(petWindow);QVERIFY(petWindow->grabWindow().save(review+"/reminder-unread-pet.png"));
+      QVERIFY(U::writeJson(review+"/ready.json",QVariantMap{{"profile",directory.path()},{"sourceRoot",root},{"pid",QCoreApplication::applicationPid()},{"helperId",helper->identifier},{"upstreamPort",upstream.serverPort()},{"runtimeMatchesSource",true}}));
+      waitForAcceptance(review+"/stop");
+    }
   }
   void nativePetReminderWidgetAndBubble() {
     auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);
@@ -5890,9 +6532,17 @@ def create_provider(context): return Interactive(context)
     const auto revision=pet->reminderCard().first().toMap()["revision"].toInt();
     pet->completeReminder(id,revision-1);QCOMPARE(pet->reminderCard().size(),1); // Stale UI cannot complete a revised item.
     pet->openReminders(id,false);
-    QTRY_VERIFY_WITH_TIMEOUT(find("desktopPetReminderTitle"),5000);
-    QTRY_COMPARE_WITH_TIMEOUT(find("desktopPetReminderTitle")->property("text").toString(),QString("离线提醒验收"),5000);
-    QTRY_VERIFY_WITH_TIMEOUT(find("desktopPetReminderList"),5000);
+    QTRY_VERIFY_WITH_TIMEOUT(window->findChild<QQuickWindow*>("desktopPetReminderWindow"),5000);
+    auto managerWindow=window->findChild<QQuickWindow*>("desktopPetReminderWindow");
+    QTRY_VERIFY(managerWindow->isVisible());
+    QCOMPARE(window->property("page").toString(),QString("chat"));
+    auto title=managerWindow->findChild<QQuickItem*>("desktopPetReminderTitle");QVERIFY(title);
+    QVERIFY(!managerWindow->findChild<QQuickItem*>("desktopPetReminderManagerContent")->property("editing").toBool());
+    QVERIFY(managerWindow->findChild<QQuickItem*>("desktopPetReminderList"));
+    managerWindow->close();
+    pet->openReminders("",true);QTRY_VERIFY(managerWindow->isVisible());
+    QTRY_COMPARE(title->property("text").toString(),QString());
+    managerWindow->close();
     QDir().mkpath(root+"/build/screenshots");QVERIFY(window->grabWindow().save(root+"/build/screenshots/native-pet-reminders.png"));
     pet->completeReminder(id,revision);QTRY_VERIFY(pet->reminderCard().isEmpty());
     QCOMPARE(pet->ui("listItems",{{"status","completed"}})["result"].toMap()["items"].toList().size(),1);
@@ -5977,11 +6627,13 @@ def create_provider(context): return Interactive(context)
     QTRY_VERIFY(!window->findChild<QObject*>("desktopPetWindowLoader")->property("item").value<QObject*>());
   }
   void whalePetDialogueUsesActualTaskOutcomes() {
-    auto pet=qobject_cast<DesktopPet*>(backend->desktopExtensions->pet());QVERIFY(pet);
-    const auto original=pet->config();
+    // Prior playback cases deliberately force visual states; their retained
+    // completion window must not count as this fixture's task outcome.
+    QTemporaryDir profile;QVERIFY(profile.isValid());Backend local(root,profile.path());
+    local.desktopExtensions->setEnabled("desktop-pet",true);
+    auto pet=qobject_cast<DesktopPet*>(local.desktopExtensions->pet());QVERIFY(pet);
     auto task=std::make_shared<Session>();task->id="whale-dialogue-fixture";
-    backend->records[task->key]=task;
-    const auto restore=qScopeGuard([&]{backend->records.remove(task->key);pet->ui("configure",original);pet->sample();});
+    local.records[task->key]=task;
     QVERIFY(pet->ui("configure",{{"appearance","whale-girl"}})["ok"].toBool());
     const auto dialogue=U::readJson(root+"/umeko-plugins/desktop-pet/assets/whale-girl/pet.json").toMap()["dialogue"].toMap();
     QSet<QString> lines;for(auto group:dialogue)for(auto line:group.toList())lines.insert(line.toString());

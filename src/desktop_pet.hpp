@@ -7,6 +7,7 @@ struct Session;
 class DesktopPet : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantMap config READ config NOTIFY changed)
+  Q_PROPERTY(QVariantMap assistantStatus READ assistantStatus NOTIFY changed)
   Q_PROPERTY(bool visible READ visible NOTIFY changed)
   Q_PROPERTY(QVariantList appearances READ appearances NOTIFY changed)
   Q_PROPERTY(QVariantMap state READ state NOTIFY changed)
@@ -17,6 +18,9 @@ public:
   void attachAssistant();
   PetAssistant *helper() const { return assistant; }
   QVariantMap config() const { return options; }
+  QVariantMap assistantStatus() const;
+  Q_INVOKABLE QVariantMap sendTask(QString text, QString identifier);
+  Q_INVOKABLE int speechDuration(QString text) const;
   bool visible() const {
     return running && options["visible"].toBool() && !closed;
   }
@@ -45,6 +49,7 @@ signals:
   void assistantSpeech(QString text);
   void restoreRequested();
   void settingsRequested();
+  void remindersRequested();
   void resetPositionRequested();
   void imported(QString token, QVariantMap result);
 

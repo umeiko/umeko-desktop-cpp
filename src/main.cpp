@@ -44,7 +44,8 @@ int main(int argc, char **argv) {
   for (int i = 1; i + 1 < argc; ++i)
     if (QString::fromLocal8Bit(argv[i]) == "--resource-root") earlyRoot = QString::fromLocal8Bit(argv[i + 1]);
   configureWebView(U::cleanPath(earlyRoot));
-  QQuickStyle::setStyle("Basic");
+  QQuickStyle::setStyle("UmekoStyle");
+  QQuickStyle::setFallbackStyle("Basic");
   QApplication app(argc, argv);
   InputMethodUpdates inputUpdates(&app);
   app.setApplicationName("Umeko-Desktop");
@@ -86,6 +87,7 @@ int main(int argc, char **argv) {
   if (parser.isSet("install-update")) {
     UpdateInstaller installer(parser.value("install-update"), root);
     QQmlApplicationEngine engine;
+    engine.addImportPath(root + "/app/qml");
     engine.rootContext()->setContextProperty("installer", &installer);
     engine.load(QUrl("qrc:/qt/qml/Umeko/App/app/qml/Installer.qml"));
     if (engine.rootObjects().isEmpty()) return 1;
@@ -114,6 +116,7 @@ int main(int argc, char **argv) {
     if(!launched)emit backend.toast(backend.language()=="en" ? "Could not start the selected application" : "无法启动所选应用");
   });
   QQmlApplicationEngine engine;
+  engine.addImportPath(root + "/app/qml");
   const auto browserImports = webviewConfiguration()["qmlPath"].toString();
   if (!browserImports.isEmpty()) engine.addImportPath(browserImports);
   engine.rootContext()->setContextProperty("backend", &backend);

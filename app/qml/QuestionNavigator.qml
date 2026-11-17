@@ -7,7 +7,9 @@ Item {
     property var view
     property var messageModel: backend.messageModel
     property var questions: root.messageModel.questions
+    property int selectedQuestion: -1
     property int activeQuestion: -1
+    property int previewQuestion: -1
     property real openY: height / 2
     readonly property bool expanded: panel.visible
     readonly property int rowHeight: Math.max(30, Theme.font(12, visible) + 16)
@@ -16,6 +18,10 @@ Item {
 
     function updateActive() {
         if (!view || !questions.length) { activeQuestion = -1; return }
+        // Keep an explicit selection through asynchronous layout and end clamping.
+        // A new browsing action releases it; layout corrections do not.
+        if (selectedQuestion >= 0 && selectedQuestion < questions.length) { activeQuestion = selectedQuestion; return }
+        if (view.restoring) return
         let row = view.atYEnd ? view.count - 1 : view.indexAt(1, view.contentY + 1)
         if (row < 0) row = view.indexAt(1, view.contentY + view.spacing + 2)
         if (row < 0) row = view.indexAt(1, view.contentY + view.height / 2)
@@ -28,29 +34,51 @@ Item {
         }
         activeQuestion = low
     }
-    function reveal(y) {
+    function previewIndexAt(y) {
+        // Map the visible tick span, rather than the entire chat edge.
+        const railY = rail.mapFromItem(root, 0, y).y
+        const ratio = Math.max(0, Math.min(1, (railY - 1) / Math.max(1, rail.height - 2)))
+        return Math.round(ratio * (questions.length - 1))
+    }
+    function positionPreview() {
+        if (!expanded || previewQuestion < 0 || !questions.length) return
+        questionList.positionViewAtIndex(Math.min(previewQuestion, questions.length - 1), ListView.Center)
+    }
+    function reveal(y, index) {
         if (!enabled || !visible || !questions.length) return
+        // An outstanding hover must not undo an explicit rail selection.
+        openTimer.stop()
         closeTimer.stop()
         openY = y
         updateActive()
+        previewQuestion = typeof index === "number" ? index : Math.max(0, activeQuestion)
         panel.open()
-        Qt.callLater(function() { questionList.positionViewAtIndex(Math.max(0, root.activeQuestion), ListView.Center) })
+        // Coalesce rapid clicks and wait for the popup's list geometry.
+        Qt.callLater(positionPreview)
     }
     function scheduleClose() {
         if (edgeHover.hovered || panelHover.hovered) closeTimer.stop()
         else closeTimer.restart()
     }
-    function dismiss() { openTimer.stop(); closeTimer.stop(); panel.close() }
+    function dismiss() { openTimer.stop(); closeTimer.stop(); previewQuestion = -1; panel.close() }
     function jump(index) {
-        if (index < 0 || index >= questions.length) return
-        activeQuestion = index
+        if (!view || index < 0 || index >= questions.length) return
         view.jumpToMessage(questions[index].row)
+        selectedQuestion = index
+        activeQuestion = index
     }
+    function navigateAt(y) {
+        if (!enabled || !visible || !questions.length) return
+        const index = previewIndexAt(y)
+        reveal(y, index)
+        jump(index)
+    }
+    onViewChanged: { selectedQuestion = -1; dismiss() }
     onEnabledChanged: if (!enabled) dismiss()
-    onVisibleChanged: if (!visible) dismiss()
+    onVisibleChanged: if (!visible) { selectedQuestion = -1; dismiss() }
     onQuestionsChanged: { if (!questions.length) dismiss(); else if (expanded) updateActive() }
 
-    TapHandler { onTapped: root.reveal(point.position.y) }
+    TapHandler { onTapped: root.navigateAt(point.position.y) }
     HoverHandler {
         id: edgeHover
         cursorShape: Qt.PointingHandCursor
@@ -63,10 +91,12 @@ Item {
     Timer { id: closeTimer; interval: 180; onTriggered: if (!edgeHover.hovered && !panelHover.hovered) panel.close() }
     Timer { id: activeTimer; interval: 60; onTriggered: root.updateActive() }
     Connections {
-        target: root.view
+        target: root.view && root.view.visible ? root.view : null
+        function onBrowsingStarted() { root.selectedQuestion = -1 }
+        function onRestoringChanged() { if (!root.view.restoring) root.updateActive() }
         function onContentYChanged() { if (root.expanded && !activeTimer.running) activeTimer.start() }
     }
-    Connections { target: backend; function onViewChanged() { root.dismiss() } }
+    Connections { target: backend; function onViewChanged() { root.selectedQuestion = -1; root.dismiss() } }
 
     Item {
         id: rail
@@ -85,6 +115,7 @@ Item {
             }
         }
         Rectangle {
+            objectName: "questionNavigatorIndicator"
             width: 11; height: 3; radius: 1.5; color: Theme.accent
             y: Math.max(0, root.activeQuestion) * (rail.height - height) / Math.max(1, root.questions.length - 1)
         }
@@ -124,11 +155,12 @@ Item {
                 objectName: "questionNavigationItem_" + index
                 width: questionList.width; height: root.rowHeight
                 focusPolicy: Qt.NoFocus; hoverEnabled: true
+                highlighted: index === root.activeQuestion
                 Accessible.name: modelData.title
                 onClicked: root.jump(index)
                 background: Rectangle {
                     radius: 5
-                    color: option.index === root.activeQuestion ? Theme.accentBg : option.hovered ? Theme.hover : "transparent"
+                    color: option.highlighted ? Theme.accentBg : option.hovered ? Theme.hover : "transparent"
                 }
                 contentItem: Row {
                     id: questionLine

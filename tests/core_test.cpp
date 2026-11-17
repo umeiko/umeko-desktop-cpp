@@ -170,6 +170,77 @@ private slots:
     auto todo=restored.handle("createItem",{{"title","without time"}})["item"].toMap();
     QVERIFY_EXCEPTION_THROWN(restored.handle("updateItem",{{"id",todo["id"]},{"clearDueAt",false}}),std::runtime_error);
   }
+  void nativeReminderCompletionCanBeReversedQuietly() {
+    QTemporaryDir temp;
+    for(const auto &repeat:QStringList{"once","daily"}) {
+      auto now=QDateTime::fromString("2026-11-02T08:00:00Z",Qt::ISODate);const auto folder=temp.filePath(repeat);
+      PetReminders service(folder,nullptr,[&]{return now;});service.visible=[] {return true;};QSignalSpy due(&service,&PetReminders::due);service.start();
+      QVariantMap args{{"title","可取消完成"},{"dueAt",now.addSecs(60).toString(Qt::ISODate)},{"repeat",repeat}};if(repeat=="daily")args["timeZone"]="UTC";
+      const auto item=service.handle("createItem",args)["item"].toMap();const auto id=item["id"];
+      service.handle("completeItem",{{"id",id}});now=now.addSecs(120);
+      const auto restored=service.handle("completeItem",{{"id",id},{"completed",false}})["item"].toMap();
+      QVERIFY(!restored["completed"].toBool());QCOMPARE(due.size(),0);QVERIFY(service.unreadAlerts().isEmpty()&&service.pendingNotifications().isEmpty());
+      QCOMPARE(restored["notificationOutcome"].toString(),QString("restored_overdue"));
+      if(repeat=="once"){QVERIFY(restored["overdue"].toBool());QCOMPARE(restored["dueAt"],item["dueAt"]);}
+      else {QVERIFY(QDateTime::fromString(restored["dueAt"].toString(),Qt::ISODate)>now);QCOMPARE(restored["occurrence"].toInt(),2);}
+      QCOMPARE(service.handle("completeItem",{{"id",id},{"completed",false}})["item"].toMap()["revision"],restored["revision"]);
+      QVERIFY_EXCEPTION_THROWN(service.handle("completeItem",{{"id",id},{"completed","false"}}),std::runtime_error);
+      service.stop();PetReminders reloaded(folder,nullptr,[&]{return now;});QSignalSpy replay(&reloaded,&PetReminders::due);reloaded.start();QCOMPARE(replay.size(),0);
+      QVERIFY(!reloaded.handle("getItem",{{"id",id}})["item"].toMap()["completed"].toBool());
+    }
+    auto now=QDateTime::fromString("2026-11-02T08:00:00Z",Qt::ISODate);PetReminders service(temp.filePath("future"),nullptr,[&]{return now;});
+    service.visible=[] {return true;};QSignalSpy due(&service,&PetReminders::due);service.start();
+    const auto item=service.handle("createItem",{{"title","恢复未来计划"},{"dueAt",now.addSecs(120).toString(Qt::ISODate)}})["item"].toMap();const auto id=item["id"];
+    service.handle("completeItem",{{"id",id}});now=now.addSecs(60);
+    auto restored=service.handle("completeItem",{{"id",id},{"completed",false}})["item"].toMap();QCOMPARE(restored["occurrence"],item["occurrence"]);
+    now=now.addSecs(60);service.check();QCOMPARE(due.size(),1);const auto processed=service.handle("getItem",{{"id",id}})["item"].toMap();
+    service.handle("completeItem",{{"id",id}});restored=service.handle("completeItem",{{"id",id},{"completed",false}})["item"].toMap();
+    QCOMPARE(restored["processedAt"],processed["processedAt"]);QCOMPARE(due.size(),1);
+  }
+  void nativeCompletedRemindersCanBeEditedAndRescheduled() {
+    QTemporaryDir temp;
+    for(const auto &repeat:QStringList{"once","daily"}) {
+      auto now=QDateTime::fromString("2026-11-02T08:00:00Z",Qt::ISODate);
+      const auto folder=temp.filePath(repeat);PetReminders service(folder,nullptr,[&]{return now;});
+      service.visible=[] {return true;};service.start();QSignalSpy due(&service,&PetReminders::due);
+      QVariantMap args{{"title","完成后编辑"},{"dueAt",now.addSecs(-1).toString(Qt::ISODate)},{"repeat",repeat}};
+      if(repeat=="daily")args["timeZone"]="UTC";
+      const auto item=service.handle("createItem",args)["item"].toMap();const auto id=item["id"];
+      service.handle("completeItem",{{"id",id}});
+      const auto edited=service.handle("updateItem",{{"id",id},{"title","改了标题"},{"notes","仍为完成"},{"dueAt",item["dueAt"]}})["item"].toMap();
+      QVERIFY(edited["completed"].toBool());QCOMPARE(edited["occurrence"],item["occurrence"]);QCOMPARE(due.size(),1);
+      const auto rearmed=service.handle("updateItem",{{"id",id},{"dueAt",now.addSecs(120).toString(Qt::ISODate)}})["item"].toMap();
+      QVERIFY(!rearmed["completed"].toBool());QVERIFY(rearmed["firedOccurrence"].isNull());QVERIFY(rearmed["processedAt"].isNull());
+      QCOMPARE(rearmed["occurrence"].toInt(),edited["occurrence"].toInt()+1);QCOMPARE(due.size(),1);
+      QVERIFY(service.pendingNotifications().isEmpty());QCOMPARE(service.unreadAlerts().size(),1);
+      service.stop();PetReminders restored(folder,nullptr,[&]{return now;});restored.visible=[] {return true;};
+      QSignalSpy replay(&restored,&PetReminders::due);restored.start();QCOMPARE(replay.size(),0);
+      QVERIFY(!restored.handle("getItem",{{"id",id}})["item"].toMap()["completed"].toBool());
+      now=now.addSecs(120);restored.check();QCOMPARE(replay.size(),1);restored.check();QCOMPARE(replay.size(),1);
+      QCOMPARE(restored.pendingNotifications().first().toMap()["occurrence"],rearmed["occurrence"]);
+      restored.handle("completeItem",{{"id",id}});
+      QVERIFY(restored.handle("updateItem",{{"id",id},{"clearDueAt",true}})["item"].toMap()["completed"].toBool());
+    }
+  }
+  void nativeDailyRemindersPersistUnreadAndAgentOutbox() {
+    QTemporaryDir temp;auto now=QDateTime::fromString("2026-03-07T13:00:00Z",Qt::ISODate);
+    PetReminders service(temp.path(),nullptr,[&]{return now;});service.visible=[] {return true;};service.assistant=[] {return QString(32,'a');};service.start();
+    const auto item=service.handle("createItem",{{"title","每日喝水"},{"dueAt","2026-03-07T09:00:00-05:00"},{"repeat","daily"},{"timeZone","America/New_York"}})["item"].toMap();
+    const auto id=item["id"].toString();now=now.addSecs(3600);service.check();
+    auto next=service.handle("getItem",{{"id",id}})["item"].toMap();
+    QCOMPARE(next["dueAt"].toString(),QString("2026-03-08T13:00:00Z"));QCOMPARE(next["localTime"].toString(),QString("09:00"));
+    QCOMPARE(service.unreadAlerts().size(),1);QCOMPARE(service.pendingNotifications().size(),1);
+    const auto event=service.pendingNotifications().first().toMap();QCOMPARE(event["agentId"].toString(),QString(32,'a'));
+    service.stop();PetReminders restored(temp.path(),nullptr,[&]{return now;});restored.start();
+    QCOMPARE(restored.unreadAlerts().size(),1);QCOMPARE(restored.pendingNotifications().first().toMap()["id"],event["id"]);
+    restored.acknowledgeNotifications({event["id"].toString()});QCOMPARE(restored.unreadAlerts().size(),1);
+    restored.markViewed(id);QVERIFY(restored.unreadAlerts().isEmpty());
+    now=now.addSecs(23*3600);restored.check();QCOMPARE(restored.unreadAlerts().size(),1);QCOMPARE(restored.pendingNotifications().first().toMap()["occurrence"].toInt(),2);
+    restored.handle("completeItem",{{"id",id}});QCOMPARE(restored.unreadAlerts().size(),1);restored.markViewed(id);
+    QVERIFY(restored.unreadAlerts().isEmpty());QVERIFY(restored.summary()["nextDueAt"].isNull());
+    QCOMPARE(restored.resolveLocalTime({{"date","2026-03-08"},{"time","02:30"},{"timeZone","America/New_York"}})["candidates"].toList().size(),0);
+    QCOMPARE(restored.resolveLocalTime({{"date","2026-11-01"},{"time","01:30"},{"timeZone","America/New_York"}})["candidates"].toList().size(),2);
+  }
   void nativePetReminderSuppressionAndWriteFailure() {
     QTemporaryDir temp;auto now=QDateTime::fromString("2026-11-02T08:00:00Z",Qt::ISODate);bool show=false,enabled=true;
     PetReminders service(temp.filePath("ok"),nullptr,[&]{return now;});service.visible=[&]{return show;};service.notifications=[&]{return enabled;};service.start();

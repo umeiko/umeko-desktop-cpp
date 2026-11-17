@@ -17,7 +17,7 @@ public:
   void stop();
   void close();
   void forgetSessions(QSet<QString> identifiers,QStringList keys);
-  QVariantMap ui(QString method, QVariantMap args, bool agent = false);
+  QVariantMap ui(QString method, QVariantMap args, bool agent = false, bool inputFromPet = false);
   QVariantMap execute(QString operation, QVariantMap args, QString callerKey);
   void observe(QString key, QVariantMap event);
   QVariantMap runtimeConfig(std::shared_ptr<Session> record);
@@ -66,10 +66,11 @@ private:
   int creationIndex(QString id) const;
   void notifyCreation(QVariantMap row);
   QVariantMap snapshot(QString selected, bool includeMessages=true) const;
-  QVariantMap handle(QString method, QVariantMap args, bool agent);
+  QVariantMap handle(QString method, QVariantMap args, bool agent, bool inputFromPet = false);
   void finish(QString id, QString status, QString result);
   void enqueue(QString target, QVariantMap request, QString message, bool wake);
   int requestIndex(QString id) const;
   QVariantMap startSkillJob(QString method, QVariantMap args);
   QVariantList selectedSkills(QVariant value) const;
+  QVariantList selectedTools(QVariant value) const;
 };

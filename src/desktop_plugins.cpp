@@ -1,6 +1,7 @@
 #include "desktop_plugins.hpp"
 #include "backend.hpp"
 #include "desktop_pet.hpp"
+#include "pet_assistant.hpp"
 #include "global_agents.hpp"
 #include "widget_channel.hpp"
 #include "widget_host.hpp"
@@ -1102,6 +1103,7 @@ void DesktopPlugins::observe(QString key, QVariantMap value) {
   channel->observe(key, value);
   coordinators->observe(key, value);
   host->observe(key, value);
+  if(auto helper=companion->helper())helper->observeReminders(key,value);
 }
 
 void DesktopPlugins::reviewEvent(QString key, QVariantMap value) {

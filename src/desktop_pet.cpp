@@ -3,10 +3,12 @@
 #include "pet_assistant.hpp"
 #include "backend.hpp"
 #include "desktop_plugins.hpp"
+#include "global_agents.hpp"
 #include "miniz.h"
 #include <QFutureWatcher>
 #include <QImageReader>
 #include <QScreen>
+#include <QTimeZone>
 #include <QtConcurrent>
 #include <stdexcept>
 namespace {
@@ -306,6 +308,7 @@ DesktopPet::DesktopPet(DesktopPlugins *manager) : QObject(manager), m(manager) {
     options = defaults;
   }
   reminders=new PetReminders(directory,this);
+  reminders->assistant=[this]{return assistant ? assistant->reminderAgentId() : QString();};
   reminders->visible=[this]{return visible();};
   reminders->notifications=[this]{return options["reminderNotificationsEnabled"].toBool();};
   connect(reminders,&PetReminders::changed,this,&DesktopPet::syncReminders);
@@ -318,6 +321,23 @@ DesktopPet::DesktopPet(DesktopPlugins *manager) : QObject(manager), m(manager) {
 
 }
 void DesktopPet::attachAssistant() { if (!assistant) assistant = new PetAssistant(this, m); }
+int DesktopPet::speechDuration(QString text) const {
+  QTextBoundaryFinder finder(QTextBoundaryFinder::Grapheme,text);int graphemes=0;
+  while(finder.toNextBoundary()!=-1)++graphemes;
+  int latin=0,spaces=0,minor=0,major=0;
+  for(auto ch:text){const auto c=ch.unicode();latin+=(c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9');spaces+=ch.isSpace();minor+=QString(",，;；").contains(ch);major+=QString(".!?。！？").contains(ch);}
+  int words=0;auto matches=QRegularExpression("[A-Za-z0-9]+").globalMatch(text);while(matches.hasNext()){matches.next();++words;}
+  const int other=qMax(0,graphemes-latin-spaces-minor-major);
+  return qBound(1800,1000+latin*18+words*160+other*140+minor*180+major*300,14000);
+}
+QVariantMap DesktopPet::assistantStatus() const {return assistant?assistant->status():QVariantMap{};}
+QVariantMap DesktopPet::sendTask(QString text,QString identifier) {
+  const auto state=assistantStatus();
+  if(!state["bound"].toBool())return {{"ok",false},{"status","unavailable"},{"error","桌宠未绑定全局子智能体"}};
+  if(identifier!=state["id"].toString())return {{"ok",false},{"status","binding_changed"},{"error","桌宠绑定已变化，请重新打开输入框"}};
+  if(text.trimmed().isEmpty()||text.size()>16000)return {{"ok",false},{"status","invalid_text"},{"error","请输入 1–16000 字符的任务"}};
+  return m->globalAgents()->ui("send",{{"id",identifier},{"text",text.trimmed()}},false,true);
+}
 void DesktopPet::loadPacks() {
   packs.clear();
   QStringList folders;
@@ -385,12 +405,12 @@ QVariantList DesktopPet::reminderItems() const {
   try {return reminders->handle("listItems",{})["items"].toList();}catch(...){return {};}
 }
 void DesktopPet::syncReminders() {
-  const auto rows=reminderItems();QVariantList next;
-  for(const auto &old:card)for(const auto &row:rows)if(row.toMap()["id"]==old.toMap()["id"] && row.toMap()["revision"]==old.toMap()["revision"])next<<row;
+  const auto next=visible()&&options["reminderNotificationsEnabled"].toBool()?reminders->unreadAlerts():QVariantList{};
   if(card!=next){card=next;emit reminderCardChanged();}emit changed();
 }
 void DesktopPet::openReminders(QString id,bool create) {
-  selection={{"id",id},{"create",create},{"serial",selection["serial"].toInt()+1}};emit changed();emit settingsRequested();
+  if(!create)reminders->markViewed(id);
+  selection={{"id",id},{"create",create},{"serial",selection["serial"].toInt()+1}};emit changed();emit remindersRequested();
 }
 void DesktopPet::dismissReminders(){if(!card.isEmpty()){card.clear();emit reminderCardChanged();}}
 void DesktopPet::completeReminder(QString id,int revision) {
@@ -406,7 +426,8 @@ QVariantMap DesktopPet::status() const {
           {"state", state()},
           {"appearances", appearances()},
           {"visible", visible()},{"reminders",reminders ? reminders->summary() : QVariantMap{}},{"reminderSelection",selection},
-          {"now",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},{"localNow",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)}};
+          {"now",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},{"localNow",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},
+          {"timeZone",QString::fromUtf8(QTimeZone::systemTimeZoneId())}};
 }
 QVariantMap DesktopPet::configure(QVariantMap patch, bool persist) {
   auto value = options;
@@ -451,6 +472,7 @@ QVariantMap DesktopPet::configure(QVariantMap patch, bool persist) {
   }
   options = value;
   if(!options["visible"].toBool() || !options["reminderNotificationsEnabled"].toBool())dismissReminders();
+  syncReminders();
   timer.setInterval(value["sampleIntervalMs"].toInt());
   emit changed();
   emit m->changed();
@@ -596,6 +618,8 @@ QVariantMap DesktopPet::ui(QString method, QVariantMap args) {
   }
 }
 QVariantMap DesktopPet::handle(QString method, QVariantMap args) {
+  if(method=="resolveReminderTime")return reminders->resolveLocalTime(args);
+  if(method=="clearCompleted")return reminders->handle(method,args);
   auto spec = m->entry("desktop-pet")["agent"]
                   .toMap()["methods"]
                   .toMap()[method]

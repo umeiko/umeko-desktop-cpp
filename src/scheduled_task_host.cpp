@@ -1,6 +1,8 @@
 #include "widget_host.hpp"
 #include "backend.hpp"
 #include "global_agents.hpp"
+#include "desktop_pet.hpp"
+#include "pet_assistant.hpp"
 #include <QTimeZone>
 #include <stdexcept>
 
@@ -9,7 +11,7 @@ void require(bool valid, QString error) {
   if(!valid)throw std::runtime_error(error.toStdString());
 }
 QString identity(std::shared_ptr<Session> record) {
-  return record->id.isEmpty()?"draft:"+record->key:"session:"+record->id;
+  return !record->globalAgent.isEmpty()?"agent:"+record->globalAgent:record->id.isEmpty()?"draft:"+record->key:"session:"+record->id;
 }
 }
 
@@ -19,7 +21,13 @@ std::shared_ptr<Session> WidgetHost::timerRecord(QVariantMap source) {
   auto record=b->records.value(source["token"].toString());
   const auto id=source["id"].toString();
   if(!record&&!id.isEmpty())record=m->coordinators->record("session:"+id);
-  require(record && record->globalAgent.isEmpty() && record->workspace==source["workspace"].toString(),
+  const auto petId=source["timerAgentId"].toString();
+  if(!record&&!petId.isEmpty()) {
+    require(petId==m->coordinators->petAssistantId,"Pet timer binding changed");
+    record=m->coordinators->ensure(petId);
+  }
+  auto helper=qobject_cast<DesktopPet*>(m->pet())->helper();
+  require(record && (record->globalAgent.isEmpty() || helper->owns(record)) && record->workspace==source["workspace"].toString(),
           "原会话已不存在或工作目录已改变 / Original conversation is unavailable or changed");
   require(id.isEmpty()||record->id==id,"Conversation identity changed");
   return record;
@@ -28,11 +36,12 @@ std::shared_ptr<Session> WidgetHost::timerRecord(QVariantMap source) {
 QVariantMap WidgetHost::timerMetadata(std::shared_ptr<Session> record) const {
   QVariantList targets,globals;
   auto bus=m->coordinators;
-  if(record)targets<<QVariantMap{{"id","main"},{"name","主 Agent / Main Agent"}};
+  const bool petRecord=record&&!record->globalAgent.isEmpty();
+  if(record)targets<<QVariantMap{{"id",petRecord?"agent:"+record->globalAgent:"main"},{"name",petRecord?"悬浮小助手":"主 Agent / Main Agent"}};
   for(auto it=bus->agents.cbegin();it!=bus->agents.cend();++it) {
     const QVariantMap row{{"id","agent:"+it.key()},{"name",it.value().toMap()["name"]}};
     globals<<row;
-    if(record&&bus->active&&bus->allowed(record,"agent:"+it.key()))targets<<row;
+    if(record&&!petRecord&&bus->active&&bus->allowed(record,"agent:"+it.key()))targets<<row;
   }
   return {{"targets",targets},{"global_targets",globals},{"time_zone",QString::fromUtf8(QTimeZone::systemTimeZoneId())}};
 }
@@ -40,6 +49,9 @@ QVariantMap WidgetHost::timerMetadata(std::shared_ptr<Session> record) const {
 QVariantMap WidgetHost::captureTimerSession(QVariantMap source) {
   auto record=timerRecord(source);const auto info=timerMetadata(record);
   source["id"]=record->id;source["token"]=record->key;
+  if(!record->globalAgent.isEmpty()) {
+    source["timerAgentId"]=record->globalAgent;source["timerOwnerTarget"]="agent:"+record->globalAgent;
+  }
   source["timerTargets"]=info["targets"];source["timerGlobalTargets"]=info["global_targets"];
   source["timerTimeZone"]=info["time_zone"];
   return source;
@@ -95,10 +107,11 @@ void WidgetHost::scheduledTasks(Task request) {
       require(old!=timerJobOrder.cend(),"Timer delivery queue is full");const auto key=*old;timerJobOrder.removeAll(key);timerJobs.remove(key);
     }
     TimerJob job;job.record=caller;job.targetRecord=caller;job.owner=identity(caller);job.target=target;job.text=text;
-    if(target=="main") {
+    if(target=="main"||!caller->globalAgent.isEmpty()) {
       require(caller->backend!="dsh","定时触发暂仅支持 Pi 会话 / Timer delivery currently requires Pi");
       int busy=0;for(auto record:b->records)if(record->busy()&&record->globalAgent.isEmpty())++busy;
-      require(caller->busy()||busy<8,"原生会话并发已满 / Native session capacity is full");
+      int globalsBusy=0;for(auto record:m->coordinators->records)if(record->busy())++globalsBusy;
+      require(caller->busy()||(caller->globalAgent.isEmpty()?busy<8:globalsBusy<4),"原生会话并发已满 / Native session capacity is full");
       const QVariantMap notification{{"id",id},{"requestId",""},{"widgetId","scheduled-tasks"},{"name","定时任务 / Scheduled Tasks"},
           {"message",text},{"wake",true},{"data",QVariantMap{{"timerRunId",id}}}};
       if(caller->busy()&&caller->process&&caller->ready)b->writePi(caller,{{"type","widget-notify"},{"notification",notification}});
@@ -109,12 +122,14 @@ void WidgetHost::scheduledTasks(Task request) {
       if(auto record=m->coordinators->records.value(target.mid(6)))job.targetRecord=record;
     }
     timerJobs[id]=job;timerJobOrder<<id;
-    reply(request,{{"ok",true},{"result",QVariantMap{{"state","queued"},{"source",QVariantMap{{"token",caller->key},{"id",caller->id},{"workspace",caller->workspace}}}}}});return;
+    auto source=QVariantMap{{"token",caller->key},{"id",caller->id},{"workspace",caller->workspace}};
+    if(!caller->globalAgent.isEmpty())source["timerAgentId"]=caller->globalAgent;
+    reply(request,{{"ok",true},{"result",QVariantMap{{"state","queued"},{"source",source}}}});return;
   }
   if(operation=="scheduledTasks.openTarget"&&args.keys()==QStringList{"target"}) {
     require(request->page&&m->m_page=="scheduled-tasks","Open targets from the timer page");
     const auto target=args["target"].toString();require(connected(target),"Target is no longer connected");
-    if(target=="main") {if(!caller->id.isEmpty())b->openSession(caller->id);else m->closePage();}
+    if(target=="main"||!caller->globalAgent.isEmpty()) {if(!caller->id.isEmpty())b->openSession(caller->id);else m->closePage();}
     else {m->openPage("global-agents");m->coordinators->selectConversation(target.mid(6));}
     reply(request,{{"ok",true},{"result",QVariantMap{}}});return;
   }
