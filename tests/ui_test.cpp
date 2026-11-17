@@ -1663,7 +1663,7 @@ private slots:
     QCOMPARE(QString::fromUtf8(file.readAll()),expected); file.close();
     QCOMPARE(original->draft,QString("existing draft question"));
     QCOMPARE(find("promptInput")->property("text").toString(),original->draft);
-    QCOMPARE(backend->attachments().first().toMap()["path"].toString(),existing);
+    QCOMPARE(backend->attachments().first().toMap()["path"].toString(),QFileInfo(existing).canonicalFilePath());
     QCOMPARE(QGuiApplication::clipboard()->text(),QString("clipboard stays intact"));
     QCOMPARE(backend->messages().size(),1);
     QVERIFY(U::attachmentPrompt("follow up",backend->attachments()).contains(path));
