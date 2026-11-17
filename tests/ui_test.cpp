@@ -1629,6 +1629,7 @@ private slots:
     });
     const auto project = directory.filePath("selection-project");
     QVERIFY(QDir().mkpath(project));
+    const auto attachmentDirectory = QDir(project).canonicalPath() + "/.umeko";
     backend->setWorkspace(QUrl::fromLocalFile(project).toString());
     const auto original = backend->view;
     const QString text = "中文𠮷 selected words\n\n```python\nprint(\"preserved\")\n```\n\nLast paragraph.";
@@ -1656,7 +1657,7 @@ private slots:
     QCOMPARE(item["kind"].toString(),QString("file"));
     QCOMPARE(item["name"].toString(),QString("中文𠮷 selected words p.md"));
     const auto path = item["path"].toString();
-    QCOMPARE(QFileInfo(path).absolutePath(),project+"/.umeko");
+    QCOMPARE(QFileInfo(path).absolutePath(),attachmentDirectory);
     QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly));
     const auto expected = QString("中文𠮷 selected words\n\nprint(\"preserved\")\n\nLast ");
     QCOMPARE(QString::fromUtf8(file.readAll()),expected); file.close();
