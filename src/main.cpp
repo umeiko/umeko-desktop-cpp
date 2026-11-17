@@ -136,14 +136,16 @@ int main(int argc, char **argv) {
                      for (auto error : errors)
                        diagnostic(error.toString());
                    });
-  engine.load(QUrl("qrc:/qt/qml/Umeko/App/app/qml/Main.qml"));
+  // Main and Widgets share the installed QML/artwork tree. The detached update
+  // installer above retains its embedded shell for recovery.
+  engine.load(QUrl::fromLocalFile(root + "/app/qml/Main.qml"));
   if (engine.rootObjects().isEmpty()) {
     diagnostic("QML_FAILED");
     return 1;
   }
   auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
   window->setTitle(app.applicationDisplayName());
-  const QIcon trayIcon(":/qt/qml/Umeko/App/app/icons/yanami-pixel.webp");
+  const QIcon trayIcon(root + "/app/icons/yanami-pixel.webp");
   TrayController tray(window, trayIcon);
   TaskNotifications notifications(window, tray.systemTray());
   notifications.setLanguage(backend.language());
@@ -152,7 +154,7 @@ int main(int argc, char **argv) {
   QObject::connect(&notifications, &TaskNotifications::activated, &backend, [&](const QString &session) {
     window->setProperty("page", "chat"); backend.openSession(session); tray.restore();
   });
-  const auto refreshTray=[&] {tray.systemTray()->setIcon(backend.characterStyle()["id"]=="system" ? QIcon(":/qt/qml/Umeko/App/app/icons/characters/system/robot.png") : trayIcon);};
+  const auto refreshTray=[&] {tray.systemTray()->setIcon(backend.characterStyle()["id"]=="system" ? QIcon(root + "/app/icons/characters/system/robot.png") : trayIcon);};
   QObject::connect(&backend,&Backend::changed,&app,refreshTray);refreshTray();
   tray.setLanguage(backend.language());
   QObject::connect(&backend, &Backend::appearanceChanged, &tray, [&] {tray.setLanguage(backend.language());});
@@ -173,7 +175,7 @@ int main(int argc, char **argv) {
   if (!parser.isSet("smoke"))
     qobject_cast<AppAbout *>(backend.appAbout())->startAutomaticChecks();
   if (parser.isSet("smoke")) {
-    // Validate the installed filesystem imports as well as the main QRC. A
+    // Validate the installed filesystem imports as well as the main window. A
     // source-tree UI test cannot catch a missing public app/qml directory.
     const QDir widgets(root + "/umeko-plugins");
     for (const auto &id : widgets.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
@@ -194,9 +196,9 @@ int main(int argc, char **argv) {
       }
       diagnostic("WIDGET_QML_READY:" + id);
     }
-    // Exercise the packaged QRC, which file-based QML tests cannot validate.
+    // Check installed artwork; embedded copies must not mask missing files.
     for(const auto &path:{QString("app/qml/skill.svg"),QString("app/icons/pi-widget.svg"),QString("app/icons/widget-manager.svg"),QString("app/icons/yanami-desktop-settings-v2.png")}) {
-      if(QIcon(":/qt/qml/Umeko/App/"+path).pixmap(24,24).isNull()){diagnostic("UI_ART_MISSING:"+path);backend.close();return 1;}
+      if(QIcon(root+"/"+path).pixmap(24,24).isNull()){diagnostic("UI_ART_MISSING:"+path);backend.close();return 1;}
     }
     diagnostic("UI_ART_READY:4");
 #ifdef Q_OS_LINUX

@@ -6,6 +6,8 @@ from bundle_python import install_python
 from bundle_node import install_node, node_binary
 from macos_dmg import create_dmg
 from terminal_smoke import verify_terminal_worker
+from package_payload import optimize_payload
+from package_size import write_report, markdown
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -15,7 +17,7 @@ def run(*args, **kw):
 def copy(source, target):
     if source.is_dir():
         shutil.copytree(source, target, dirs_exist_ok=True, symlinks=True,
-                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '*.map', '.DS_Store'))
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '.DS_Store'))
     else:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
@@ -96,6 +98,8 @@ def main():
     if sys.platform!='darwin':
         plugin='qoffscreen.dll' if os.name=='nt' else 'libqoffscreen.so'
         copy(Path(qt_root)/'plugins/platforms'/plugin,prefix/'plugins/platforms'/plugin)
+    payload_report = optimize_payload(resources)
+    (ROOT/args.build/'payload-optimization.json').write_text(json.dumps(payload_report,indent=2)+'\n',encoding='utf-8')
     # Every bundled module keeps its upstream license. Only source maps are omitted.
     info={**build_config,'platform':target,'commit':os.environ.get('GITHUB_SHA','local'),
           'system':platform.system(),'architecture':platform.machine(),
@@ -180,6 +184,10 @@ def main():
     archive.with_name(archive.name+'.sha256').write_text(digest+'  '+archive.name+'\n',encoding='ascii')
     disk_image = {'diskImage': create_dmg(prefix/'UmekoCpp.app', output/(stem+'.dmg'), 'Umeko-Desktop')} if sys.platform == 'darwin' else {}
     (output/(stem+'.json')).write_text(json.dumps({**info,'bytes':archive.stat().st_size,'sha256':digest,**disk_image},indent=2)+'\n',encoding='utf-8')
+    size_report = write_report(archive, ROOT/args.build/'package-size.json')
+    if os.environ.get('GITHUB_STEP_SUMMARY'):
+        with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+            summary.write(markdown(size_report))
     print(json.dumps({'archive':str(archive),'bytes':archive.stat().st_size,'sha256':digest}))
 
 if __name__=='__main__':main()

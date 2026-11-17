@@ -48,6 +48,7 @@ jobs:
         run: node --test tests/session-files.test.mjs
       - name: Prepare shared runtime fixtures
         run: |
+          python -m pip install Pillow==13.0.0
           npm ci --prefix runtime --ignore-scripts --no-audit --no-fund
           node scripts/prepare-runtime.mjs
           python scripts/fetch-search-tools.py
@@ -92,7 +93,7 @@ jobs:
       - name: Install build tools and Qt SDK
         shell: bash
         run: |
-          python -m pip install aqtinstall==3.3.0 cmake==3.31.6
+          python -m pip install aqtinstall==3.3.0 cmake==3.31.6 Pillow==13.0.0
           if [ '${{ steps.qt-cache.outputs.cache-hit }}' != 'true' ]; then
             extra=()
             if [ "$RUNNER_OS" = "Linux" ]; then extra=(icu qtwayland); fi
@@ -165,4 +166,6 @@ jobs:
             build/native-ui.txt
             build/packaged-smoke.log
             build/packaged-chat.png
+            build/payload-optimization.json
+            build/package-size.json
             build/screenshots/*.png
