@@ -2,7 +2,7 @@
 
 Use CMake 3.24+, a C++20 compiler, Qt 6.10.2 (Core, Gui, Widgets, Quick, Quick Controls, Quick Dialogs, Network, Concurrent, Test, SVG and Image Formats), Node.js 22.19+, and Python 3.12+ for build helpers/tests. Standard releases include a standalone Python interpreter. New minimal releases are no longer maintained.
 
-The [native build workflow](../.github/workflows/build.yml) is the reproducible recipe for Windows MSVC 2022, macOS ARM/Intel and Linux GCC. CMake fetches pinned QtKeychain and miniz sources. The Qt Image Formats module is required for the lossless WebP character assets.
+The [native build workflow](../.github/workflows/build.yml) is the reproducible recipe for Windows MSVC 2022, macOS ARM/Intel and Linux GCC. CMake fetches pinned QtKeychain and miniz sources. The Qt Image Formats module is required for the WebP character assets.
 
 ```bash
 npm ci --prefix runtime --ignore-scripts
@@ -13,6 +13,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/path/to/Qt/6
 cmake --build build --config Release --parallel 3
 node --test tests/gateway.test.mjs
 ctest --test-dir build -C Release --output-on-failure
+python -m pip install Pillow==13.0.0
 python scripts/package.py
 ```
 
