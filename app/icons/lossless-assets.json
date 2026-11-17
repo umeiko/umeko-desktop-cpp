@@ -18,98 +18,98 @@
   {
     "source": "app/icons/portraits/01.png",
     "target": "app/icons/portraits/01.webp",
-    "sourceSha256": "eb60cd19154e0e319b4a4726808a5a35a31dc279b6f46dd8f2e5fbc9bc6623f4",
-    "decodedSha256": "92906ec15f2b231bad1815ac3f7c57ccbf97c74eab61fc6fcaa47f933b41783f",
-    "originalBytes": 1357364,
-    "packedBytes": 848962
+    "sourceSha256": "e443ac868be76de42132d7175e0de1269f6347160d905375c46b04766399ca90",
+    "decodedSha256": "9ce03f176f2a18a9a850ecf9847e62b6bf85c756e5cb2f21414b757a33824e5c",
+    "originalBytes": 1239790,
+    "packedBytes": 759020
   },
   {
     "source": "app/icons/portraits/02.png",
     "target": "app/icons/portraits/02.webp",
-    "sourceSha256": "5b65cc677d4850cca49696106289b5d25f45133670f5e36d8018a1daf1756256",
-    "decodedSha256": "b70f4f85a50c62d5edd214c49b8dc991ce57a0389a9e3298a2ffcbc56993a8f8",
-    "originalBytes": 1836279,
-    "packedBytes": 1189194
+    "sourceSha256": "5b6aa039f8c2bbf7a181dc679c22459b49f0adc652033f919da2480d62349acc",
+    "decodedSha256": "3bdd619a88f1cff34699f0f289160cc180110e71653d49f256dde173c9b15f44",
+    "originalBytes": 1296245,
+    "packedBytes": 802706
   },
   {
     "source": "app/icons/portraits/03.png",
     "target": "app/icons/portraits/03.webp",
-    "sourceSha256": "f430a0ba7ba43b7cbed673db1b431bc68a38e9fffe97508fb337edfc968a27dd",
-    "decodedSha256": "356311e34ef0cff1b8746d54141d7bbe001bd7ca8b4c4b1edc4a938ef609cee1",
-    "originalBytes": 1350500,
-    "packedBytes": 844178
+    "sourceSha256": "4fe59b27fbe0d7486bc252868244604c98b99ce4f692d7f11c78df2f5857b459",
+    "decodedSha256": "3b325af0948c048d241366bc94340d0edebead2c072d04961261d303c182b769",
+    "originalBytes": 1204658,
+    "packedBytes": 732916
   },
   {
     "source": "app/icons/portraits/04.png",
     "target": "app/icons/portraits/04.webp",
-    "sourceSha256": "afd3483a183e436bdab82842e212f1a12b8f8f2b3e8ab78ca9fc281fd511d875",
-    "decodedSha256": "fb74f1b81d682162107ef32adc982c7aadc2cd56e3e40c2c98be1fff7482a15a",
-    "originalBytes": 1368798,
-    "packedBytes": 849314
+    "sourceSha256": "2cd2464425c425ea4bf1481cb8b9b3e7f77bd58fad274a7ab75de8f54c2bbd77",
+    "decodedSha256": "57ed9eb71d300679cc825c090350277cfad2f35cc27e24e90f9c7230bd8b72b1",
+    "originalBytes": 1203595,
+    "packedBytes": 730144
   },
   {
     "source": "app/icons/portraits/05.png",
     "target": "app/icons/portraits/05.webp",
-    "sourceSha256": "110528e40af5b3833003aa9daf1da47a4b6415be78981a719dcd91da98f5ec94",
-    "decodedSha256": "34ceb7afad4df65acab9e59aec0a48994cca0f182b959c4dd80b529e1162d029",
-    "originalBytes": 1347651,
-    "packedBytes": 845876
+    "sourceSha256": "2ce4fd2ae0916912e3a97fef7f2b5cec17cd1360ed25c7572a49bddbb25e4c83",
+    "decodedSha256": "c6c4ccf6f47603a6b0086c3ca551d264b3572706037087b94b89712c03a21ffc",
+    "originalBytes": 1418337,
+    "packedBytes": 857036
   },
   {
     "source": "app/icons/portraits/06.png",
     "target": "app/icons/portraits/06.webp",
-    "sourceSha256": "6680e1aee40dc9ddf04b7090fcbbc3d7f1758c51f4569e53528045c17dc773b1",
-    "decodedSha256": "194022a35c5b2409862bbde516894758c7c958667995420c9266305cf7e06779",
-    "originalBytes": 1331073,
-    "packedBytes": 827226
+    "sourceSha256": "e8eb2e011c8e938f65d90edd46677d38b4ee0d4ce376fa98beb507336688a2b1",
+    "decodedSha256": "c87b869b00dfbe8990bfab5a77dd374c78d36d7aa5c7d418b91cf02e23981c36",
+    "originalBytes": 1189654,
+    "packedBytes": 733450
   },
   {
     "source": "app/icons/portraits/07.png",
     "target": "app/icons/portraits/07.webp",
-    "sourceSha256": "efcdb9cf292dbb4ad19235dc095aa39c35bc2c66cdeca70bbc455012f7b1a96e",
-    "decodedSha256": "f3053cbfa9a51e16a18878fc064fe4bbd55d65b02bb5acb0b96c906b50f3ac51",
-    "originalBytes": 1319340,
-    "packedBytes": 815504
+    "sourceSha256": "c9d95b7ed61b242f25478363f1152d034592851d28575ce62ad1eeaf40bd0d63",
+    "decodedSha256": "5a0f3f00b7deac01802cfe6727cceb58ea29dcd5ad66042c0452898c285ad846",
+    "originalBytes": 1199543,
+    "packedBytes": 733970
   },
   {
     "source": "app/icons/portraits/08.png",
     "target": "app/icons/portraits/08.webp",
-    "sourceSha256": "c58527067be10fb37fd20d1917fc3b5c7738ecd46ad94096cf841bd274952cf3",
-    "decodedSha256": "ad3f4432fc920576532cb2bae32977cdfa77d620b3e2602aa4834a193ea406ad",
-    "originalBytes": 1303831,
-    "packedBytes": 813216
+    "sourceSha256": "4e1b2ed687c65197cb5510043524afd4b8482e4277409a279663fdc795f3d9a5",
+    "decodedSha256": "d5ff5c59481c1b6ed8b75ea982a30d3baad1fa7c85762274113454058fdf4e32",
+    "originalBytes": 1283219,
+    "packedBytes": 780178
   },
   {
     "source": "app/icons/portraits/09.png",
     "target": "app/icons/portraits/09.webp",
-    "sourceSha256": "3309bbdc70af8d9aa743e5d0ca70d830ae72ba77b34cc17be16e3be3a8b1fdd9",
-    "decodedSha256": "fd3df31fdf0bd101c80e69215035af00fc6de2ffcaf98d9f863a272a4a862b4f",
-    "originalBytes": 1366446,
-    "packedBytes": 846546
+    "sourceSha256": "d4c5c03f419387430d41c24f600dd7054804e7fe73d916b14df3a00fae318e18",
+    "decodedSha256": "2e472b66480e180ad5a908578f5774b6c802473f8decc0543b12d29a8e5635c1",
+    "originalBytes": 1225551,
+    "packedBytes": 755738
   },
   {
     "source": "app/icons/portraits/10.png",
     "target": "app/icons/portraits/10.webp",
-    "sourceSha256": "4e9e2d3bd3a281e4b0f113e36cb470323ed9791658bce2677acca55535294929",
-    "decodedSha256": "c00332e14b4961154fd341d23ffd30193ab98d905fe839a38c932a95ad7939e0",
-    "originalBytes": 1270881,
-    "packedBytes": 787670
+    "sourceSha256": "d380e15c1b43ca021abb39053910fb5ad983d549824cd8f5a54f406f5cd0bc27",
+    "decodedSha256": "9ae9346f18a0fc2adc28f3c6abedf8003035161dbb87c517f5a139de63f60b5d",
+    "originalBytes": 1221768,
+    "packedBytes": 756734
   },
   {
     "source": "app/icons/portraits/11.png",
     "target": "app/icons/portraits/11.webp",
-    "sourceSha256": "c3d448bbbc4e96df87ecb450093538facb6eeafb8776da12d72a82fa621356ca",
-    "decodedSha256": "5a2733765c662a59add10fa430be4be8afc6f192e7549ede3474231b58501dfb",
-    "originalBytes": 1643709,
-    "packedBytes": 1074136
+    "sourceSha256": "5f1767371a455e1306fa1d066248735499b4dfd938b9a5269230d24d0241fb13",
+    "decodedSha256": "b6e366519ae1158e1b8a5df078453487f4c3eda59022fa0926d870f02a6e5a49",
+    "originalBytes": 1267225,
+    "packedBytes": 769472
   },
   {
     "source": "app/icons/portraits/12.png",
     "target": "app/icons/portraits/12.webp",
-    "sourceSha256": "f733e681f3e56a98a66beb25923f4f59350287fa2fec6785c879b487603e8ca8",
-    "decodedSha256": "f0d8bbf7b085b1a09a0e9f669957d30b68a29c382dca04ed619989b190d9d9dc",
-    "originalBytes": 1320410,
-    "packedBytes": 824362
+    "sourceSha256": "b3a307e79dc1fbc621bff81ad41173920fc0dc73e6a68bfeff3085b97c840569",
+    "decodedSha256": "0a1aa058dfeb9c9c23f3b48aab183b03229b32dacf9973355b77b184bf6aa22a",
+    "originalBytes": 1250963,
+    "packedBytes": 755204
   },
   {
     "source": "app/icons/yanami-pixel.png",
@@ -118,5 +118,13 @@
     "decodedSha256": "81f1f7ade01e308179ff8021e1e9ecf3acd85f54eadf27e105db11af7ee8d0fb",
     "originalBytes": 1180934,
     "packedBytes": 781460
+  },
+  {
+    "source": "app/icons/yanami-chat-watermark.png",
+    "target": "app/icons/yanami-chat-watermark.webp",
+    "sourceSha256": "5b65cc677d4850cca49696106289b5d25f45133670f5e36d8018a1daf1756256",
+    "decodedSha256": "b70f4f85a50c62d5edd214c49b8dc991ce57a0389a9e3298a2ffcbc56993a8f8",
+    "originalBytes": 1836279,
+    "packedBytes": 1189194
   }
 ]
