@@ -42,6 +42,7 @@ SHARED = [['node', '--test', '--test-concurrency=2', 'tests/request-headers.test
  ['python', 'tests/test_skill_import.py'], ['python', 'tests/test_bundled_skills.py'],
  ['python', '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_checkpoints.py'],
  ['python', '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_provider_errors.py'],
+ ['python', '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_package_payload.py'],
  ['python', 'tests/worker_test.py'], ['python', 'tests/desktop_plugins_test.py'],
  ['python', '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_change_review.py'],
  ['python', 'tests/test_terminal_widget.py']]

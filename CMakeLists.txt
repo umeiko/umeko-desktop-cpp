@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(UmekoCpp VERSION 0.7.2 LANGUAGES C CXX)
+project(UmekoCpp VERSION 0.7.3 LANGUAGES C CXX)
 if(APPLE)
   # The notification library also links into targets declared in this scope.
   enable_language(OBJCXX)
@@ -74,13 +74,15 @@ else()
   target_compile_options(UmekoCpp PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 file(GLOB UI_QML CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} app/qml/*.qml app/qml/*.js app/qml/UmekoStyle/*.qml)
-file(GLOB_RECURSE UI_IMAGES CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} app/icons/*.webp app/icons/*.svg app/icons/subagents/*.png app/icons/characters/*.png app/icons/characters/*.json app/icons/fluent/*.png)
+# Runtime QML and artwork are already installed for public Widget imports.
+# Embed only the small installer shell, not a second copy of all character art.
+file(GLOB_RECURSE UI_IMAGES CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} app/icons/*.svg)
 set_source_files_properties(app/qml/Theme.qml app/qml/Character.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 set_source_files_properties(app/qml/I18n.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 # Scan application QML, not the bundled JavaScript engine or generated packages.
 set_property(TARGET UmekoCpp PROPERTY QT_QML_IMPORT_SCANNER_EXTRA_ARGS
   -exclude runtime -exclude build -exclude .tools -exclude .deps -exclude release-assets)
-qt_add_qml_module(UmekoCpp URI Umeko.App VERSION 1.0 QML_FILES ${UI_QML} RESOURCES app/qml/UmekoStyle/qmldir app/qml/skill.svg ${UI_IMAGES} app/icons/app.png app/icons/yanami-desktop-settings-v2.png app/icons/yanami-loading.png app/icons/yanami-catch.png app/icons/yanami-push.png app/icons/yanami-pull.png app/icons/yanami-installer.png app/icons/yanami-installing.png app/qml/qmldir app/theme-prompt.txt app/character-defaults.json app/provider-presets.json app/icons/providers/codex.png app/icons/providers/kimi.png app/icons/providers/glm.png NO_CACHEGEN)
+qt_add_qml_module(UmekoCpp URI Umeko.App VERSION 1.0 QML_FILES ${UI_QML} RESOURCES app/qml/UmekoStyle/qmldir app/qml/skill.svg ${UI_IMAGES} app/icons/yanami-installer.png app/icons/yanami-installing.png app/qml/qmldir app/theme-prompt.txt app/character-defaults.json app/provider-presets.json NO_CACHEGEN)
 include(GNUInstallDirs)
 set(CMAKE_INSTALL_BINDIR ".")
 install(TARGETS UmekoCpp BUNDLE DESTINATION . COMPONENT Runtime RUNTIME DESTINATION . COMPONENT Runtime)
