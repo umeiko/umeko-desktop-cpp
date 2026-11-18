@@ -7064,7 +7064,33 @@ Item {width:360;height:160
     QVERIFY(manager->openPage("system-prompt"));QTRY_VERIFY_WITH_TIMEOUT(manager->workers["system-prompt"]->ready && !backend->busy(),15000);
     auto host=qobject_cast<WidgetHost*>(manager->hostServices());QVERIFY(host);
     request=host->requestFor("system-prompt",{{"operation","systemPrompt.save"},{"arguments",QVariantMap{{"id",id},{"text","forged worker"}}},{"session",manager->session()}});QTRY_VERIFY_WITH_TIMEOUT(received(),5000);QVERIFY(!response["ok"].toBool());QVERIFY(response["error"].toString().contains("built-in System Prompt page"));
-    QTest::qWait(300);QVERIFY(window->grabWindow().save(root+"/build/screenshots/system-prompt-native.png"));manager->closePage();
+    auto page=find("systemPromptWidget");QVERIFY(page);
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy() && !page->property("working").toBool(),5000);
+    // A failed first inspection must not be retried by its own busy/idle
+    // notifications. Keep the error visible until the user explicitly retries.
+    page->setProperty("loadedContext",QString());
+    page->setProperty("pending",QVariantMap{{"failed-inspect",QVariantMap{{"operation","systemPrompt.inspect"}}}});
+    QQmlExpression failure(qmlContext(page),page,"complete('failed-inspect', {ok:false, error:'Fixture prompt read failure'})");failure.evaluate();QVERIFY(!failure.hasError());
+    QVERIFY(page->property("notice").toString().contains("Fixture prompt read failure"));
+    QSignalSpy failedReplies(manager,&DesktopPlugins::hostResponse);
+    for(int i=0;i<10;++i)emit manager->sessionChanged();
+    QTest::qWait(350);QCOMPARE(failedReplies.count(),0);QVERIFY(!page->property("working").toBool());
+    QQmlExpression retry(qmlContext(page),page,"reload()");retry.evaluate();QVERIFY(!retry.hasError());
+    QTRY_COMPARE_WITH_TIMEOUT(failedReplies.count(),1,15000);
+    QVERIFY2(failedReplies.last()[2].toMap()["ok"].toBool(),qPrintable(failedReplies.last()[2].toMap()["error"].toString()));
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy() && !page->property("working").toBool(),5000);
+    QVERIFY(page->property("notice").toString().isEmpty());
+    emit manager->sessionChanged();QTest::qWait(350);QCOMPARE(failedReplies.count(),1);
+    if(qEnvironmentVariableIsSet("UMEKO_SYSTEM_PROMPT_REVIEW")) {
+      request=manager->requestHost("systemPrompt.restore",QString::fromUtf8(QJsonDocument(QJsonObject{{"id",id}}).toJson(QJsonDocument::Compact)));
+      QTRY_VERIFY_WITH_TIMEOUT(received() && response["ok"].toBool() && !backend->busy(),15000);
+      backend->setTheme("white");backend->setLanguage("zh");window->resize(1500,980);
+      window->setTitle(QString::fromUtf8("Umeko C++ · 系统提示词修复验收"));
+      QTest::qWait(400);QDir().mkpath(root+"/build/screenshots");QVERIFY(window->grabWindow().save(root+"/build/screenshots/system-prompt-review.png"));
+      qInfo()<<"SYSTEM_PROMPT_REVIEW_READY"<<directory.path();
+      QEventLoop loop;connect(window,&QWindow::visibleChanged,&loop,[&loop](bool visible){if(!visible)loop.quit();});loop.exec();
+    }
+    QTest::qWait(300);QDir().mkpath(root+"/build/screenshots");QVERIFY(window->grabWindow().save(root+"/build/screenshots/system-prompt-native.png"));manager->closePage();
   }
 
   void cleanupTestCase() {

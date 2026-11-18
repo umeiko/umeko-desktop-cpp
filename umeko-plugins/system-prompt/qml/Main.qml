@@ -10,6 +10,7 @@ FocusScope {
     clip: true
     property bool initialized: false
     property string loadedContext: ""
+    property string failedContext: ""
     property var tree: []
     property var drafts: ({})
     property var collapsed: ({})
@@ -33,10 +34,9 @@ FocusScope {
     readonly property color changedBg: dark ? "#1fd7b65b" : "#1fe0a526"
     readonly property var breadcrumb: pathTo(tree, selectedId, [])
     function contextKey() {
-        // The native leaf is an opaque revision, available without reading
-        // messages. Our inspections do not advance it; normal chat turns do.
+        // Opaque native revision: status/busy notifications are not prompt changes.
         const session = sdk.session || {}
-        return JSON.stringify([session.token || session.id || "", session.workspace || "", session.leafId || "", session.messages || []])
+        return JSON.stringify([session.token || session.id || "", session.workspace || "", session.leafId || ""])
     }
     function t(zh, en) { return sdk.language.indexOf("zh") === 0 ? zh : en }
     function count(value) { return Number(value || 0).toLocaleString(Qt.locale("en_US"), "f", 0) }
@@ -124,7 +124,7 @@ FocusScope {
         drafts = next
     }
     function request(operation, args) {
-        if (!sdk.active || working || (operation !== "systemPrompt.inspect" && sessionBusy)) return false
+        if (!sdk.active || working || sessionBusy) return false
         const operations = sdk.hostCapabilities && sdk.hostCapabilities.operations
         if (operations && !operations[operation]) {
             notice = t("此操作需要更新版本的 Umeko。", "This operation needs a newer Umeko version.")
@@ -166,12 +166,15 @@ FocusScope {
         delete next[identifier]
         pending = next
         if (!value || value.ok === false) {
+            failedContext = contextKey()
             notice = t("操作失败。你的草稿仍保留，请刷新后重试。", "The operation failed. Your drafts are kept; refresh and retry.")
+            if (value && value.error) notice += "\n" + String(value.error).slice(0, 1000)
             return
         }
         if (value.tree) {
             applySnapshot(value)
             loadedContext = contextKey()
+            failedContext = ""
         }
         if (entry.operation === "systemPrompt.save" || entry.operation === "systemPrompt.restore") {
             // Clear only the draft covered by this completed operation.
@@ -220,6 +223,7 @@ FocusScope {
             visible: root.sessionBusy || !!root.notice
             Layout.fillWidth: true
             text: root.notice || root.t("会话运行中，结束后可修改。", "The session is busy. Changes are available when it finishes.")
+            textFormat: Text.PlainText
             wrapMode: Text.Wrap
             color: root.notice ? root.sdk.colors.danger : root.sdk.colors.muted
             font.family: Umeko.Theme.fontFamily
@@ -300,7 +304,8 @@ FocusScope {
         ignoreUnknownSignals: true
         function onActiveChanged() { if (root.initialized && root.sdk.active) root.reload(); else root.initialize() }
         function onSessionChanged() {
-            if (root.initialized && root.sdk.active && !root.working && !root.sessionBusy && root.contextKey() !== root.loadedContext)
+            if (root.initialized && root.sdk.active && !root.working && !root.sessionBusy
+                    && root.contextKey() !== root.loadedContext && root.contextKey() !== root.failedContext)
                 root.reload()
         }
         function onHostResponse(identifier, value) { root.complete(identifier, value) }
