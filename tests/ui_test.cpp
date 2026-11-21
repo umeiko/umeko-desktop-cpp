@@ -4931,6 +4931,7 @@ def create_provider(context): return Interactive(context)
       const auto local = button->mapToItem(flick, center);
       const auto scene = button->mapToScene(center);
       if (flick->contains(local) && QRectF(0, 0, window->width(), window->height()).contains(scene)) {
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, scene.toPoint());
         revealed = true;
         break;
       }
@@ -4938,7 +4939,6 @@ def create_provider(context): return Interactive(context)
       flick->setProperty("contentY", qBound(0.0, y, qMax(0.0, flick->property("contentHeight").toReal() - flick->height())));
     }
     QVERIFY(revealed);
-    click("loginPlugin_" + id);
     QTRY_VERIFY_WITH_TIMEOUT(!row(id)["busy"].toBool(), 5000);
     QCOMPARE(row(id)["status"].toString(), QString("Sign-in interrupted: ***"));
     QVERIFY(!row(id)["loggingIn"].toBool());
