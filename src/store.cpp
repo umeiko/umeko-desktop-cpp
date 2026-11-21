@@ -70,6 +70,8 @@ QVariantMap Store::defaults() {
           {"image", QVariantMap{{"providerId",""},{"model",""},{"size",""},{"quality",""},{"count",1},{"format",""}}},
           {"speech", QVariantMap{{"providerId",""},{"model",""},{"voice",""},{"format","mp3"},{"speed",1.0}}},
           {"video", QVariantMap{{"providerId",""},{"model",""},{"seconds",""},{"size",""}}}}},
+      {"modelGroup", QVariantMap{{"enabled", false}, {"members", QVariantList{}}}},
+      {"selectedModelGroup", false},
       {"selectedProvider", ""},
       {"selectedModel", ""},
       {"providerRuntime", QVariantMap{}},

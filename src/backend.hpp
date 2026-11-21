@@ -316,6 +316,8 @@ class Backend : public QObject {
   Q_PROPERTY(
       QString reasoningEffort READ reasoningEffort NOTIFY reasoningChanged)
   Q_PROPERTY(QStringList reasoningLevels READ reasoningLevels NOTIFY changed)
+  Q_PROPERTY(QVariantMap modelGroup READ modelGroup NOTIFY modelGroupChanged)
+  Q_PROPERTY(bool modelGroupSelected READ modelGroupSelected NOTIFY changed)
   Q_PROPERTY(QString reasoningDetectionState READ reasoningDetectionState NOTIFY reasoningDetectionChanged)
   Q_PROPERTY(QVariant reasoningOffSupported READ reasoningOffSupported NOTIFY reasoningDetectionChanged)
   Q_PROPERTY(QVariantList reasoningFormatOptions READ reasoningFormatOptions CONSTANT)
@@ -538,6 +540,10 @@ public:
   bool compactionAvailable() const {return view->backend=="pi" && !view->id.isEmpty() && !view->file.isEmpty() && !view->model.isEmpty() && !kernelBusy();}
   bool compacting() const {return view->compactionRunning || (view->busy() && view->action=="compact");}
   Q_INVOKABLE void selectModel(QString provider, QString model);
+  Q_INVOKABLE void selectModelGroup();
+  Q_INVOKABLE bool saveModelGroup(bool enabled, QString members);
+  QVariantMap modelGroup() const;
+  bool modelGroupSelected() const;
   QVariantList commonProviders() const;
   Q_INVOKABLE bool addCommonProvider(QString preset, QString key, QString alias,
                                      QString region = "cn");
@@ -584,6 +590,7 @@ public:
   void invalidate();
   void notify();
 signals:
+  void modelGroupChanged();
   void reasoningDetectionChanged();
   void appearanceChanged();
   void typographyChanged();
@@ -685,7 +692,11 @@ private:
   QVariantMap createdKey;
   QTimer streaming;
   QTimer appearanceSave, sidebarRefresh;
-  std::shared_ptr<Session> fresh(QString workspace = {});
+  std::shared_ptr<Session> fresh(QString workspace = {}, bool ordinaryChat = true);
+  QVariantMap modelGroupDescriptor() const;
+  QVariantMap gatewayModelGroup() const;
+  void rememberModelSelection(const std::shared_ptr<Session> &session);
+  bool repairModelGroupSelection(const std::shared_ptr<Session> &session);
   std::shared_ptr<Session> findSession(QString id);
   QVariantMap ensureProject(QString path, bool reopen = false);
   void activate(std::shared_ptr<Session> session);

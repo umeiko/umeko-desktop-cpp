@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <QSslCertificate>
 QStringList Backend::reasoningLevelsFor(std::shared_ptr<Session> session) const {
+  if (session->provider == U::modelGroupProvider) return {};
   if(session->backend=="dsh" && !session->dshOptions.isEmpty()) {QStringList out;for(const auto &value:session->dshOptions){auto o=value.toMap();if(o["id"]=="reasoning_effort")for(const auto &c:o["options"].toList())if(c.toMap()["value"]!="off")out<<c.toMap()["value"].toString();}return out;}
   if(session->backend=="dsh" && (session->dshOwnFixed?session->dshOwn:dshRuntime->useOwnConfig()))return {};
   for (const auto &p : store.data["providers"].toList()) if (p.toMap()["id"] == session->provider)
@@ -14,6 +15,7 @@ QStringList Backend::reasoningLevelsFor(std::shared_ptr<Session> session) const 
   return U::reasoningLevels({});
 }
 void Backend::reconcileReasoning(std::shared_ptr<Session> session) {
+  if (session->provider == U::modelGroupProvider) return;
   const auto value = U::reconcileEffort(session->reasoningEffort, reasoningLevelsFor(session));
   if (value == session->reasoningEffort) return;
   session->reasoningEffort = value;
@@ -24,7 +26,7 @@ void Backend::reconcileReasoning(std::shared_ptr<Session> session) {
   }
 }
 bool Backend::setReasoningEffort(QString value) {
-  if(view->backend=="dsh" && view->busy())return false;
+  if (modelGroupSelected() || (view->backend == "dsh" && view->busy())) return false;
   if (value != "off" && !reasoningLevels().contains(value))
     return false;
   view->reasoningEffort = value;

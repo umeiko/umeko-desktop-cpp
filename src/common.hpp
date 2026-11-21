@@ -5,6 +5,9 @@
 #include <functional>
 
 namespace U {
+inline const QString modelGroupProvider = QStringLiteral("@umeko-model-group");
+// Physical model aliases cannot contain whitespace.
+inline const QString modelGroupId = QStringLiteral("@umeko/model group");
 QVariantMap compactionView(QVariantMap entry);
 QVariantMap compactionStatus(QVariantMap row, QString active = {});
 QString uuid();

@@ -66,13 +66,13 @@ void WidgetHost::sessionService(Task request) {
       const auto meta=b->metadata(binding["sessionId"].toString());
       check(!meta["archived"].toBool()&&!meta["pluginSession"].toMap().isEmpty()&&QFileInfo(binding["file"].toString()).isFile(),"The mapped native session was removed or archived");
       auto record=b->findSession(binding["sessionId"].toString());
-      if(!record){record=b->fresh(binding["workspace"].toString());record->id=binding["sessionId"].toString();record->file=binding["file"].toString();record->title="Plugin session";}
+      if(!record){record=b->fresh(binding["workspace"].toString(), false);record->id=binding["sessionId"].toString();record->file=binding["file"].toString();record->title="Plugin session";}
       record->pluginOwner=meta["pluginSession"].toMap();sessionPolicy(record);sessionLease(request,record,false);return;
     }
     check(args.value("createIfMissing",true).toBool(),"No session is mapped to this external key");
     if(sessionAcquiring.contains(identity)){sessionAcquires[sessionAcquiring[identity]]<<request;return;}
     check(sessionAcquiring.size()<8,"Too many sessions are being acquired");
-    auto record=b->fresh({});record->id="plugin-pending-"+record->key;record->title="Plugin session";
+    auto record=b->fresh({}, false);record->id="plugin-pending-"+record->key;record->title="Plugin session";
     record->pluginOwner={{"plugin",request->widget},{"namespace",space},{"externalKey",external},{"profile",profile}};
     try{sessionPolicy(record);}catch(...){b->records.remove(record->key);b->lru.removeAll(record->key);throw;}
     b->setMetadata(record->id,{{"pluginSession",record->pluginOwner}});

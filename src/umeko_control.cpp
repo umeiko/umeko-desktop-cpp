@@ -303,9 +303,13 @@ QVariantMap Backend::umekoRequestImpl(QVariantMap request, QString callerKey, bo
         bool valid = false;
         for (auto m : modelCatalog()) if (m.toMap()["provider"] == args["provider"] && m.toMap()["id"] == args["model"]) valid = true;
         require(valid, "Configured model ID does not exist");
+        if (target->provider == U::modelGroupProvider && target->process) {
+          require(!target->subagentsActive, "Session still has active subagents");
+          target->stale = true;
+        }
         target->provider = args["provider"].toString(); target->model = args["model"].toString(); target->usage.clear();
         reconcileReasoning(target);
-        if (target == view) { store.data["selectedProvider"] = target->provider; store.data["selectedModel"] = target->model; }
+        if (target == view) rememberModelSelection(target);
       } else {
         auto value = args["value"].toString();
         require(value == "off" || reasoningLevelsFor(target).contains(value), "Reasoning must be off or one of the configured model levels");

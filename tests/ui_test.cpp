@@ -923,6 +923,101 @@ private slots:
     scroll->setProperty("contentY",0);click("backMultimodalSettings");QVERIFY(!page->property("multimodalOpen").toBool());QVERIFY(find("commonProvidersSection")->isVisible());
     window->setProperty("page","chat");
   }
+  void nativeModelGroupSettingsAndFallback() {
+    const auto saved = backend->store.data;
+    const auto previousSize = window->size();
+    const auto cleanup = qScopeGuard([&] {
+      transientFailures = 0;
+      backend->store.data = saved;
+      backend->invalidate();
+      backend->notify();
+      backend->newSession();
+      if (auto settings = find("settingsPage")) settings->setProperty("modelGroupOpen", false);
+      window->setProperty("page", "chat");
+      window->resize(previousSize);
+    });
+    backend->newSession();
+    const auto base = QString("http://127.0.0.1:%1/v1").arg(upstream.serverPort());
+    for (const auto &model : QStringList{"group-first", "group-second"}) {
+      const auto mapping = QJsonDocument(QJsonArray{QJsonObject{
+        {"upstream", model}, {"alias", model}, {"reasoningLevels", QJsonArray{"high", "vendor-level"}},
+        {"reasoningLevelsAuto", false}, {"reasoningFormatAuto", false},
+      }}).toJson(QJsonDocument::Compact);
+      QVERIFY(backend->saveProvider("", model, "openai", base, "", QString::fromUtf8(mapping)));
+    }
+
+    window->resize(1320, 860);
+    window->setProperty("page", "settings");
+    window->setProperty("settingsTab", 0);
+    QTRY_VERIFY(find("modelGroupSettingsEntry") && find("modelGroupSettingsEntry")->isVisible());
+    QVERIFY(QMetaObject::invokeMethod(find("modelGroupSettingsEntry"), "clicked"));
+    QTRY_VERIFY(find("modelGroupSettings"));
+    click("enableModelGroup");
+    QVERIFY(backend->modelGroup()["enabled"].toBool());
+    QVERIFY(!backend->modelGroup()["ready"].toBool());
+
+    for (const auto &alias : QStringList{"group-second", "group-first"}) {
+      click("addModelGroupMember");
+      auto picker = find("modelGroupAddPicker");
+      QVERIFY(picker && picker->isVisible());
+      const auto label = alias + "  ·  " + alias;
+      int option = -1;
+      for (int i = 0; i < picker->property("count").toInt(); ++i) {
+        QString text;
+        QVERIFY(QMetaObject::invokeMethod(picker, "textAt", Q_RETURN_ARG(QString, text), Q_ARG(int, i)));
+        if (text == label) { option = i; break; }
+      }
+      QVERIFY(option >= 0);
+      QVERIFY(QMetaObject::invokeMethod(picker, "activated", Q_ARG(int, option)));
+    }
+    QTRY_VERIFY(find("modelGroupMember_1"));
+    QVERIFY(find("modelGroupMember_1")->height() > 60);
+    click("moveModelGroupMemberUp_1");
+    const auto members = backend->modelGroup()["members"].toList();
+    QCOMPARE(members.first().toMap()["model"].toString(), QString("group-first"));
+
+    auto first = find("modelGroupEffort_0");
+    auto second = find("modelGroupEffort_1");
+    QVERIFY(first && second);
+    QVERIFY(QMetaObject::invokeMethod(first, "activated", Q_ARG(int, 1)));
+    second = find("modelGroupEffort_1");
+    QVERIFY(second && QMetaObject::invokeMethod(second, "activated", Q_ARG(int, 2)));
+    QCOMPARE(Store(directory.path()).data["modelGroup"].toMap()["members"].toList().last().toMap()["effort"].toString(),
+             QString("vendor-level"));
+    if (const auto shot = qEnvironmentVariable("UMEKO_MODEL_GROUP_SNAPSHOT"); !shot.isEmpty())
+      QVERIFY(window->grabWindow().save(shot));
+
+    window->setProperty("page", "chat");
+    click("modelSelector");
+    QTRY_VERIFY(find("modelGroupOption") && find("modelGroupOption")->isVisible());
+    QVERIFY(QMetaObject::invokeMethod(find("modelOptionsList"), "positionViewAtEnd"));
+    click("modelGroupOption");
+    QVERIFY(backend->modelGroupSelected());
+    QCOMPARE(find("composerProviderName")->property("text").toString(), QString("模型组"));
+    const auto before = requests.size();
+    transientFailures = 1;
+    backend->send("model group fixture");
+    QTRY_VERIFY_WITH_TIMEOUT(!backend->busy(), 15000);
+    QCOMPARE(requests.size() - before, 2);
+    QCOMPARE(requests[before].toMap()["model"].toString(), QString("group-first"));
+    QCOMPARE(requests[before].toMap()["reasoning_effort"].toString(), QString("high"));
+    QCOMPARE(requests.last().toMap()["model"].toString(), QString("group-second"));
+    QCOMPARE(requests.last().toMap()["reasoning_effort"].toString(), QString("vendor-level"));
+    QVERIFY(lastText().contains("model group fixture"));
+
+    const auto sessionId = backend->activeSession();
+    backend->newSession();
+    QVERIFY(backend->modelGroupSelected());
+    backend->openSession(sessionId);
+    QTRY_COMPARE(backend->activeSession(), sessionId);
+    QVERIFY(backend->modelGroupSelected());
+    window->setProperty("page", "settings");
+    QTRY_VERIFY(find("enableModelGroup"));
+    click("enableModelGroup");
+    QVERIFY(!backend->modelGroupSelected());
+    QVERIFY(!backend->modelGroup()["ready"].toBool());
+    QCOMPARE(backend->modelGroup()["members"].toList().size(), 2);
+  }
   void nativeReasoningDiscoveryAndChatPriority() {
     configureAPI();const auto original=backend->store.data;
     const auto cleanup=qScopeGuard([&]{releaseReplies();backend->cancelReasoningDetection();backend->store.data=original;backend->notify();});
