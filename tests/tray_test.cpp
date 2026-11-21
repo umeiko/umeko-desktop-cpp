@@ -86,6 +86,7 @@ private slots:
     auto show = menu->findChild<QAction*>("trayShowAction"); QVERIFY(show);
     show->trigger(); QTRY_VERIFY(window.isVisible());
     auto exit = menu->findChild<QAction*>("trayQuitAction"); QVERIFY(exit);
+    QCOMPARE(exit->menuRole(), QAction::NoRole);
     exit->trigger(); exit->trigger();
     QCOMPARE(quit.count(),1);
     QVERIFY(window.close());

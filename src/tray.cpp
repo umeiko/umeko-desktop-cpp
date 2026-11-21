@@ -14,7 +14,8 @@ TrayController::TrayController(QWindow *mainWindow, const QIcon &icon, QObject *
   menu.addSeparator();
   auto quit = menu.addAction("退出");
   quit->setObjectName("trayQuitAction");
-  quit->setMenuRole(QAction::QuitRole);
+  // Keep the action in the status-item menu on macOS.
+  quit->setMenuRole(QAction::NoRole);
   tray.setContextMenu(&menu);
   connect(open, &QAction::triggered, this, &TrayController::restore);
   connect(quit, &QAction::triggered, this, &TrayController::requestQuit);

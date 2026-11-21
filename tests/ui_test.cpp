@@ -275,6 +275,12 @@ private slots:
     window->show();
     window->requestActivate();
     QTest::qWait(500);
+    auto pet = qobject_cast<DesktopPet *>(backend->desktopExtensions->pet());
+    QVERIFY(pet && pet->visible());
+    QQuickWindow *petWindow = nullptr;
+    QTRY_VERIFY((petWindow = window->findChild<QQuickWindow *>("desktopPetWindow")) && petWindow->isVisible());
+    QVERIFY(petWindow->flags() & Qt::WindowStaysOnTopHint);
+    QVERIFY(pet->ui("hide", {})["ok"].toBool());
     QTRY_VERIFY_WITH_TIMEOUT(!backend->kernelBusy(), 15000);
     QVERIFY(upstream.listen(QHostAddress::LocalHost, 0));
     connect(&upstream, &QTcpServer::newConnection, this, [this] {
@@ -6067,6 +6073,24 @@ def create_provider(context): return Interactive(context)
     QVERIFY(pause->property("checked").toBool());
     evaluate(menu, "itemAt(5).click()");
     QTRY_VERIFY(!pet->config()["paused"].toBool());
+    QVERIFY(QMetaObject::invokeMethod(menu, "open"));
+    QTRY_VERIFY(menu->property("opened").toBool());
+    evaluate(menu, "itemAt(7).click()");
+    auto sizeMenu = petWindow->findChild<QObject *>("desktopPetSizeMenu");
+    QVERIFY(sizeMenu);
+    QTRY_VERIFY(sizeMenu->property("opened").toBool());
+    QVERIFY(evaluate(sizeMenu, "itemAt(0).checked").toBool());
+    evaluate(sizeMenu, "itemAt(5).click()");
+    QTRY_COMPARE(pet->config()["size"].toInt(), 256);
+    QTRY_COMPARE(petWindow->width(), 288);
+    QTRY_VERIFY(!menu->property("visible").toBool());
+    QVERIFY(QMetaObject::invokeMethod(menu, "open"));
+    QTRY_VERIFY(menu->property("opened").toBool());
+    evaluate(menu, "itemAt(7).click()");
+    QTRY_VERIFY(sizeMenu->property("opened").toBool());
+    QVERIFY(evaluate(sizeMenu, "itemAt(5).checked").toBool());
+    QVERIFY(QMetaObject::invokeMethod(sizeMenu, "close"));
+    QVERIFY(QMetaObject::invokeMethod(menu, "close"));
   }
   void globalAgentNativeToolsSettings() {
     const auto originalSize=window->size();const auto originalPaneWidth=window->property("webPreferredWidth");
