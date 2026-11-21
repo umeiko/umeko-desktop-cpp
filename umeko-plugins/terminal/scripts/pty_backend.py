@@ -135,7 +135,8 @@ else:
             try:
                 fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',rows,columns,0,0))
                 helper=str(Path(__file__).with_name('posix_exec.py'))
-                self.process=subprocess.Popen([sys.executable,'-I','-S',helper,str(error_write),*argv],cwd=str(cwd),env=env,
+                # Isolated mode ignores PYTHONDONTWRITEBYTECODE. Keep the signed runtime read-only.
+                self.process=subprocess.Popen([sys.executable,'-I','-S','-B',helper,str(error_write),*argv],cwd=str(cwd),env=env,
                     stdin=slave,stdout=slave,stderr=slave,close_fds=True,start_new_session=True,pass_fds=(error_write,))
                 os.close(error_write);error_write=None
                 if not select.select([error_read],[],[],5)[0]:raise OSError('Terminal startup timed out')

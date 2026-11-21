@@ -107,7 +107,11 @@ add_test(NAME native_ui COMMAND UmekoUiTests -v1 -o -,txt -o "${CMAKE_BINARY_DIR
 # This suite includes live Pi sessions and multiple navigation scenarios.
 # Intel macOS previously took ~224 s before the character and provider cases.
 # Keep each assertion bounded, with enough time for the complete suite on CI.
-set_tests_properties(native_ui PROPERTIES TIMEOUT 600)
+if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+  set_tests_properties(native_ui PROPERTIES TIMEOUT 1200)
+else()
+  set_tests_properties(native_ui PROPERTIES TIMEOUT 600)
+endif()
 set(APP_TEST_PLATFORM offscreen)
 if(APPLE)
   # Apple Keychain completion runs on the Cocoa main dispatch queue.

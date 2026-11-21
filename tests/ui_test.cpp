@@ -1313,7 +1313,16 @@ private slots:
     }
     phase="rapid switching";
     QVariantList rapidSamples;QElapsedTimer rapid;rapid.start();
-    for(int iteration=0;iteration<8;++iteration){QElapsedTimer call;call.start();backend->newSession();const auto freshMs=call.restart();backend->openSession("published-stress");rapidSamples<<QVariantMap{{"new",freshMs},{"open",call.elapsed()}};}
+    for (int iteration = 0; iteration < 8; ++iteration) {
+      QElapsedTimer call;
+      call.start();
+      backend->newSession();
+      const auto freshMs = call.restart();
+      backend->openSession("published-stress");
+      rapidSamples << QVariantMap{{"new", freshMs}, {"open", call.elapsed()}};
+      // Separate successive inputs by an event-loop turn, as with real clicks.
+      QTest::qWait(1);
+    }
     qInfo()<<"Rapid history switching synchronous(ms):"<<rapid.elapsed()<<rapidSamples;
     QTRY_COMPARE_WITH_TIMEOUT(backend->chat.rowCount(),6000,5000);QTRY_VERIFY_WITH_TIMEOUT(!find("conversation")->property("restoring").toBool(),5000);QVERIFY(backend->scrollAnchor()>5980);
     auto view=find("conversation");QVERIFY(view);
@@ -6091,6 +6100,7 @@ def create_provider(context): return Interactive(context)
     QVERIFY(evaluate(sizeMenu, "itemAt(5).checked").toBool());
     QVERIFY(QMetaObject::invokeMethod(sizeMenu, "close"));
     QVERIFY(QMetaObject::invokeMethod(menu, "close"));
+    QTRY_VERIFY(!sizeMenu->property("visible").toBool() && !menu->property("visible").toBool());
   }
   void globalAgentNativeToolsSettings() {
     const auto originalSize=window->size();const auto originalPaneWidth=window->property("webPreferredWidth");
