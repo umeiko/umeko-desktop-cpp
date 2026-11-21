@@ -21,11 +21,15 @@ void Backend::finishTurn(std::shared_ptr<Session> s,bool failed) {
     if (pet->helper()) pet->helper()->completed(s, elapsed, s->cancelled?"stopped":failed||s->failed?"failed":"finished");
   if(!s->id.isEmpty())setMetadata(s->id,{{"lastTurn",QVariantMap{{"state",s->cancelled?"stopped":failed||s->failed?"failed":"finished"},{"elapsed",elapsed}}}});
 }
-std::shared_ptr<Session> Backend::fresh(QString workspace) {
+std::shared_ptr<Session> Backend::fresh(QString workspace, bool ordinaryChat) {
   auto s = std::make_shared<Session>();
   s->workspace = workspace;
   s->model = store.data["selectedModel"].toString();
   s->provider = store.data["selectedProvider"].toString();
+  if (ordinaryChat && store.data["selectedModelGroup"].toBool() && !modelGroupDescriptor().isEmpty()) {
+    s->provider = U::modelGroupProvider;
+    s->model = U::modelGroupId;
+  }
   auto effort =
       store.data["ui"].toMap().value("reasoningEffort", "off").toString();
   s->reasoningEffort = U::reconcileEffort(effort, reasoningLevelsFor(s));
@@ -78,7 +82,9 @@ void Backend::activate(std::shared_ptr<Session> s) {
       store.data["activeProject"] = p["id"];
     store.data["workspace"] = s->workspace;
   }
-  bool valid = false;
+  const bool hadGroup = s->provider == U::modelGroupProvider;
+  const bool repairedGroup = repairModelGroupSelection(s);
+  bool valid = hadGroup && !repairedGroup;
   for (auto v : modelCatalog()) {
     auto m = v.toMap();
     if (m["provider"] == s->provider && m["id"] == s->model)
@@ -91,8 +97,7 @@ void Backend::activate(std::shared_ptr<Session> s) {
     s->model = store.data["selectedModel"].toString();
     s->usage.clear();
   } else if (valid) {
-    store.data["selectedProvider"] = s->provider;
-    store.data["selectedModel"] = s->model;
+    rememberModelSelection(s);
   }
   reconcileReasoning(s);
   markRead(s);
@@ -276,7 +281,15 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
                       QVariantMap values) {
   if(files && (files->pending.contains(s->id)||files->deleted.contains(s->id))){emit toast("会话数据正在删除，请稍后再试");return false;}
   if (desktopExtensions->checkpointLocked(s->workspace)) return false;
-  cancelReasoningDetection(s->provider);
+  repairModelGroupSelection(s);
+  if (s->provider == U::modelGroupProvider) {
+    QSet<QString> providers;
+    for (const auto &member : gatewayModelGroup()["members"].toList())
+      providers.insert(member.toMap()["provider"].toString());
+    for (const auto &id : providers) cancelReasoningDetection(id);
+  } else {
+    cancelReasoningDetection(s->provider);
+  }
   if(s->backend=="dsh")return commandDsh(s,action,values);
   if (s->busy() || kernelBusy()) {
     emit toast(gatewayPort ? "请等待当前任务结束"
@@ -334,7 +347,9 @@ bool Backend::command(std::shared_ptr<Session> s, QString action,
   values["sessionDir"] = store.directory + "/pi/sessions";
   values["docsDir"] = store.directory + "/agent-docs";
   values["sessionFile"] = s->file;
-  values["models"] = modelCatalog();
+  auto models = modelCatalog();
+  if (s->provider == U::modelGroupProvider) models << modelGroupDescriptor();
+  values["models"] = models;
   values["agent"] = store.data["agent"];
   values["permissionMode"]=store.data["agent"].toMap().value("toolPermissionMode","auto");
   values["dangerousAllowed"]=s->dangerousAllowed && s->pluginOwner.isEmpty();
@@ -459,11 +474,11 @@ void Backend::sendText(QString text, bool steering) {
   if ((text.isEmpty() && s->attachments.isEmpty()) ||
       (s->busy() && s->phase != "running"))
     return;
-  auto id = s->phase == "running" ? s->provider
-                                  : store.data["selectedProvider"].toString();
-  auto model =
-      s->phase == "running" ? s->model : store.data["selectedModel"].toString();
-  bool vision = false;
+  repairModelGroupSelection(s);
+  const auto id = s->busy() || modelGroupSelected() ? s->provider : store.data["selectedProvider"].toString();
+  const auto model = s->busy() || modelGroupSelected() ? s->model : store.data["selectedModel"].toString();
+  bool vision = id == U::modelGroupProvider &&
+                modelGroupDescriptor()["input"].toStringList().contains("image");
   for (auto v : provider(id)["models"].toList())
     if (v.toMap()["alias"] == model)
       vision = U::normalizeModel(v.toMap())["vision"].toBool();

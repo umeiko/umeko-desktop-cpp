@@ -167,6 +167,22 @@ function anthropicResponse(completion, model, id) {
   for (const call of message.tool_calls || []) content.push({ type: 'tool_use', id: call.id, name: call.function.name, input: JSON.parse(call.function.arguments || '{}') });
   return { id, type: 'message', role: 'assistant', model, content, stop_reason: ({ length: 'max_tokens', tool_calls: 'tool_use' })[finish] || 'end_turn', stop_sequence: null, usage: { input_tokens: completion.usage.prompt_tokens || 0, output_tokens: completion.usage.completion_tokens || 0 } };
 }
+function groupFailoverEligible(error, records) {
+  const response = records.findLast(record => record.response?.status)?.response;
+  const status = Number(response?.status || /HTTP (\d{3})/.exec(error.message)?.[1]);
+  const detail = error.message + (status >= 400 ? ' ' + JSON.stringify(response?.body || '') : '');
+  return [401, 402, 403, 404, 408, 425, 429].includes(status) || status >= 500 ||
+    /insufficient[ _-]?(?:quota|balance)|quota.{0,20}(?:exceed|exhaust)|rate[ _-]?limit|out of budget|billing|usage limit reached|model_not_found|限流|额度不足|余额不足|配额.{0,8}(?:不足|用尽)|供应商正在登录或刷新/i.test(detail);
+}
+
+function hasAssistantOutput(event) {
+  return event.choices?.some(choice => {
+    const delta = choice.delta || choice.message || {};
+    return delta.content || delta.reasoning_content || delta.reasoning ||
+      delta.reasoning_text || delta.tool_calls?.length || delta.function_call || delta.refusal || choice.finish_reason;
+  });
+}
+
 class EventQueue {
   items = []; waiter; ended = false; error; bytes = 0;
   push(value) { this.bytes += JSON.stringify(value).length; if (this.bytes > 8 * 1024 * 1024) return this.end(new Error('Provider output exceeded the buffer limit')); this.items.push(value); this.wake(); }
@@ -175,8 +191,83 @@ class EventQueue {
   async *[Symbol.asyncIterator]() { while (true) { if (this.items.length) { const item = this.items.shift(); this.bytes -= JSON.stringify(item).length; yield item; } else if (this.ended) { if (this.error) throw this.error; return; } else await new Promise(resolve => { this.waiter = resolve; }); } }
 }
 export class Gateway {
-  constructor(emit = () => {}) { this.emit = emit; this.providers = []; this.models = []; this.token = ''; this.settings = {}; this.pending = new Map(); this.controllers = new Set(); this.privateServer = this.server(true); }
-  configure(input) { this.diagnosticsDir = input.diagnosticsDir; this.providers = input.providers || []; this.models = input.models || []; this.token = input.token || ''; this.settings = input.settings || this.settings; this.requestHeaders = input.requestHeaders; this.mediaConfig = {python:input.python, multimodal:input.multimodal, providers:this.providers, requestHeaders:input.requestHeaders, generationDirectory:input.generationDirectory}; }
+  constructor(emit = () => {}) { this.emit = emit; this.providers = []; this.models = []; this.groupCooldown = new Map(); this.token = ''; this.settings = {}; this.pending = new Map(); this.controllers = new Set(); this.privateServer = this.server(true); }
+  configure(input) { this.diagnosticsDir = input.diagnosticsDir; this.providers = input.providers || []; this.models = input.models || []; this.setModelGroup(input.modelGroup); this.token = input.token || ''; this.settings = input.settings || this.settings; this.requestHeaders = input.requestHeaders; this.mediaConfig = {python:input.python, multimodal:input.multimodal, providers:this.providers, requestHeaders:input.requestHeaders, generationDirectory:input.generationDirectory}; }
+  setModelGroup(group) {
+    const next = group?.id && group.members?.length ? group : undefined;
+    if (JSON.stringify(next) !== JSON.stringify(this.modelGroup)) this.groupCooldown.clear();
+    this.modelGroup = next;
+  }
+
+  groupCandidates(hasImages) {
+    const now = Date.now();
+    const ready = [], cooling = [];
+    for (const member of this.modelGroup?.members || []) {
+      const provider = this.providers.find(row => row.id === member.provider);
+      const model = provider?.models?.find(row => row.alias === member.model);
+      if (!model || (hasImages && !model.vision)) continue;
+      const key = JSON.stringify([member.provider, member.model]);
+      const candidate = {provider, model, effort: member.effort, key};
+      (this.groupCooldown.get(key) > now ? cooling : ready).push(candidate);
+    }
+    return ready.concat(cooling);
+  }
+
+  async *groupEvents(candidates, body, controller) {
+    let lastFailure;
+    for (const {provider, model, effort, key} of candidates) {
+      controller.signal.throwIfAborted();
+      const attempt = new AbortController();
+      const abort = () => attempt.abort(controller.signal.reason);
+      controller.signal.addEventListener('abort', abort, {once: true});
+      let committed = false;
+      // An SSE role announcement alone is not a response. Keep waiting for
+      // output (including thinking and tool arguments) within the startup budget.
+      const timeout = setTimeout(() => attempt.abort(new Error('Provider response timeout')), 45000);
+      const parameters = {...body.parameters};
+      delete parameters.reasoning_effort;
+      Object.assign(parameters, thinkingParameters(selectedFormat(model, effort) || 'openai', effort));
+      try {
+        let preamble;
+        for await (const event of this.events(provider, model, {...body, parameters}, attempt, true)) {
+          if (!committed) {
+            if (!hasAssistantOutput(event)) { preamble = event; continue; }
+            committed = true;
+            clearTimeout(timeout);
+            this.groupCooldown.delete(key);
+            if (preamble) yield preamble;
+          }
+          yield event;
+        }
+        return;
+      } catch (error) {
+        controller.signal.throwIfAborted();
+        if (attempt.signal.aborted) {
+          error = attempt.signal.reason;
+          error.retryable = true;
+        }
+        if (!error.retryable && !error.groupFailoverEligible) throw error;
+        // The group config is bounded. A short cooldown avoids hitting the
+        // same failed provider again on the next tool turn or Pi stream retry.
+        if (this.modelGroup?.members.some(row => row.provider === provider.id && row.model === model.alias))
+          this.groupCooldown.set(key, Date.now() + (error.retryable ? 30000 : 60000));
+        if (committed) {
+          // Pi retries the current model call, with its own rollback of the
+          // partial assistant message. Never concatenate two streams.
+          if (candidates.length > 1) error.retryable = true;
+          throw error;
+        }
+        lastFailure = error;
+      } finally {
+        clearTimeout(timeout);
+        controller.signal.removeEventListener('abort', abort);
+      }
+    }
+    const failure = new Error('模型组中的可用模型均请求失败' + (lastFailure?.reportId ? ' [Umeko:' + lastFailure.reportId + ']' : ''));
+    failure.groupExhausted = true;
+    throw failure;
+  }
+
   server(isPrivate) {
     const server = http.createServer((req, res) => { void this.handle(req, res, isPrivate).catch(() => {
       if (!res.headersSent) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { type: 'invalid_request_error', message: 'Invalid request structure' } })); }
@@ -241,18 +332,23 @@ export class Gateway {
     if (allowed) { res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Vary', 'Origin'); res.setHeader('Access-Control-Allow-Headers', 'authorization,content-type,x-api-key,anthropic-version'); res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS'); }
     return allowed;
   }
-  async *events(provider, model, body, controller) {
+  async *events(provider, model, body, controller, group = false) {
     const http = [];
     try {
+      let finished = false;
       for await (const event of this.transportEvents(provider, model, body, controller, http)) {
         if (event.error) throw new Error(JSON.stringify(event));
+        if (group && event.choices?.some(choice => choice.finish_reason || choice.message)) finished = true;
         yield event;
       }
+      if (group && !finished) throw new Error('Provider stream ended before completion');
     } catch (error) {
       if (controller.signal.aborted) throw error;
       const records = error.diagnostics || http;
-      throw failureReport(this.diagnosticsDir, provider, { transport: provider.api, ...body, model: model.upstream },
+      const failure = failureReport(this.diagnosticsDir, provider, { transport: provider.api, ...body, model: model.upstream },
         records.findLast(item => item.response)?.response || {}, error, records);
+      if (group) failure.groupFailoverEligible = Boolean(failure.tlsCode) || groupFailoverEligible(error, records);
+      throw failure;
     }
   }
   async *transportEvents(provider, model, body, controller, http) {
@@ -334,15 +430,19 @@ export class Gateway {
     } catch { return error(400, 'Invalid JSON request or messages'); }
     const selector=isPrivate ? input._umeko_provider : undefined;
     if(selector!==undefined && (typeof selector!=='string' || !selector))return error(400,'Invalid provider selector');
-    const p = this.providers.find(provider => (!selector || provider.id===selector) && provider.models?.some(model => model.alias === input.model));
-    if (!p) return error(404, 'Model is not configured');
-    const model = p.models.find(m => m.alias === input.model), messages = anthropic ? anthropicToOpenAI(input.messages, input.system) : input.messages;
+    const group = isPrivate && !selector && input.model === this.modelGroup?.id;
+    const p = group ? undefined : this.providers.find(provider => (!selector || provider.id===selector) && provider.models?.some(model => model.alias === input.model));
+    if (!group && !p) return error(404, 'Model is not configured');
+    const model = p?.models.find(m => m.alias === input.model);
+    const messages = anthropic ? anthropicToOpenAI(input.messages, input.system) : input.messages;
     const hasImages = messages.some(m => Array.isArray(m.content) && m.content.some(c => ['image_url', 'image'].includes(c.type)));
-    if (hasImages && !model.vision) return error(400, 'Vision is not enabled for this model');
+    const candidates = group ? this.groupCandidates(hasImages) : [];
+    if (group && !candidates.length) return error(400, 'No compatible model is available in the model group');
+    if (!group && hasImages && !model.vision) return error(400, 'Vision is not enabled for this model');
     const tools = (input.tools || []).map(t => anthropic ? { name: t.name, description: t.description || '', parameters: t.input_schema } : t.function);
     if (tools.some(t => !t || typeof t.name !== 'string')) return error(400, 'Invalid tool declaration');
     const parameters = {}; for (const key of ['temperature', 'top_p', 'top_k', 'stop', 'tool_choice', 'parallel_tool_calls', 'reasoning_effort']) if (input[key] !== undefined) parameters[key] = input[key];
-    if(isPrivate && input._umeko_reasoning_effort!==undefined) {
+    if(isPrivate && !group && input._umeko_reasoning_effort!==undefined) {
       if(typeof input._umeko_reasoning_effort!=='string' || !/^[^\s\x00-\x1f\x7f]{1,64}$/u.test(input._umeko_reasoning_effort))return error(400,'Invalid reasoning effort');
       const format=input._umeko_reasoning_probe===true ? input._umeko_reasoning_format : selectedFormat(model,input._umeko_reasoning_effort);
       delete parameters.reasoning_effort;
@@ -355,7 +455,7 @@ export class Gateway {
     const controller = new AbortController(); this.controllers.add(controller); res.on('close', () => { if (!res.writableEnded) controller.abort(); });
     const id = (anthropic ? 'msg_' : 'chatcmpl-') + randomUUID(), common = { id, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: input.model };
     try {
-      const events = this.events(p, model, body, controller);
+      const events = group ? this.groupEvents(candidates, body, controller) : this.events(p, model, body, controller);
       if (!input.stream) { const completion = await collectOpenAI(events); return json(200, anthropic ? anthropicResponse(completion, input.model, id) : { id, object: 'chat.completion', created: common.created, model: input.model, ...completion }); }
       res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
       const stream = anthropic ? toAnthropicEvents(events, input.model, id) : events;
@@ -367,8 +467,11 @@ export class Gateway {
       }
       if (!anthropic && !res.destroyed) res.write('data: [DONE]\n\n'); res.end();
     } catch (failure) {
-      if (!res.headersSent) json(failure.retryable ? 503 : 400, {error: upstreamFailure(failure)});
-      else if (!res.destroyed) { const value = { error: upstreamFailure(failure) }; res.end(`data: ${JSON.stringify(value)}\n\n`); }
+      const detail = failure.groupExhausted
+        ? {type: 'upstream_error', code: 'umeko_model_group_failed', message: failure.message, retryable: false}
+        : upstreamFailure(failure);
+      if (!res.headersSent) json(failure.retryable ? 503 : 400, {error: detail});
+      else if (!res.destroyed) res.end(`data: ${JSON.stringify({error: detail})}\n\n`);
     } finally { this.controllers.delete(controller); }
   }
   accept(input) { const queue = this.pending.get(input.id); if (!queue) return; if (input.type === 'provider-event') queue.push(input.event); else { const error = input.error ? new Error(input.error) : undefined; if (error) error.diagnostics = input.diagnostics; queue.end(error); } }
@@ -391,7 +494,7 @@ export class Gateway {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const emit = value => process.stdout.write(JSON.stringify(value) + '\n'); const gateway = new Gateway(emit); const rl = createInterface({ input: process.stdin }); let controls = Promise.resolve(), closing = false;
   const close = async () => { if (closing) return; closing = true; await gateway.close(); rl.close(); process.stdin.pause(); process.stdin.unref?.(); };
-  rl.on('line', line => { try { const input = JSON.parse(line); if (input.type === 'configure') { gateway.configure(input); const port=gateway.privateServer.address()?.port; if(port)emit({type:'ready',port}); } else if (input.type.startsWith('provider-')) gateway.accept(input); else if (input.type === 'server') controls = controls.then(() => gateway.setPublic(input.enabled, input.settings)).then(emit); else if (input.type === 'shutdown') void close(); } catch { /* Never expose malformed requests or credentials in logs. */ } });
+  rl.on('line', line => { try { const input = JSON.parse(line); if (input.type === 'configure') { gateway.configure(input); const port=gateway.privateServer.address()?.port; if(port)emit({type:'ready',port}); } else if (input.type === 'model-group') gateway.setModelGroup(input.modelGroup); else if (input.type.startsWith('provider-')) gateway.accept(input); else if (input.type === 'server') controls = controls.then(() => gateway.setPublic(input.enabled, input.settings)).then(emit); else if (input.type === 'shutdown') void close(); } catch { /* Never expose malformed requests or credentials in logs. */ } });
   rl.on('close', () => { void close(); });
   const port = await gateway.start(); emit({ type: gateway.token ? 'ready' : 'transport-ready', port });
 }

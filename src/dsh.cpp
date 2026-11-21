@@ -70,7 +70,7 @@ void DshRuntime::start(bool install) {
 bool Backend::dshOwnConfig() const {return view->dshOwnFixed?view->dshOwn:dshRuntime->useOwnConfig();}
 bool Backend::setSessionBackend(QString value) {
   if(!canChooseBackend() || !QStringList{"pi","dsh"}.contains(value))return false;
-  if(view->backend==value)return true;retire(view);view->backend=value;view->dshOptions.clear();emit chatChanged();emit changed();emit reasoningChanged();emit reasoningDetectionChanged();return true;
+  if(view->backend==value)return true;retire(view);view->backend=value;view->dshOptions.clear();repairModelGroupSelection(view);emit chatChanged();emit changed();emit reasoningChanged();emit reasoningDetectionChanged();return true;
 }
 QVariantList Backend::dshModelProviders() const {
   QVariantList out;int i=0;

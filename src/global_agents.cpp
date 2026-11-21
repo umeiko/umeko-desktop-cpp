@@ -149,7 +149,7 @@ std::shared_ptr<Session> GlobalAgents::ensure(QString id){
   auto row=agents[id].toMap();auto directory=root+"/sessions/"+id;QDir().mkpath(directory);
   auto file=row["sessionFile"].toString();
   require(file.isEmpty()||(QFileInfo(file).isFile()&&QFileInfo(file).canonicalFilePath().startsWith(QFileInfo(directory).canonicalFilePath()+"/")),"全局子智能体上下文文件不存在或不属于此代理");
-  auto s=b->fresh(root+"/workspaces/"+id);QDir().mkpath(s->workspace);
+  auto s=b->fresh(root+"/workspaces/"+id, false);QDir().mkpath(s->workspace);
   s->globalAgent=id;s->id=row["sessionId"].toString();s->file=file;s->model=row["model"].toString();s->provider="umeko";s->title=row["name"].toString();s->messages=row["messages"].toList();records[id]=s;return s;
 }
 std::shared_ptr<Session> GlobalAgents::record(QString target){
@@ -383,7 +383,7 @@ QVariantMap GlobalAgents::requestCreation(QVariantMap args,std::shared_ptr<Sessi
   auto choices=b->subagentCharacterPacks();auto character=text(args,"character",80,false);
   if(character.isEmpty()){require(!choices.isEmpty(),"没有可用人物形象");character=choices[QRandomGenerator::global()->bounded(int(choices.size()))].toMap()["id"].toString();}
   bool found=false;for(auto value:choices)found|=value.toMap()["id"]==character;require(found,"请选择现有角色形象");
-  auto model=text(args,"model",200,false);if(model.isEmpty())model=caller->model.isEmpty()?b->store.data["selectedModel"].toString():caller->model;
+  auto model=text(args,"model",200,false);if(model.isEmpty())model=caller->model.isEmpty() || caller->provider==U::modelGroupProvider ? b->store.data["selectedModel"].toString() : caller->model;
   found=false;for(auto value:b->modelCatalog())found|=value.toMap()["id"]==model;require(found,"请先配置可用模型");fields["character"]=character;fields["model"]=model;
   while(creationRequests.size()>=32){int old=-1;for(int i=0;i<creationRequests.size();++i)if(creationRequests[i].toMap()["status"]!="awaiting_approval"){old=i;break;}require(old>=0,"创建请求记录已满");creationRequests.removeAt(old);}
   auto id=uid();QVariantMap row=fields;row["id"]=id;row["requestKey"]=key;row["source"]=identity(caller);row["sourceKey"]=caller->key;row["sourceSession"]=caller->id;row["sourceTitle"]=caller->title;row["sourceWorkspace"]=caller->workspace;row["created"]=now();row["deadline"]=now()+900;row["status"]="awaiting_approval";

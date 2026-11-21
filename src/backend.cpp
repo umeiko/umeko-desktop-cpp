@@ -18,6 +18,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
     : QObject(parent), store(directory), root(U::cleanPath(resourceRoot)),
       chat(this) {
   connect(this, &Backend::viewChanged, this, [this] { ++selectionEpoch; });
+  connect(this, &Backend::reasoningDetectionChanged, this, &Backend::modelGroupChanged);
   if(!fontFamily().isEmpty()){auto font=QGuiApplication::font();font.setFamily(fontFamily());QGuiApplication::setFont(font);}
   auto accounts=store.data["providers"].toList();
   for(auto &value:accounts){auto p=value.toMap();auto models=p["models"].toList();for(auto &entry:models){auto m=entry.toMap();for(const auto &field:QStringList{"reasoningDetection","reasoningFormatDetection"})if(m[field].toMap()["state"]=="probing")m[field]=QVariantMap{{"state","unknown"}};entry=m;}p["models"]=models;value=p;}
@@ -74,6 +75,7 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
   }
   privateToken = QString::fromLatin1(U::random(40).toBase64(
       QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
+  repairSelection();
   view = fresh(store.data["workspace"].toString());
   drafts[view->workspace] = view;
   sessionIndex = store.sessions();
@@ -115,7 +117,6 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
     emit chatChanged();
     emit transcriptChanged();
   });
-  repairSelection();
   store.save();
   gatewayStart();
   initUmekoControl();
@@ -197,9 +198,13 @@ void Backend::repairSelection() {
   }
 }
 bool Backend::modelsBusy(QString id) const {
-  for (auto s : records)
-    if ((s->busy() || s->subagentsActive) && (id.isEmpty() || s->provider == id))
-      return true;
+  for (const auto &s : records) {
+    if (!s->busy() && !s->subagentsActive) continue;
+    if (id.isEmpty() || s->provider == id) return true;
+    if (s->provider == U::modelGroupProvider)
+      for (const auto &member : store.data["modelGroup"].toMap()["members"].toList())
+        if (member.toMap()["provider"] == id) return true;
+  }
   return false;
 }
 QString Backend::agentDir() const {
@@ -214,8 +219,15 @@ QString Backend::kernelVersion() const {
 }
 void Backend::notify() {
   repairSelection();
+  if (repairModelGroupSelection(view)) {
+    indexSession(view);
+    saveSessions();
+    emit reasoningChanged();
+    emit contextUsageChanged();
+  }
   store.save();
   configureGateway();
+  emit modelGroupChanged();
   emit changed();
   emit chatChanged();
   emit proxyKeysChanged();
@@ -686,23 +698,40 @@ void Backend::selectModel(QString id, QString model) {
     emit toast("请等待当前任务结束后切换模型");
     return;
   }
-  for (auto v : modelCatalog()) {
-    auto m = v.toMap();
-    if (m["provider"] == id && m["id"] == model) {
-      store.data["selectedProvider"] = id;
-      store.data["selectedModel"] = model;
-      view->provider = id;
-      view->model = model;
-      reconcileReasoning(view);
-      view->usage.clear();
-      store.save();
-      emit changed();
-      emit contextUsageChanged();
-      if(view->backend=="dsh")switchDshConfig(view);else ensureModelReasoningDetection(id,model);
+  const bool group = id == U::modelGroupProvider;
+  const auto catalog = modelCatalog();
+  const bool valid = group
+      ? (model == U::modelGroupId && view->backend == "pi" && !modelGroupDescriptor().isEmpty())
+      : std::any_of(catalog.cbegin(), catalog.cend(), [&](const QVariant &row) {
+          const auto entry = row.toMap();
+          return entry["provider"] == id && entry["id"] == model;
+        });
+  if (!valid) {
+    emit toast("请选择已配置的模型");
+    return;
+  }
+  if (view->process && group != modelGroupSelected()) {
+    if (view->subagentsActive) {
+      emit toast("请等待当前任务结束后切换模型");
       return;
     }
+    view->stale = true;
   }
-  emit toast("请选择已配置的模型");
+  view->provider = id;
+  view->model = model;
+  rememberModelSelection(view);
+  reconcileReasoning(view);
+  view->usage.clear();
+  if (!view->id.isEmpty()) {
+    indexSession(view);
+    saveSessions();
+  }
+  store.save();
+  emit changed();
+  emit reasoningChanged();
+  emit contextUsageChanged();
+  if (view->backend == "dsh") switchDshConfig(view);
+  else if (!group) ensureModelReasoningDetection(id, model);
 }
 static QVariantList modelMappings(QVariantList input, QVariantList previous, QSet<QString> &aliases) {
   QVariantList models;
@@ -1091,6 +1120,7 @@ void Backend::configureGateway() {
                 {"requestHeaders", store.data.value("requestHeaders",QVariantList{})},
                 {"generationDirectory",store.directory+"/generation-transfer"},
                 {"models", modelCatalog()},
+                {"modelGroup", gatewayModelGroup()},
                 {"settings", store.data["server"]}});
 }
 void Backend::gatewayEvent(QVariantMap payload) {

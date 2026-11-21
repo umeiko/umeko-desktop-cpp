@@ -61,8 +61,7 @@ void Backend::drainReasoningDetection() {
     if(active>=2 || !gatewayPort)break;
     const auto id=key.section('/',0,0),alias=key.section('/',1);
     if(reasoningJobs.value(key) || providers.contains(id))continue;
-    bool busy=false;for(const auto &s:records)if(s->provider==id&&(s->busy()||s->subagentsActive))busy=true;
-    if(busy)continue;
+    if(modelsBusy(id))continue;
     if(startReasoningDetection(id,alias)){++active;providers.insert(id);}else reasoningJobs.remove(key);
   }
   bool pending=false;for(auto it=reasoningJobs.cbegin();it!=reasoningJobs.cend();++it)if(!it.value())pending=true;
