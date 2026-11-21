@@ -25,6 +25,9 @@ Backend::Backend(QString resourceRoot, QString directory, QObject *parent)
   reasoningQueue.setInterval(500);
   connect(&reasoningQueue,&QTimer::timeout,this,&Backend::drainReasoningDetection);
   initCharacters();
+  const auto portraitManifest =
+      U::readJson(root + "/app/icons/portraits/manifest.json").toMap();
+  welcomePortraitCount = qBound(1, portraitManifest.value("count").toInt(), 99);
   release = root + "/runtime/releases/coding-1.5.2";
   auto active =
       U::readJson(store.directory + "/kernels/active.json", QVariantMap{})

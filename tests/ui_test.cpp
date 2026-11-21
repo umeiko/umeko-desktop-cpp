@@ -844,7 +844,16 @@ private slots:
   void screenshotsAndPortraits() {
     auto mascot = find("welcomeMascot");
     QVERIFY(mascot);
-    for (int i = 0; i < 12; ++i) {
+    const auto folder = root + "/app/icons/portraits";
+    const auto count = U::readJson(folder + "/manifest.json").toMap().value("count").toInt();
+    QVERIFY(count > 0);
+    QCOMPARE(backend->welcomePortraitCount, count);
+    QCOMPARE(QDir(folder).entryList({"*.webp"}, QDir::Files).size(), count);
+    for (int i = 0; i < count; ++i) {
+      const QImage image(folder + QString("/%1.webp").arg(i + 1, 2, 10, QChar('0')));
+      QCOMPARE(image.size(), QSize(512, 512));
+      QVERIFY(image.hasAlphaChannel());
+      QVERIFY(image.pixelColor(0, 0).alpha() <= 4);
       mascot->setProperty("portraitIndex", i);
       QTRY_VERIFY_WITH_TIMEOUT(mascot->property("loaded").toBool(), 2000);
     }

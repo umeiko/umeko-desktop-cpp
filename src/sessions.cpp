@@ -44,7 +44,7 @@ std::shared_ptr<Session> Backend::fresh(QString workspace) {
       "好啦，开工吧。今天也请多关照。"};
   s->greeting =
       greetings[QRandomGenerator::global()->bounded(greetings.size())];
-  s->portrait = QRandomGenerator::global()->bounded(12);
+  s->portrait = QRandomGenerator::global()->bounded(welcomePortraitCount);
   records[s->key] = s;
   lru.removeAll(s->key);
   lru << s->key;

@@ -375,6 +375,7 @@ public:
   Q_INVOKABLE void revokeDangerousApproval();
   Store store;
   QString root;
+  int welcomePortraitCount = 1;
   bool webviewAvailable() const { return webviewConfiguration()["available"].toBool(); }
   Q_INVOKABLE QString normalizeWebUrl(QString raw) const;
   QObject *documentPreview() const { return documents; }
