@@ -114,7 +114,8 @@ def main():
     (resources/'build-info.json').write_text(json.dumps(info,indent=2)+'\n',encoding='utf-8')
     if sys.platform=='darwin':finalize_macos(prefix/'UmekoCpp.app')
     executable=prefix/'UmekoCpp.app/Contents/MacOS/UmekoCpp' if sys.platform=='darwin' else prefix/('UmekoCpp.exe' if os.name=='nt' else 'UmekoCpp')
-    env=dict(os.environ,QT_QPA_PLATFORM='cocoa' if sys.platform=='darwin' else 'offscreen',QT_QUICK_BACKEND='software',UMEKO_DIAGNOSTICS=str(ROOT/'build/packaged-smoke.log'))
+    env=dict(os.environ,QT_QPA_PLATFORM='cocoa' if sys.platform=='darwin' else 'offscreen',QT_QUICK_BACKEND='software',
+             PYTHONDONTWRITEBYTECODE='1',UMEKO_DIAGNOSTICS=str(ROOT/'build/packaged-smoke.log'))
     for key in ['QT_PLUGIN_PATH','QML_IMPORT_PATH','QML2_IMPORT_PATH','LD_LIBRARY_PATH','DYLD_LIBRARY_PATH','DYLD_FRAMEWORK_PATH']:
         env.pop(key,None)
     if qt_root:
@@ -166,7 +167,7 @@ def main():
         run(python,'-I','-B',ROOT/'tests/worker_test.py')
         verify_terminal_worker([str(python),'-I','-B',str(resources/'plugin-runtime/worker.py')],resources,env,ROOT/'build')
     if sys.platform=='darwin':
-        run('codesign','--verify','--deep','--strict',prefix/'UmekoCpp.app')
+        run('codesign','--verify','--deep','--strict','--verbose=3',prefix/'UmekoCpp.app')
     output=ROOT/'release-assets';output.mkdir(exist_ok=True)
     stem='UmekoCpp-v'+build_config['version']+('' if bundle_python else '-minimal')+'-'+target
     if sys.platform=='linux':
