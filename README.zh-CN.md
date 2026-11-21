@@ -16,9 +16,12 @@
 
 <!-- umeko-downloads:standard:start -->
 
-**Download v0.7.3 · 点击下载**
+**Download v0.7.4 · 点击下载**
 
-[![Windows x64 ZIP](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/windows.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.7.3/UmekoCpp-v0.7.3-windows-x64.zip)
+[![Windows x64 ZIP](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/windows.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.7.4/UmekoCpp-v0.7.4-windows-x64.zip)
+[![macOS Apple Silicon DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-arm64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.7.4/UmekoCpp-v0.7.4-macos-arm64.dmg)
+[![macOS Intel DMG](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/macos-x64.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.7.4/UmekoCpp-v0.7.4-macos-x64.dmg)
+[![Linux x64 TAR.GZ](https://raw.githubusercontent.com/umeiko/umeko-desktop-cpp/main/docs/downloads/linux.svg)](https://github.com/umeiko/umeko-desktop-cpp/releases/download/v0.7.4/UmekoCpp-v0.7.4-linux-x64.tar.gz)
 
 <!-- umeko-downloads:standard:end -->
 
